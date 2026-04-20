@@ -7,8 +7,8 @@
 - **Project name**: FUSEE CXL Migration
 - **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
 - **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
-- **Branch**: `feat/cxl-migration` on emr (31 commits)
-- **Last commit**: `13a1f1e [Phase 8] v3 bench sweep: cache ON, all three protocols, 4 hosts x 500 ops`
+- **Branch**: `feat/cxl-migration` on emr (32 commits)
+- **Last commit**: `56fb6b7 [Phase 6] CxlKvStoreC::recover_from_oplog helper + redo integration test`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
