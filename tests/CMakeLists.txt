@@ -23,7 +23,7 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
     target_compile_options(${t} PRIVATE -mclflushopt)
 endforeach()
 
-# Unified micro-bench: single-proc and multi-proc variants, three binaries each.
+# Unified micro-bench + YCSB runner: one binary per (protocol × variant).
 foreach(opt A B C)
     if(${opt} STREQUAL "A")
         set(opt_num 1)
@@ -32,7 +32,7 @@ foreach(opt A B C)
     else()
         set(opt_num 3)
     endif()
-    foreach(variant kv_bench kv_bench_mp)
+    foreach(variant kv_bench kv_bench_mp ycsb_runner)
         add_executable(cxl_${variant}_${opt} cxl_${variant}.cc)
         target_link_libraries(cxl_${variant}_${opt} fusee_cxl)
         target_compile_options(cxl_${variant}_${opt}
