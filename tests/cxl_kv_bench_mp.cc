@@ -159,6 +159,15 @@ int main(int argc, char **argv) {
     }
   }
 
+  // DRAM cache opt-in via FUSEE_CACHE=1 env var. Protocol semantics diverge:
+  //  - C: reader checks CXL epoch, serves from DRAM on match.
+  //  - B: reader checks DRAM invalidation flag set by peer ring push.
+  //  - A: same as B plus writer waits for all replicators to invalidate.
+  const char *cache_env = getenv("FUSEE_CACHE");
+  if (cache_env && cache_env[0] == '1') {
+    store.enable_dram_cache(true);
+  }
+
   // "Attached" barrier: do not start inserting until every host has completed
   // attach() (so every replicator thread is running before anyone enqueues).
   CACHELINE_STORE(&stats->hosts[host_id].attached, 1ULL);
