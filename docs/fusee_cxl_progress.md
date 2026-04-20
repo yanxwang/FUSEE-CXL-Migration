@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phase 1 COMPLETE; starting Phase 2 (BucketLock table)
-- **Phase**: 0 skipped; Phase 1 done; Phase 2 pending
+- **Current focus**: Phase 1 + 2 COMPLETE; Phase 3 (KV ops Option C) next
+- **Phase**: 0 skipped; Phase 1 done; Phase 2 done; Phase 3 pending
 - **Branch**: `feat/cxl-migration` on emr
-- **Last commit**: `60433be [Phase 1.2] Multi-process CXL shared-region verification`
+- **Last commit**: `c1f40e6 [Phase 2] CXL BucketLock table backed by LFM`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -59,7 +59,7 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 |---|---|---|---|
 | 0: Baseline | ⏳ skipped | — | FUSEE repo already on emr; no baseline run required |
 | 1: CXL basic infra | ✅ done | a3e7a63, 60433be | `src/cxl_mm.{h,cc}` + single-proc + multi-proc tests on /dev/dax0.0 |
-| 2: BucketLock table | ⏳ pending | — | `src/cxl_bucket_lock.{h,cc}` — uses LFM from cxl_shm_profiling |
+| 2: BucketLock table | ✅ done | c1f40e6 | `src/cxl_bucket_lock.{h,cc}` (LFM); 100k contended incr on CXL, ~7.4 μs/crit |
 | 3: KV ops Option C | ⏳ pending | — | `src/cxl_kv_ops_C.cc` |
 | 4: Remove RDMA deps | ⏳ pending | — | Delete nm.{h,cc}, ib.{h,cc}; update CMakeLists |
 | 5: Single-node YCSB | ⏳ pending | — | YCSB runner using new API |
@@ -69,18 +69,24 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 
 ## Next concrete task
 
-**Phase 2 — BucketLock table on CXL**:
+**Phase 3 — KV ops for Option C (lazy-RC, simplest protocol)**:
 
-1. Decide LFM integration: wrap `cxl_shm_profiling/shm_mutex.h` directly vs. port a minimal version into `src/`. Leaning toward direct wrap via include path — emr-only dev, no redistribution.
-2. Design `BucketLockEntry` layout: one lock per RACE hash bucket, cacheline-padded, CXL-resident. For A: also holds per-bucket `write_epoch` + `staging_scratch` (see mini-bench `ycsb_abc_bench.c` for current shape). For B/C: simpler variants.
-3. Create `src/cxl_bucket_lock.{h,cc}`:
-   - `BucketLockTable` wraps an array of BucketLockEntry in a CXLRegion
-   - `bucket_lock(idx)` / `bucket_unlock(idx)` forward to LFM's acquire/release
-   - Single-allocator init that plants the table at a known offset within the region
-4. Multi-process test: two processes contend for the same bucket; verify mutual exclusion + counter correctness.
-5. Commit: `[Phase 2] CXL BucketLock table + multi-proc mutex test`
+1. Design CXL region layout for Option C:
+   - Global header (magic, num_nodes, num_buckets, offsets)
+   - `BucketLockTable` (already usable from Phase 2)
+   - Per-bucket write-epoch array (cacheline-padded `cacheline_u64`)
+   - Authoritative bucket array (RACE hash buckets living on CXL for C; B and A will diverge)
+   - KV data staging area (copy-out-then-publish pattern)
+2. Port/recreate a minimal RACE hash bucket + slot layout in `src/cxl_hashtable.{h,cc}`. Start with a single subtable (no directory splits) to keep Phase 3 small.
+3. Create `src/cxl_kv_ops_C.{h,cc}`:
+   - `kv_insert(key, klen, val, vlen)` — lock bucket, scan for empty slot, write KV-data + slot, bump bucket write_epoch, unlock
+   - `kv_search(key, klen, out)` — on cache miss (epoch changed), refresh bucket from CXL; otherwise use local cached slots
+   - `kv_update(key, klen, val, vlen)` / `kv_delete(key, klen)` — similar lock+write+epoch-bump
+   - Keep the local hash-table cache per node in DRAM (FUSEE's original model)
+4. Multi-process test `tests/cxl_kv_ops_C_test.cc`: two processes do disjoint inserts + cross-reads; verify every insert from node A is visible on node B after its local epoch-check refresh.
+5. Commit as `[Phase 3] Option C KV ops + multi-proc test`
 
-**Open design question** for Phase 2: do we use `cxl_shm_profiling`'s allocator (`shm_enable` + `shm_malloc_id`) or manage the CXL region layout ourselves (simple static offsets)? For FUSEE we know all region consumers up front, so static offsets are cleaner. Leaning that way.
+Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only until Phase 4. The new cxl_* files live alongside them.
 
 **Dax0.0 ready**: ✅ reconfigured to devdax mode on 2026-04-20 02:00 CDT
 **Build status**: original FUSEE still has RDMA deps in libddckv; Phase 1 tests link cxl_mm.cc directly, bypassing libddckv. Full libddckv refactor in Phase 4.

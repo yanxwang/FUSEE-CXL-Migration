@@ -52,3 +52,25 @@
 **Ends with**: Phase 1 complete (both commits land on `feat/cxl-migration`). Ready for Phase 2 (BucketLock table).
 
 ---
+
+## Session 2026-04-20 ~03:30 CDT — Phase 2: BucketLock table
+
+**Context**: continuing straight into Phase 2 in auto mode. Goal: plant a RACE-bucket-aligned lock table on CXL, wrap cxl_shm_profiling LFM, verify mutual exclusion across processes.
+
+**Decisions**:
+- Skip FUSEE/external/ submodule. CMake variable `CXL_SHM_PROFILING_DIR` (default `~/cxl_shm_profiling`) gives Phase 2+ tests include access to the LFM header + `locks/lfm_lock.c` source. Test binaries compile the LFM .c file directly rather than linking a prebuilt lib.
+- Use static offsets inside the CXL region (not `shm_enable`/`shm_malloc_id` from global_allocator). FUSEE knows all region consumers up front; simple static layout wins.
+- `BucketLockEntry` starts as just `{ shm_mutex_t mutex; }`. Protocol-specific fields (write_epoch for C, staging_scratch for B, ring metadata for A) get added in their respective phases without changing the lock API.
+
+**Done (commit c1f40e6)**:
+- `src/cxl_bucket_lock.{h,cc}`: `BucketLockTable::attach(base, num_buckets, init_mutexes)`, `lock(idx, host_id, num_hosts)`, `unlock(idx, host_id)`, `bytes_for(num_buckets)`. Thin view; does not own storage.
+- `tests/cxl_bucket_lock_test.cc`: fork+contention — two procs, shared counter under a single bucket lock, verifies `counter == iters * 2`. Zero lost increments on /dev/dax0.0 at 50k iters/proc. ~7.4 μs per critical section on CXL end-to-end.
+- CMake: switched project to `LANGUAGES C CXX`, added `CXL_SHM_PROFILING_DIR` cache var + existence warning.
+
+**Noted for Phase 3**:
+- LFM critical section alone is ~7.4 μs on CXL. That sets the floor for any KV op that takes the bucket lock. Matches the analytical budget in the side-track doc.
+- shm_mutex_t is multi-cacheline (magic + x + y + b[MAX_HOST_NUM] + ready[MAX_HOST_NUM] + done[MAX_HOST_NUM] = 1 + 2 + 3*4 = 15 cachelines per bucket on MAX_HOST_NUM=4). At ~256 KiB per 16k buckets — fine, but not free. Keep in mind when sizing the region.
+
+**Ends with**: Phase 2 complete. Queued Phase 3 (Option C KV ops) as the next concrete task; explicitly decided not to touch the existing `src/client*.{h,cc}` or `src/hashtable.{h,cc}` files yet.
+
+---
