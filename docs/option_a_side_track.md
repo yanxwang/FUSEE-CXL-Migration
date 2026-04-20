@@ -235,16 +235,16 @@ Plot: `docs/ycsb_abc_g3_tmpfs.png` (4 panels: aggregate throughput, write latenc
 
 **Idea 6: ring-full hang at high ops count** — at 3000 ops/proc, A-v2 hangs on g3 tmpfs (DRAM), runs fine at 500 ops/proc. The `PendingRing` is 4096 entries; with 3 dsts and 3000 ops we enqueue 9000 entries per src → ring wraps. If `processed_op_id` visibility lags and the producer spins on "ring slot free" (op_id==0 after we clear), and meanwhile the replicator on one dst falls behind, all producers can simultaneously be waiting. Needs instrumentation: log producer-wait reason (ring full vs ACK wait) and replicator consumption rate. Likely a pairwise-order invariant in the current clear-then-reuse path. Parked for later.
 
-**Idea 7: A multi-proc writer stall is asymmetric** — on emr CXL at 2 hosts × 500 pure-write ops, one host (host 0) hits ~50 × 200 ms ACK-wait timeouts while the peer (host 1) finishes 500 ops in 5 ms. Symmetric code, asymmetric outcome. Observation holds with and without the DRAM cache, so the bug is in the ring mechanism itself, not in cache invalidation.
+**Idea 7: A multi-proc writer stall is asymmetric** — RESOLVED (commit `b8b1994`). The observed stall was a **bench setup bug**, not a protocol bug.
 
-Candidate hypotheses to test:
-1. Replicator thread preempted by its own busy-writer main thread under heavy CXL store pressure (std::thread, but still same process).
-2. `ring->tail` publish and `processed_op_id` visibility have asymmetric latency across CXL due to read-vs-write cacheline traffic imbalance.
-3. The CACHELINE_STORE at the end of the enqueue loop (`CACHELINE_STORE(&ring->tail, ...)`) races with the replicator's `CACHELINE_LOAD(&ring->tail)` — fence ordering unclear enough that one direction is faster.
+Diagnosis path:
+1. Added per-dst ACK-timeout counters via `ack_timeouts_to(dst)`.
+2. Ran 2h × 200 wr=1.0: host 0 saw 0 timeouts, host 1 saw 19 timeouts to host 0. Host 0's replicator had `replicated_ops=380` when host 1 had sent 400 entries. Missing 20 acks.
+3. Read the bench code: primary called `store.stop()` immediately after writing its own `done` flag, BEFORE the `wait for every host's done` loop. Stop joins the replicator — so host 0's replicator exited while host 1 was still writing its last ~20 ops, which then all timed out.
 
-Diagnosis would want: (a) per-dst timeout counters in `dispatch_and_wait` (which dst is the problem?); (b) replicator-side counters for "saw tail advance", "applied entry", "set processed_op_id" so the gap is visible; (c) one-sided run where only host 0 writes (is host 1's replicator even processing its ring?).
+Fix: reorder bench so `store.stop()` runs AFTER the `wait for all done` barrier.
 
-Open. Logged here so that the next session picks it up.
+Post-fix: 4h × 500 wr=1.0 on /dev/dax0.0, agg_thpt=88k ops/s, w_avg 30–45 μs, **zero ACK timeouts**. Option A behaves correctly at multi-proc scale. The earlier 600 ms tails and stalls were entirely my bench tearing down the replicator prematurely.
 
 ### Conclusion for migration
 

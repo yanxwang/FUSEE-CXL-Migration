@@ -90,7 +90,7 @@ See `docs/fusee_mp_bench_v2.png` for the pre-cache run and individual commits fo
 
 ## Next concrete tasks (still open)
 
-1. **Root-cause Option A multi-proc wr=1.0 stall** — correctness test passes at 2h × 300 ops; bench at 4h × anything-with-writes times out. Always-clear op_id keeps the ring from wedging permanently but individual ACK waits still hit 600 ms tails from host 3. Needs instrumentation of which dst is slow and why.
+1. ~~Root-cause Option A multi-proc wr=1.0 stall~~ — **RESOLVED** in commit `b8b1994`. The stall was a bench teardown race: `store.stop()` was called before every host had signaled `done`, so the primary's replicator exited while peers were still writing. Fix reorders the stop after the done barrier. Post-fix: 4h × 500 wr=1.0 agg=88k ops/s, zero ACK timeouts.
 2. **Run a cache-on multi-proc bench sweep and generate a v3 plot** — today's numbers are from ad-hoc invocations; should be a reproducible sweep with FUSEE_CACHE=1.
 3. **Phase 4 hard deletion** — delete `src/nm.{h,cc}` / `src/ib.{h,cc}` and the client/server RDMA files once we are sure the RDMA path stays gone. The soft gate is enough for now; hard deletion is intentionally deferred.
 4. **Integrate OpLog recovery callback into each CxlKvStore** — `recover_redo` exists but callers still have to write their own redo fn; a canned "replay into the store" helper would make `client_cr.cc`-style recovery a one-liner.
