@@ -21,6 +21,22 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
     target_compile_options(${t} PRIVATE -mclflushopt)
 endforeach()
 
+# Unified micro-bench: three binaries, one per protocol.
+foreach(opt A B C)
+    if(${opt} STREQUAL "A")
+        set(opt_num 1)
+    elseif(${opt} STREQUAL "B")
+        set(opt_num 2)
+    else()
+        set(opt_num 3)
+    endif()
+    add_executable(cxl_kv_bench_${opt} cxl_kv_bench.cc)
+    target_link_libraries(cxl_kv_bench_${opt} fusee_cxl)
+    target_compile_options(cxl_kv_bench_${opt}
+        PRIVATE -mclflushopt -O2
+        -DCONSENSUS_OPT=${opt_num})
+endforeach()
+
 target_link_libraries(test_remote_nm
     ${GTEST_BOTH_LIBRARIES}
     libddckv

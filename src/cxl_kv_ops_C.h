@@ -41,6 +41,10 @@ class CxlKvStoreC {
 
   uint32_t num_buckets() const { return num_buckets_; }
 
+  // API parity with CxlKvStoreA / CxlKvStoreB. C has no replicator thread.
+  void     stop() {}
+  uint64_t replicated_ops() const { return 0; }
+
  private:
   uint32_t bucket_idx(uint64_t key) const {
     return static_cast<uint32_t>(fnv1a_u64(key) % num_buckets_);
