@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 extern "C" {
 #include "common.h"  // cacheline_u64, CACHELINE_LOAD/STORE, flush_line, fences
@@ -123,6 +124,7 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
   bump_epoch(lock_table_.entry(idx));
 
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
   lock_table_.unlock(idx, host_id_);
   return 0;
 }
@@ -151,6 +153,7 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
       store_fence();
       bump_epoch(lock_table_.entry(idx));
       if (logged) oplog_->commit(log_idx);
+      if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
       lock_table_.unlock(idx, host_id_);
       return 0;
     }
@@ -183,6 +186,7 @@ int CxlKvStoreC::remove(uint64_t key) {
       store_fence();
       bump_epoch(lock_table_.entry(idx));
       if (logged) oplog_->commit(log_idx);
+      if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
       lock_table_.unlock(idx, host_id_);
       return 0;
     }
@@ -197,6 +201,25 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
   BucketLockEntry *le = const_cast<BucketLockTable &>(lock_table_).entry(idx);
   CxlKvBucket *b = &buckets_[idx];
 
+  // Fast path: DRAM cache hit. Read the CXL epoch once; if it matches the
+  // cached epoch, scan the DRAM copy without flushing any slot cachelines.
+  if (cache_enabled_) {
+    uint64_t cached = cache_epoch_[idx];
+    if (cached != std::numeric_limits<uint64_t>::max()) {
+      uint64_t cxl_epoch = CACHELINE_LOAD(&le->write_epoch);
+      if (cxl_epoch == cached) {
+        const CxlKvBucket &cb = cache_buckets_[idx];
+        for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+          if (cb.slots[s].key == key) {
+            if (out) *out = cb.slots[s].value;
+            return 0;
+          }
+        }
+        return -1;
+      }
+    }
+  }
+
   for (int attempt = 0; attempt < 8; attempt++) {
     uint64_t e1 = CACHELINE_LOAD(&le->write_epoch);
 
@@ -207,6 +230,10 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
       flush_line(&b->slots[s].value);
     }
     full_fence();
+    // Also snapshot the whole bucket into the DRAM cache while we are here.
+    if (cache_enabled_) {
+      cache_buckets_[idx] = *b;
+    }
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
       if (b->slots[s].key == key) {
         captured = b->slots[s].value;
@@ -217,6 +244,7 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
 
     uint64_t e2 = CACHELINE_LOAD(&le->write_epoch);
     if (e1 == e2) {
+      if (cache_enabled_) cache_epoch_[idx] = e1;
       if (found) {
         if (out) *out = captured;
         return 0;
@@ -226,6 +254,17 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
     // Epoch advanced mid-read; retry.
   }
   return -1; // too many retries; treat as not found.
+}
+
+void CxlKvStoreC::enable_dram_cache(bool on) {
+  cache_enabled_ = on;
+  if (on) {
+    cache_buckets_.assign(num_buckets_, CxlKvBucket{});
+    cache_epoch_.assign(num_buckets_, std::numeric_limits<uint64_t>::max());
+  } else {
+    cache_buckets_.clear();
+    cache_epoch_.clear();
+  }
 }
 
 } // namespace fusee

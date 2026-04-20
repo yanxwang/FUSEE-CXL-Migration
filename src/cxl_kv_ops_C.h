@@ -13,7 +13,9 @@
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
 
+#include <cstdint>
 #include <stdint.h>
+#include <vector>
 
 namespace fusee {
 
@@ -57,6 +59,22 @@ class CxlKvStoreC {
   BucketLockTable lock_table_;
   CxlKvBucket    *buckets_ = nullptr;
   OpLog          *oplog_ = nullptr;  // optional; set via enable_oplog()
+
+  // Per-host DRAM bucket cache. Readers check cached_epoch_ against the CXL
+  // bucket's write_epoch; on match, slots are served from DRAM without
+  // flushing CXL cachelines. On miss, the bucket is re-fetched from CXL and
+  // cached_epoch_ is advanced. Writers invalidate their own cache entry
+  // after mutating CXL. cache_epoch_[i] == UINT64_MAX means "no valid
+  // cached copy yet".
+  mutable std::vector<CxlKvBucket> cache_buckets_;
+  mutable std::vector<uint64_t>    cache_epoch_;
+  bool     cache_enabled_ = false;
+
+ public:
+  // Toggle the DRAM cache on/off. Off by default so existing tests behave
+  // identically. Enable when you want to see the cached read path in
+  // benchmarks or when integrating into FUSEE proper.
+  void enable_dram_cache(bool on);
 
  public:
   // Point at an external OpLog region (CXL-resident). begin/commit around
