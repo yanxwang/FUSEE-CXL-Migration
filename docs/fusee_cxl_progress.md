@@ -7,8 +7,8 @@
 - **Project name**: FUSEE CXL Migration
 - **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
 - **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
-- **Branch**: `feat/cxl-migration` on emr (43 commits)
-- **Last commit**: `350d0eb [Phase 5] Reference YCSB sweep on tmpfs with official workloads`
+- **Branch**: `feat/cxl-migration` on emr (44 commits)
+- **Last commit**: `324531b [Phase 5] YCSB runner honors FUSEE_CACHE; sweep runs cache off + on`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -97,7 +97,7 @@ See also `docs/fusee_mp_bench_v2.png` (pre-cache, pre-A-fix) for contrast.
 2. **Run a cache-on multi-proc bench sweep and generate a v3 plot** — script landed in `df0c193` (`tests/run_fusee_mp_sweep.sh`); tmpfs dry-run passes end-to-end. **Devdax reconfigure stuck**: node 2's kernel `going-offline` state on memory block 65 holds ~2 GB of unmigratable kernel allocations (every tracked category — Active/Inactive/AnonPages/FilePages/Mapped/etc. — is 0, yet MemUsed=2 GB). `daxctl reconfigure-device --mode=devdax --force dax0.0` hangs indefinitely with 35/128 blocks offline, the rest online, and block 65 stuck. `drop_caches` + `compact_memory` did not free the block. Unblock via reboot in the next session.
 3. **Phase 4 hard deletion** — delete `src/nm.{h,cc}` / `src/ib.{h,cc}` and the client/server RDMA files once we are sure the RDMA path stays gone. The soft gate is enough for now; hard deletion is intentionally deferred.
 4. **Integrate OpLog recovery callback into each CxlKvStore** — DONE. All three protocols shipped: C in `56fb6b7`, A and B in `4877313` (symmetric `recovery_mode_` short-circuit in `dispatch_*wait`). All three green on /dev/dax0.0.
-5. **Official YCSB workloads** — **tmpfs reference landed.** Workloads fetched to `setup/workloads/` (workloada through workloadf, spec_load/spec_trans format). Sweep script `run_fusee_ycsb_sweep.sh` now auto-detects both synthetic `*.load`/`*.trans` and official `*.spec_load`/`*.spec_trans` conventions and takes a `MAX_OPS` env cap; runner accepts an optional 6th arg to match (commit `6f9e0e2`). First real-workload log committed in `350d0eb` (`docs/fusee_ycsb_sweep_tmpfs.log`, 18 runs = 6 × 3 protocols, 200 k ops each, all green). **Devdax sweep blocked on the same node-2 memory-hotplug issue as open-task #2.**
+5. **Official YCSB workloads** — **tmpfs cache-aware sweep landed.** Workloads fetched to `setup/workloads/` (workloada…workloadf, spec_load/spec_trans format). Sweep `run_fusee_ycsb_sweep.sh` auto-detects both synthetic and official naming, takes `MAX_OPS` + `CACHE_MODES` env knobs; runner (`cxl_ycsb_runner`) accepts optional 6th arg for max_ops and honors `FUSEE_CACHE=1` (commits `6f9e0e2`, `324531b`). Logs: `docs/fusee_ycsb_sweep_tmpfs.log` (cache off, 18 runs, `350d0eb`) and `docs/fusee_ycsb_sweep_tmpfs_cache.log` (cache off + on, 36 runs, `324531b`). Read-heavy workloads on cache-hit: workloadc 450 k → 2.5 M ops/s for A/B (5.7×), 1.25 M for C (still pays one CXL epoch load); workloadb/d 3.7×-3.9×; workloada (50/50) 1.2×; workloade (SCAN, SKIP'd) unchanged. **Devdax rerun blocked on the same node-2 memory-hotplug issue as #2.**
 
 Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only under the default build. The new cxl_* files live alongside them and are selected via `-DCXL_ONLY=ON` or via linking `libfusee_cxl` directly.
 
