@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phases 1–8 all have substantive work landed; still-open items are listed below
-- **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 partial
-- **Branch**: `feat/cxl-migration` on emr
-- **Last commit**: `f0354a2 [Phase 8] Bench opt-in cache via FUSEE_CACHE=1 env var`
+- **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
+- **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
+- **Branch**: `feat/cxl-migration` on emr (31 commits)
+- **Last commit**: `13a1f1e [Phase 8] v3 bench sweep: cache ON, all three protocols, 4 hosts x 500 ops`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -67,26 +67,29 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 | 7: Options A and B | ✅ done | bf690a3, ea9599b, 360da05, ff4d32d | A + B + protocol switch; A multi-proc robustness fix (always-clear op_id) |
 | 8: Performance benchmarks | 🚧 partial | 95bb1b2, 75996a9, bd93e82, a1d259a, 3f8d604, 3f989f1, 0bc1b9a, f0354a2 | DRAM-cache semantic distinction (C 10×, B 346× on cache hits); Zipf workload gen; `FUSEE_CACHE=1` bench; Option A wr=1.0 stall still open |
 
-## Recent results
+## Recent results (v3 sweep, post A-stall fix)
 
 **Single-host DRAM cache speedup** (`/dev/dax0.0`, 50k search of 200 keys):
 - Option C: 8306 → 820 ns/op (**10.1×** on cache hit; reader still does one CXL epoch load)
 - Option B: 4608 → 13 ns/op (**346×** on cache hit; reader is DRAM-only, invalidation via ring)
 - Option A: same shape as B, with writer waiting for all replicators to invalidate before unblocking (sync semantics)
 
-**4-host multi-proc aggregate throughput** with `FUSEE_CACHE=1`, 500 ops/host, /dev/dax0.0:
-| opt | wr=0.0 | wr=0.5 | wr=1.0 |
-|-----|-------:|-------:|-------:|
-| A   |   650k | 62 (stall) | — (stall) |
-| B   |  1055k |   400k |   247k |
-| C   |   633k |   749k |   600k |
+**4-host multi-proc, `FUSEE_CACHE=1`, 500 ops/host, /dev/dax0.0** (see `docs/fusee_mp_bench_v3_cache_on.png`):
+
+| opt | wr=0.0 (reads) | wr=0.5 (mixed) | wr=1.0 (writes) | w_avg @ wr=1.0 |
+|-----|---------------:|---------------:|----------------:|---------------:|
+| A   |            —*  |          279k  |           168k  |        20.3 μs |
+| B   |          1164k |          395k  |           245k  |        12.5 μs |
+| C   |          1146k |          749k  |           601k  |         5.0 μs |
+
+*A at wr=0.0 hit a transient sweep cleanup issue; standalone run lands at 459k ops/s.
 
 Takeaways:
-- B wins on pure reads (1.6× over C) — the eager-push cache pays off here.
-- C wins on write-heavy mixes because B's ring-push overhead dominates the writer path.
-- A's multi-proc wr=1.0 still stalls — open bug from Phase 7 is unchanged by cache work.
+- **Reads (wr=0)**: B ≈ C essentially tied at ~1.15M ops/s agg. Both serve from DRAM cache on hits.
+- **Writes (wr=1)**: C is 2.4× faster than B and 3.6× faster than A. Latency ratio matches the design: C only bumps an epoch, B additionally pushes to 3 rings, A additionally waits on 3 ACKs.
+- **A's multi-proc stall from earlier runs was a bench bug, not a protocol bug** (commit `b8b1994`: `store.stop()` was called before the all-hosts-done barrier).
 
-See `docs/fusee_mp_bench_v2.png` for the pre-cache run and individual commits for cache-on numbers.
+See also `docs/fusee_mp_bench_v2.png` (pre-cache, pre-A-fix) for contrast.
 
 ## Next concrete tasks (still open)
 
