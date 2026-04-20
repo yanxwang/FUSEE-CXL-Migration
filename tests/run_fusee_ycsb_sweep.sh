@@ -31,6 +31,9 @@ NUM_BUCKETS="${NUM_BUCKETS:-16384}"
 WL_DIR="${WL_DIR:-$script_dir/../workloads_synth}"
 OPTS="${OPTS:-A B C}"
 TIMEOUT_S="${TIMEOUT_S:-60}"
+# MAX_OPS: cap each phase to this many ops (0 = unlimited). Prevents a
+# 10 M-line official workload from dwarfing the sweep; override as needed.
+MAX_OPS="${MAX_OPS:-0}"
 
 BUILD_DIR="${1:-$script_dir/../build-cxl}"
 OUT_LOG="${2:-$script_dir/../docs/fusee_ycsb_sweep.log}"
@@ -45,17 +48,39 @@ if [[ ! -x "$BUILD_DIR/tests/cxl_ycsb_runner_C" ]]; then
   exit 2
 fi
 
-# Auto-detect workload triples: any file matching *.load whose .trans also exists.
+# Auto-detect workload pairs. Accepts two naming conventions:
+#   - synthetic: <base>.load + <base>.trans (workloads_synth/)
+#   - official:  <base>.spec_load + <base>.spec_trans (setup/workloads/)
+# For the official set, the YCSB-supplied "workloads.spec_load" file is only
+# a 9-line sample (not a real workload); we skip it by name.
 if [[ -z "${WORKLOADS:-}" ]]; then
   WORKLOADS=""
-  for lf in "$WL_DIR"/*.load; do
+  for lf in "$WL_DIR"/*.load "$WL_DIR"/*.spec_load; do
     [[ -f "$lf" ]] || continue
-    base="$(basename "${lf%.load}")"
-    trans="$WL_DIR/$base.trans"
-    [[ -f "$trans" ]] || continue
-    WORKLOADS="$WORKLOADS $base"
+    base="$(basename "$lf")"
+    base="${base%.spec_load}"
+    base="${base%.load}"
+    [[ "$base" == "workloads" ]] && continue   # skip the YCSB sample
+    # dedupe in case both conventions are present
+    case " $WORKLOADS " in *" $base "*) continue;; esac
+    if   [[ -f "$WL_DIR/$base.trans"      ]] \
+      || [[ -f "$WL_DIR/$base.spec_trans" ]]; then
+      WORKLOADS="$WORKLOADS $base"
+    fi
   done
 fi
+
+# Resolve the actual load/trans paths for a workload base name. Sets the
+# load_path and trans_path globals. Returns non-zero if either is missing.
+resolve_paths() {
+  local wl="$1"
+  if   [[ -f "$WL_DIR/$wl.load"      ]]; then load_path="$WL_DIR/$wl.load"
+  elif [[ -f "$WL_DIR/$wl.spec_load" ]]; then load_path="$WL_DIR/$wl.spec_load"
+  else return 1; fi
+  if   [[ -f "$WL_DIR/$wl.trans"      ]]; then trans_path="$WL_DIR/$wl.trans"
+  elif [[ -f "$WL_DIR/$wl.spec_trans" ]]; then trans_path="$WL_DIR/$wl.spec_trans"
+  else return 1; fi
+}
 
 {
   echo "# FUSEE CXL YCSB sweep"
@@ -65,14 +90,16 @@ fi
 } > "$OUT_LOG"
 
 for wl in $WORKLOADS; do
-  load="$WL_DIR/$wl.load"
-  trans="$WL_DIR/$wl.trans"
+  if ! resolve_paths "$wl"; then
+    echo "# skipping $wl: missing load or trans file" >> "$OUT_LOG"
+    continue
+  fi
   for opt in $OPTS; do
     bin="$BUILD_DIR/tests/cxl_ycsb_runner_$opt"
-    header="--- workload=$wl opt=$opt ---"
+    header="--- workload=$wl opt=$opt load=$(basename "$load_path") trans=$(basename "$trans_path") ---"
     echo "$header"
     echo "$header" >> "$OUT_LOG"
-    timeout "$TIMEOUT_S" "$bin" "$DEV" "$load" "$trans" "$NUM_BUCKETS" \
+    timeout "$TIMEOUT_S" "$bin" "$DEV" "$load_path" "$trans_path" "$NUM_BUCKETS" "$MAX_OPS" \
       >> "$OUT_LOG" 2>&1 \
       || echo "# (timeout or error workload=$wl opt=$opt)" >> "$OUT_LOG"
   done

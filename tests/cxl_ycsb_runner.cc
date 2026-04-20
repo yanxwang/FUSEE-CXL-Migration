@@ -8,10 +8,12 @@
 //   CxlKvStore. Single-process; multi-proc can be built on top later.
 //
 // Usage:
-//   ./cxl_ycsb_runner <dev_path> <load_file> <trans_file> [num_buckets]
+//   ./cxl_ycsb_runner <dev_path> <load_file> <trans_file> [num_buckets] [max_ops]
 //
 // load_file is the INSERT-only phase (typically <workload>.spec_load);
 // trans_file is the mixed phase (<workload>.spec_trans).
+// max_ops (optional): cap each phase to this many ops. Useful for quick
+// smoke runs against the real YCSB workloads which can be 10 M+ lines.
 //
 // Emits a single line summary:
 //   YCSB opt=X load_ops=N load_thpt=... trans_ops=M trans_thpt=... ...
@@ -115,7 +117,7 @@ std::vector<Op> load_ops(const std::string &path) {
 int main(int argc, char **argv) {
   if (argc < 4) {
     fprintf(stderr,
-            "usage: %s <dev_path> <load_file> <trans_file> [num_buckets]\n",
+            "usage: %s <dev_path> <load_file> <trans_file> [num_buckets] [max_ops]\n",
             argv[0]);
     return 2;
   }
@@ -124,9 +126,15 @@ int main(int argc, char **argv) {
   std::string trans_path = argv[3];
   uint32_t num_buckets =
       (argc >= 5) ? (uint32_t)strtoul(argv[4], nullptr, 0) : 16384U;
+  size_t max_ops =
+      (argc >= 6) ? (size_t)strtoull(argv[5], nullptr, 0) : 0;
 
   std::vector<Op> load_ops_v = load_ops(load_path);
   std::vector<Op> trans_ops_v = load_ops(trans_path);
+  if (max_ops > 0) {
+    if (load_ops_v.size()  > max_ops) load_ops_v.resize(max_ops);
+    if (trans_ops_v.size() > max_ops) trans_ops_v.resize(max_ops);
+  }
   if (load_ops_v.empty() && trans_ops_v.empty()) {
     fprintf(stderr, "no valid ops parsed\n");
     return 1;
