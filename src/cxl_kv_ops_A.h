@@ -20,6 +20,7 @@
 
 #include "cxl_bucket_lock.h"
 #include "cxl_hashtable.h"
+#include "cxl_oplog.h"
 #include "cxl_pending_ring.h"
 
 #include <atomic>
@@ -53,6 +54,9 @@ class CxlKvStoreA {
     return replicated_ops_.load(std::memory_order_relaxed);
   }
 
+  // Optional OpLog integration for crash recovery. Same shape as CxlKvStoreC.
+  void enable_oplog(OpLog *log) { oplog_ = log; }
+
  private:
   uint32_t bucket_idx(uint64_t key) const {
     return static_cast<uint32_t>(fnv1a_u64(key) % num_buckets_);
@@ -78,6 +82,8 @@ class CxlKvStoreA {
   std::thread replicator_;
   std::atomic<bool> stop_{false};
   std::atomic<uint64_t> replicated_ops_{0};
+
+  OpLog *oplog_ = nullptr;
 };
 
 } // namespace fusee

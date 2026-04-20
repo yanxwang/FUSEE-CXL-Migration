@@ -90,6 +90,13 @@ class OpLog {
   using InProgressVisitor = void (*)(const OpLogEntry *e, void *user);
   uint64_t scan_in_progress(InProgressVisitor fn, void *user);
 
+  // Drive recovery: for each InProgress entry, invoke the redo callback
+  // (which should re-apply the op, e.g. by calling CxlKvStore::insert
+  // again), then transition the entry to Aborted (so we do not replay it
+  // twice). Returns the number of entries acted on.
+  using RedoFn = int (*)(const OpLogEntry *e, void *user);
+  uint64_t recover_redo(RedoFn fn, void *user);
+
  private:
   OpLogRegion *region_ = nullptr;
   int host_id_ = -1;

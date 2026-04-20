@@ -141,9 +141,17 @@ int CxlKvStoreB::insert(uint64_t key, uint64_t value) {
   }
   if (empty_idx < 0) { lock_table_.unlock(idx, host_id_); return -1; }
 
+  uint64_t log_idx = 0;
+  bool logged = false;
+  if (oplog_) {
+    log_idx = oplog_->begin(OpLogKind::Insert, key, idx, (uint64_t)empty_idx, 0, value);
+    logged = true;
+  }
+
   publish_slot(&b->slots[empty_idx], key, value);
   int rc = dispatch_nowait(idx, (uint32_t)empty_idx, value);
   bump_epoch(lock_table_.entry(idx));
+  if (logged) oplog_->commit(log_idx);
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -163,12 +171,21 @@ int CxlKvStoreB::update(uint64_t key, uint64_t value) {
   }
   if (match < 0) { lock_table_.unlock(idx, host_id_); return -1; }
 
+  uint64_t log_idx = 0;
+  bool logged = false;
+  if (oplog_) {
+    log_idx = oplog_->begin(OpLogKind::Update, key, idx, (uint64_t)match,
+                            b->slots[match].value, value);
+    logged = true;
+  }
+
   b->slots[match].value = value;
   flush_line(&b->slots[match].value);
   store_fence();
 
   int rc = dispatch_nowait(idx, (uint32_t)match, value);
   bump_epoch(lock_table_.entry(idx));
+  if (logged) oplog_->commit(log_idx);
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -188,11 +205,20 @@ int CxlKvStoreB::remove(uint64_t key) {
   }
   if (match < 0) { lock_table_.unlock(idx, host_id_); return -1; }
 
+  uint64_t log_idx = 0;
+  bool logged = false;
+  if (oplog_) {
+    log_idx = oplog_->begin(OpLogKind::Delete, key, idx, (uint64_t)match,
+                            b->slots[match].value, 0);
+    logged = true;
+  }
+
   b->slots[match].key = kEmptyKey;
   flush_line(&b->slots[match].key);
   store_fence();
   int rc = dispatch_nowait(idx, (uint32_t)match, 0ULL);
   bump_epoch(lock_table_.entry(idx));
+  if (logged) oplog_->commit(log_idx);
   lock_table_.unlock(idx, host_id_);
   return rc;
 }

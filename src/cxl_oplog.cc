@@ -90,4 +90,26 @@ uint64_t OpLog::scan_in_progress(InProgressVisitor fn, void *user) {
   return found;
 }
 
+uint64_t OpLog::recover_redo(RedoFn fn, void *user) {
+  uint64_t acted = 0;
+  for (int h = 0; h < num_hosts_; h++) {
+    OpLogRing *ring = &region_->rings[h];
+    uint64_t tail = CACHELINE_LOAD(&ring->tail);
+    uint64_t start = (tail > kOpLogEntriesPerHost)
+                         ? (tail - kOpLogEntriesPerHost) : 0;
+    for (uint64_t i = start; i < tail; i++) {
+      OpLogEntry *e = &ring->entries[i % kOpLogEntriesPerHost];
+      OpLogState s = get_state(e);
+      if (s != OpLogState::InProgress) continue;
+      int rc = fn ? fn(e, user) : 0;
+      // Mark aborted (for "tried but could not complete") or committed
+      // (for "redo succeeded"). We use Aborted vs Committed based on rc.
+      if (rc == 0) set_state(e, OpLogState::Committed);
+      else set_state(e, OpLogState::Aborted);
+      acted++;
+    }
+  }
+  return acted;
+}
+
 } // namespace fusee
