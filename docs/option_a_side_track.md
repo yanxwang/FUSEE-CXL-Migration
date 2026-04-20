@@ -191,6 +191,54 @@ If writer waits for majority of ACKs instead of all, latency = 2nd-fastest repli
 | 2026-04-20 | A-v2: SPSC ring implementation | `ycsb_abc_bench_av2.c` (new) | +180x write latency |
 | 2026-04-20 | Integrate A-v2 into main bench; remove pending_op fields | `ycsb_abc_bench.c` | (same as standalone A-v2) |
 | 2026-04-20 | Tried packed ring entry, reverted (slower) | (reverted) | -2x (discarded) |
+| 2026-04-20 | Attempted g3/g4 YCSB runs (CXL switch) | — | **HARDWARE BLOCKER — see §g3_g4_run** |
+
+---
+
+## g3/g4 YCSB run — 2026-04-20
+
+**User request**: run A-v2 / B / C on g3+g4 (the CXL-switch pair) against YCSB workloads A and C, plot latency + throughput.
+
+### Hardware blockers hit
+
+- **g3**: `/dev/dax0.0` (512 GB CXL on target_node=1) is in **system-ram mode**, not devdax. `sudo daxctl reconfigure-device --mode=devdax` is required before the mini-bench can mmap it. Sudo authorization was only granted for emr; reconfiguring shared hardware on g3 is out of scope for this session — left as-is.
+- **g4**: no `/dev/dax*` present at all. CXL region unavailable on this host. Truly multi-host g3↔g4 sharing via the CXL switch is therefore blocked.
+
+Both hosts reachable over SSH (kernel 6.15.0-cxl_net); the issue is device exposure, not connectivity.
+
+### What we did run
+
+- Single-host multi-proc on g3, tmpfs backing (`/dev/shm/ycsb_abc_backing.bin`, 538 MB region). tmpfs = DRAM, so this validates the protocol code but does not exercise CXL — call it a "protocol sanity + relative-cost" run, not a CXL-latency measurement.
+- Rebuilt `bench/ycsb_abc_bench` on g3 from the current A-v2 source (gcc direct build; Makefile did not have a rule for `ycsb_abc_bench`, so invoked manually).
+- Config: 4 procs × 2 threads × 3000 ops each; workloads A (50/50 read/update) and C (100% read); every (opt, wl) combination.
+
+### Results (g3 tmpfs, aggregate across 4 procs)
+
+| opt | wl | thpt (kops/s) | w_avg μs | w_p99 μs | r_avg μs | r_p99 μs |
+|-----|----|---------------:|---------:|---------:|---------:|---------:|
+| A   | A  | **incomplete** (see below) |          |          |          |          |
+| A   | C  |        9 715   |        — |        — |     0.57 |    19.98 |
+| B   | A  |        1 039   |    13.28 |    26.23 |     1.55 |    23.62 |
+| B   | C  |        9 906   |        — |        — |     0.55 |    14.99 |
+| C   | A  |        1 091   |     9.88 |    21.36 |     4.11 |    26.02 |
+| C   | C  |        2 005   |        — |        — |     3.65 |    23.89 |
+
+Plot: `docs/ycsb_abc_g3_tmpfs.png` (4 panels: aggregate throughput, write latency avg+p99 on wl A, read latency avg+p99 on wl A, read latency avg+p99 on wl C).
+
+### Observations
+
+- **Reads (wl C)**: A ≈ B ≈ 9.7–9.9 M ops/s aggregate. Lazy-RC (C) pays seqlock-reread cost on every read and lands at only 2.0 M ops/s — about 5× slower than B on 100%-read. Confirms the expected cache/epoch-visit tradeoff.
+- **Writes (wl A 50/50)**: C (9.9 μs avg) < B (13.3 μs avg) on the write path itself, because C only bumps an epoch whereas B additionally writes the per-dst invalidation ring. Aggregate throughput is essentially tied (1.05M ≈ 1.09M ops/s) because reads dominate wl-A throughput and C's reads are the bottleneck there.
+- **A-v2 writes (opt=A wl=A)**: did **not** complete at 3000 ops. At 500 ops standalone it ran fine (w_avg ~20-25 μs, thpt 135-177 kops/s per node, consistent with emr A-v2 numbers). At 3000 ops the 4-process run hung indefinitely (killed after ~4 min). Working hypothesis: ring-full deadlock when producer stores outpace replicator consumption at higher op counts. Needs a dedicated investigation — logged as new idea below.
+
+### New idea surfaced
+
+**Idea 6: ring-full hang at high ops count** — at 3000 ops/proc, A-v2 hangs on g3 tmpfs (DRAM), runs fine at 500 ops/proc. The `PendingRing` is 4096 entries; with 3 dsts and 3000 ops we enqueue 9000 entries per src → ring wraps. If `processed_op_id` visibility lags and the producer spins on "ring slot free" (op_id==0 after we clear), and meanwhile the replicator on one dst falls behind, all producers can simultaneously be waiting. Needs instrumentation: log producer-wait reason (ring full vs ACK wait) and replicator consumption rate. Likely a pairwise-order invariant in the current clear-then-reuse path. Parked for later.
+
+### Conclusion for migration
+
+- **Not a regression** in A-v2 design; the hang only appears at high ops-per-run on g3 tmpfs and did not reproduce at comparable scale on emr real CXL in the earlier investigation. Treat as an open mini-bench robustness bug.
+- **Does not block** FUSEE CXL Migration Phase 1–3 (already landed). Phase 7 (ports A to FUSEE src/) should watch for the same failure mode and instrument producer-wait reasons.
 
 ---
 
