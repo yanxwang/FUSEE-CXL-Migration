@@ -115,3 +115,39 @@
 **Ends with**: Phases 1–3 + 7 landed (8 feature commits on feat/cxl-migration). Queued Phase 4 (RDMA gating) as the next concrete task.
 
 ---
+
+## Session 2026-04-20 ~03:50–04:40 CDT — Phases 4, 5, 6 + A multi-proc robustness
+
+**Context**: user said "keep pushing until 10 AM, do not wait for phase review". Landed 4 more feature commits in one session.
+
+**Phase 4 — CXL_ONLY CMake gate (commit bbf3986)**:
+- Added top-level `option(CXL_ONLY "…" OFF)`. When ON the build skips Boost, GTest, the RDMA-linked tests, ycsb-test/crash-recover-test/micro-test, and libddckv entirely. Verified both ways on emr: `build/` still produces full libddckv + RDMA tests + ycsb-test; `build-cxl/` (fresh dir with `-DCXL_ONLY=ON`) produces only libfusee_cxl + the cxl_*_test binaries.
+- Moved `cxl_mm.cc`, `cxl_bucket_lock.cc`, `cxl_kv_ops_C.cc` out of libddckv source list (they already live in libfusee_cxl and do not need libddckv to carry the cxl_shm_profiling include path).
+- Hard RDMA source deletion is deferred; gate is the intermediate step.
+
+**Option A multi-proc robustness (commit ff4d32d)**:
+- Found: if one dst's ACK timed out in `dispatch_and_wait`, the writer returned without clearing `op_id` on *any* slot. Next writer for any of those rings blocked forever on "ring slot free".
+- Fix 1: always run the `op_id=0` clear loop even on timeout.
+- Fix 2: tightened the per-dst ACK budget from 2 s to 200 ms so a stuck replicator is surfaced in reasonable time.
+- Fix 3: added `init_done` + `attached` barriers in `cxl_kv_bench_mp.cc` so host 1/2/3 do not race against host 0's ring-matrix memset or enqueue before the peers' replicators are running.
+- Result: 4-host × 500 ops now completes for A at every wratio. But wr=1.0 on A still shows host 3 stalling at 600 ms tails repeatedly, agg thpt collapses to ~24 ops/s — real deadlock-like behavior that the always-clear only papers over. Root cause still open.
+
+**Phase 5 — YCSB runner (commit 29ba277)**:
+- `tests/cxl_ycsb_runner.cc`: parses YCSB spec files (`OP KEY` or `OP TABLE KEY`), FNV-1a hashes string keys to u64, dispatches to `fusee::CxlKvStore`. Compiled into `cxl_ycsb_runner_{A,B,C}` via the same per-protocol CMake foreach as the bench.
+- `tests/gen_ycsb_spec.py`: synthesizes wl_A / wl_C spec files with uniform key distribution (5k load + 5k trans ops). Real YCSB with Zipf skew is a follow-up.
+- Single-host results on /dev/dax0.0: all three protocols at ~210-220 kops/s load, ~275-315 kops/s trans. As expected — no cross-host replication when num_hosts=1, so A/B/C converge to the same lock-bound cost.
+
+**Phase 6 — OpLog (commit bd93e82)**:
+- `src/cxl_oplog.{h,cc}`: per-host ring (4096 entries each, up to `kOpLogMaxHosts=4`), `begin` / `commit` / `abort` primitives with state word published last, plus `scan_in_progress` recovery scanner that walks every host's tail and calls a visitor for each InProgress entry.
+- `tests/cxl_oplog_test.cc`: host writes 3 committed ops + 1 dangling begin, then a second attach runs the scan and must find exactly 1 InProgress. Passes on /dev/dax0.0 and tmpfs.
+- OpLog is not yet wired into `CxlKvStoreA/B/C::insert/update/remove`. That is a follow-up; each op site needs a `log_.begin(...)` before the store mutation and a `log_.commit(...)` after.
+
+**v2 multi-proc bench (also in bd93e82)**:
+- Rerun with the A robustness fixes + barriers. At 4 hosts × 500 ops on /dev/dax0.0:
+  - Reads (wr=0): A ≈ B ≈ C, all at ~1.21 M ops/s agg.
+  - Writes (wr=1): B 361 kops/s (7.2us/op), C 895 kops/s (4.0us/op) — C still ~2.5× faster than B on writes because no reader cache exists to justify B's eager-push cost.
+  - A wr=1.0: agg 24 ops/s because host 3 stalls (600ms ACK tails). Logged as open.
+
+**Ends with**: Phases 1–7 complete; Phase 8 (benchmarks) partially in tree, with a clean reproducible multi-proc setup and two rounds of results. Next concrete work is the Option A stall root-cause and reader-cache for Option B.
+
+---

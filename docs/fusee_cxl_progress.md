@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phases 1–3 and 7 (A, B, C protocols) all COMPLETE; Phase 4 (RDMA removal) next
-- **Phase**: 0 skipped; 1,2,3,7 done; 4,5,6,8 pending
+- **Current focus**: Phases 1–7 (all 3 protocols + CXL_ONLY build + YCSB runner + OpLog) done; Phase 8 is the ongoing benchmark polish
+- **Phase**: 0 skipped; 1,2,3,4,5,6,7 done; 8 in progress
 - **Branch**: `feat/cxl-migration` on emr
-- **Last commit**: `360da05 [Phase 7] Compile-time protocol switch + single-proc micro-bench`
+- **Last commit**: `bd93e82 [Phase 6] CXL OpLog for crash recovery + v2 bench sweep results`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -61,11 +61,11 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 | 1: CXL basic infra | ✅ done | a3e7a63, 60433be | `src/cxl_mm.{h,cc}` + single-proc + multi-proc tests on /dev/dax0.0 |
 | 2: BucketLock table | ✅ done | c1f40e6 | `src/cxl_bucket_lock.{h,cc}` (LFM); 100k contended incr on CXL, ~7.4 μs/crit |
 | 3: KV ops Option C | ✅ done | a2fbc30 | `cxl_kv_ops_C.{h,cc}` + hashtable + 2-proc test on /dev/dax0.0 |
-| 4: Remove RDMA deps | ⏳ pending | — | Need to split libddckv or gate RDMA files behind CMake option |
-| 5: Single-node YCSB | ⏳ pending | — | YCSB runner using new API |
-| 6: OpLog + crash recovery | ⏳ pending | — | Port `client_cr.cc` |
-| 7: Options A and B | ✅ done | bf690a3, ea9599b, 360da05 | `cxl_kv_ops_A.{h,cc}` + `cxl_kv_ops_B.{h,cc}` + protocol switch header + bench binaries |
-| 8: Performance benchmarks | 🚧 partial | 95bb1b2 | g3 tmpfs mini-bench + plot; emr CXL multi-proc bench run (Option A hangs — logged in side-track) |
+| 4: Remove RDMA deps | ✅ done (soft) | bbf3986 | `-DCXL_ONLY=ON` CMake option; default build still produces libddckv + RDMA tests |
+| 5: Single-node YCSB | ✅ done | 29ba277 | `cxl_ycsb_runner_{A,B,C}` + synthetic spec-file generator; ran wl_A + wl_C on real CXL |
+| 6: OpLog + crash recovery | ✅ done (basic) | bd93e82 | `cxl_oplog.{h,cc}` per-host ring + begin/commit/abort + recovery scan; integration into each protocol deferred |
+| 7: Options A and B | ✅ done | bf690a3, ea9599b, 360da05, ff4d32d | A + B + protocol switch; A multi-proc robustness fix (always-clear op_id) |
+| 8: Performance benchmarks | 🚧 partial | 95bb1b2, 75996a9, bd93e82 | g3 tmpfs mini-bench; emr CXL multi-proc bench v1/v2; Option A wr=1.0 still has stall issues |
 
 ## Recent results — emr /dev/dax0.0, multi-proc, 4 hosts × 2000 ops
 
@@ -81,17 +81,17 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 
 Takeaway in the current (no reader-cache) port: **Option C dominates on writes** because Option B pays to push invalidations that nothing is subscribed to — the eager-push cost is ~10 μs/op of pure overhead. Once a reader cache lands, B should pull ahead on read-heavy mixed workloads. See `docs/fusee_mp_bench.png`.
 
-## Next concrete task
+## Next concrete tasks
 
-**Phase 4 — Soft RDMA gating in CMake**:
+Phases 1–7 have landed; what is genuinely left is not "new code for new phases" but hardening / extending what is there:
 
-The full Phase-4 plan is "delete nm.{h,cc}, ib.{h,cc}". Intermediate goal: add a CMake option `-DCXL_ONLY=ON` that drops all RDMA sources from libddckv and lets `make` complete without any ibverbs/RDMA headers present. libddckv with `-DCXL_ONLY=ON` becomes a pure CXL library; tests that depend on RDMA path stay gated out. Full source deletion waits until we are sure we will not need the RDMA path again.
+1. **Fix Option A multi-proc stall at wratio=1.0** — with the always-clear fix, 4-host × 500 ops now completes, but host 3 regularly sits on 600 ms ACK tails. Root cause still unpinned. Candidate investigations: instrument *which* dst is not ACKing and why the replicator head is not advancing on that dst.
+2. **Wire OpLog into the three CxlKvStore classes** — begin()/commit() around insert/update/remove. Writer holds the bucket lock during the op so there is no contention concern; the question is just where in the call sequence the log calls go.
+3. **Add reader-side bucket cache for Option B** — today B pays the eager-push cost for no benefit, because readers always go to CXL. Caching + push-driven invalidation is the scenario where B is supposed to win.
+4. **Full YCSB using the official workloads** — right now `tests/gen_ycsb_spec.py` emits uniform-keyed synthetic spec files. Real YCSB uses Zipf skew. Hook in the official workload downloader (already in setup/) or port the Zipf generator.
+5. **Phase 4 hard removal** — actually delete `src/nm.{h,cc}`, `src/ib.{h,cc}`, and the RDMA-only tests once we are sure the CXL-only path is the permanent one.
 
-**Follow-up investigations (deferred)**:
-- Option A multi-proc bench hang (4 hosts × 100 ops times out). Correctness test at 2 hosts × 300 ops works. Something in the bench-specific path (populate-phase inserts before the barrier?) deadlocks the SPSC ring. New idea logged in `docs/option_a_side_track.md` §Idea 6.
-- Add reader-side bucket cache so Option B's eager push buys something.
-
-Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only until Phase 4. The new cxl_* files live alongside them.
+Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only under the default build. The new cxl_* files live alongside them and are selected via `-DCXL_ONLY=ON` or via linking `libfusee_cxl` directly.
 
 **Dax0.0 ready**: ✅ reconfigured to devdax mode on 2026-04-20 02:00 CDT
 **Build status**: original FUSEE still has RDMA deps in libddckv; Phase 1 tests link cxl_mm.cc directly, bypassing libddckv. Full libddckv refactor in Phase 4.
