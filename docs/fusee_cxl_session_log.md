@@ -202,3 +202,29 @@ The mini-bench result pattern (B beats C on reads, C beats B on writes) now hold
 4. `git add src/cxl_kv_ops_C.{h,cc} tests/cxl_kv_ops_C_recover_redo_test.cc tests/CMakeLists.txt docs/fusee_cxl_progress.md docs/fusee_cxl_session_log.md && git commit` with a one-line-body message (avoid apostrophes / parens — heredoc truncation burned Phase 1.2).
 
 ---
+
+## Session 2026-04-20 ~15:45–16:05 CDT — emr back; open-task #5 advanced; devdax blocked
+
+**Context**: emr back online (rebooted, up 23 min at session start). Goal: push progress on open tasks #2 (cache-on MP sweep on /dev/dax0.0) and #5 (official YCSB workloads) before 7 PM CDT.
+
+**Done this session**:
+- Synced everything that was pending + re-ran the C recover test on /dev/dax0.0 — green. Earlier commits on emr landed here from a parallel track: `c861ad0` (bucket_lock test prints us_per_crit + RESULT line), `df0c193` (reproducible MP + YCSB sweep scripts), `1553ec5` (per-phase benchmark index), `1cafc32` (open-tasks #2/#5 initial follow-up).
+- **Downloaded the real YCSB workloads** via `setup/download_workload.sh` path: pip-installed gdown under `--break-system-packages --user`, fetched `workloads.tgz` (502 MB), extracted to `setup/workloads/` (workloada…workloadf in `spec_load`/`spec_trans` form).
+- **Generalized the sweep script** (`tests/run_fusee_ycsb_sweep.sh`): auto-detects both `*.load`/`*.trans` (synthetic) and `*.spec_load`/`*.spec_trans` (official), skips the 9-line YCSB sample file by name, resolves the correct pair at run time. New `MAX_OPS` env cap so 10 M+ line trans files can be bounded for quick runs. Committed as `6f9e0e2` along with a runner change that accepts an optional 6th arg `max_ops`.
+- **First reference real-YCSB run landed** in `350d0eb` (`docs/fusee_ycsb_sweep_tmpfs.log`): 6 workloads × 3 protocols × 200 k ops each, tmpfs backing, all 18 runs clean. Numbers are tmpfs-only (no CXL latency); the point is pipeline validation and a stable YCSB-format artifact.
+
+**Devdax blocker (both open-tasks #2 and #5 real-CXL paths)**:
+- `daxctl reconfigure-device --mode=devdax --force dax0.0` hangs on node 2 memory block 65 in `going-offline` state.
+- Observed stats on node 2: `MemTotal ~195 GB`, `MemUsed=2 GB`, but **every tracked category is 0** (Active, Inactive, AnonPages, FilePages, Mapped, Shmem, KernelStack, PageTables, Unevictable, Mlocked). The 2 GB is kernel-internal and unmigratable from userspace tools.
+- 35 / 128 blocks offline, 92 online, 1 stuck `going-offline`. `echo 3 > /proc/sys/vm/drop_caches` + `echo 1 > /proc/sys/vm/compact_memory` made no difference.
+- `/dev/dax0.0` is `crw-rw-rw-` with `size=274 GB align=2 MB target_node=2 mode=system-ram`. Cannot be mmap'd in system-ram mode (`open: No such device or address`).
+- Spent ~20 min across 3 daxctl attempts; each one reached the same stuck state. No forward progress.
+- Next session unblock path: reboot emr before any user workload starts; reconfigure immediately after boot while node-2 is pristine.
+
+**Test-infra state**:
+- tmpfs smokes for both sweep scripts green (cache-on 2-host MP sweep: 1.2 M reads / 670 k mixed / 660 k writes agg on Opt C, etc.). Real CXL numbers will require the post-reboot reconfigure.
+- `workloads.tgz` (502 MB) left under `setup/` but untracked — too big for the repo; path is reproducible via `setup/download_workload.sh` anyway.
+
+**Ends with**: 43 commits on `feat/cxl-migration`. Open tasks #2 still blocked on devdax, #5 advanced (tmpfs reference done, devdax-backed run pending same unblock).
+
+---
