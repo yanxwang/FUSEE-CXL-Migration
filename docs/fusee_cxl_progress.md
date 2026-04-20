@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phases 1–7 (all 3 protocols + CXL_ONLY build + YCSB runner + OpLog) done; Phase 8 is the ongoing benchmark polish
-- **Phase**: 0 skipped; 1,2,3,4,5,6,7 done; 8 in progress
+- **Current focus**: Phases 1–8 all have substantive work landed; still-open items are listed below
+- **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 partial
 - **Branch**: `feat/cxl-migration` on emr
-- **Last commit**: `bd93e82 [Phase 6] CXL OpLog for crash recovery + v2 bench sweep results`
+- **Last commit**: `f0354a2 [Phase 8] Bench opt-in cache via FUSEE_CACHE=1 env var`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -63,33 +63,38 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 | 3: KV ops Option C | ✅ done | a2fbc30 | `cxl_kv_ops_C.{h,cc}` + hashtable + 2-proc test on /dev/dax0.0 |
 | 4: Remove RDMA deps | ✅ done (soft) | bbf3986 | `-DCXL_ONLY=ON` CMake option; default build still produces libddckv + RDMA tests |
 | 5: Single-node YCSB | ✅ done | 29ba277 | `cxl_ycsb_runner_{A,B,C}` + synthetic spec-file generator; ran wl_A + wl_C on real CXL |
-| 6: OpLog + crash recovery | ✅ done (basic) | bd93e82 | `cxl_oplog.{h,cc}` per-host ring + begin/commit/abort + recovery scan; integration into each protocol deferred |
+| 6: OpLog + crash recovery | ✅ done | bd93e82, 9bfe9c2, c613b59 | Per-host ring + begin/commit/abort + recovery scan + `recover_redo` callback; wired into all three protocols; crash-replay test passes |
 | 7: Options A and B | ✅ done | bf690a3, ea9599b, 360da05, ff4d32d | A + B + protocol switch; A multi-proc robustness fix (always-clear op_id) |
-| 8: Performance benchmarks | 🚧 partial | 95bb1b2, 75996a9, bd93e82 | g3 tmpfs mini-bench; emr CXL multi-proc bench v1/v2; Option A wr=1.0 still has stall issues |
+| 8: Performance benchmarks | 🚧 partial | 95bb1b2, 75996a9, bd93e82, a1d259a, 3f8d604, 3f989f1, 0bc1b9a, f0354a2 | DRAM-cache semantic distinction (C 10×, B 346× on cache hits); Zipf workload gen; `FUSEE_CACHE=1` bench; Option A wr=1.0 stall still open |
 
-## Recent results — emr /dev/dax0.0, multi-proc, 4 hosts × 2000 ops
+## Recent results
 
-| opt | wr   | agg thpt (kops/s) | w_avg μs | w_p99 μs | r_avg μs | r_p99 μs |
-|-----|-----:|------------------:|---------:|---------:|---------:|---------:|
-| A   | *    | **hangs** (multi-proc bench bug, correctness test OK at 2h×300 ops) |
-| B   | 0.00 |               847 |        — |        — |     4.64 |     5.35 |
-| B   | 0.50 |               371 |    14.58 |    16.21 |     4.90 |     5.96 |
-| B   | 1.00 |               234 |    14.94 |    16.48 |        — |        — |
-| C   | 0.00 |               851 |        — |        — |     4.17 |     4.56 |
-| C   | 0.50 |               706 |     4.81 |     5.81 |     4.77 |     5.74 |
-| C   | 1.00 |               607 |     5.15 |     5.87 |        — |        — |
+**Single-host DRAM cache speedup** (`/dev/dax0.0`, 50k search of 200 keys):
+- Option C: 8306 → 820 ns/op (**10.1×** on cache hit; reader still does one CXL epoch load)
+- Option B: 4608 → 13 ns/op (**346×** on cache hit; reader is DRAM-only, invalidation via ring)
+- Option A: same shape as B, with writer waiting for all replicators to invalidate before unblocking (sync semantics)
 
-Takeaway in the current (no reader-cache) port: **Option C dominates on writes** because Option B pays to push invalidations that nothing is subscribed to — the eager-push cost is ~10 μs/op of pure overhead. Once a reader cache lands, B should pull ahead on read-heavy mixed workloads. See `docs/fusee_mp_bench.png`.
+**4-host multi-proc aggregate throughput** with `FUSEE_CACHE=1`, 500 ops/host, /dev/dax0.0:
+| opt | wr=0.0 | wr=0.5 | wr=1.0 |
+|-----|-------:|-------:|-------:|
+| A   |   650k | 62 (stall) | — (stall) |
+| B   |  1055k |   400k |   247k |
+| C   |   633k |   749k |   600k |
 
-## Next concrete tasks
+Takeaways:
+- B wins on pure reads (1.6× over C) — the eager-push cache pays off here.
+- C wins on write-heavy mixes because B's ring-push overhead dominates the writer path.
+- A's multi-proc wr=1.0 still stalls — open bug from Phase 7 is unchanged by cache work.
 
-Phases 1–7 have landed; what is genuinely left is not "new code for new phases" but hardening / extending what is there:
+See `docs/fusee_mp_bench_v2.png` for the pre-cache run and individual commits for cache-on numbers.
 
-1. **Fix Option A multi-proc stall at wratio=1.0** — with the always-clear fix, 4-host × 500 ops now completes, but host 3 regularly sits on 600 ms ACK tails. Root cause still unpinned. Candidate investigations: instrument *which* dst is not ACKing and why the replicator head is not advancing on that dst.
-2. **Wire OpLog into the three CxlKvStore classes** — begin()/commit() around insert/update/remove. Writer holds the bucket lock during the op so there is no contention concern; the question is just where in the call sequence the log calls go.
-3. **Add reader-side bucket cache for Option B** — today B pays the eager-push cost for no benefit, because readers always go to CXL. Caching + push-driven invalidation is the scenario where B is supposed to win.
-4. **Full YCSB using the official workloads** — right now `tests/gen_ycsb_spec.py` emits uniform-keyed synthetic spec files. Real YCSB uses Zipf skew. Hook in the official workload downloader (already in setup/) or port the Zipf generator.
-5. **Phase 4 hard removal** — actually delete `src/nm.{h,cc}`, `src/ib.{h,cc}`, and the RDMA-only tests once we are sure the CXL-only path is the permanent one.
+## Next concrete tasks (still open)
+
+1. **Root-cause Option A multi-proc wr=1.0 stall** — correctness test passes at 2h × 300 ops; bench at 4h × anything-with-writes times out. Always-clear op_id keeps the ring from wedging permanently but individual ACK waits still hit 600 ms tails from host 3. Needs instrumentation of which dst is slow and why.
+2. **Run a cache-on multi-proc bench sweep and generate a v3 plot** — today's numbers are from ad-hoc invocations; should be a reproducible sweep with FUSEE_CACHE=1.
+3. **Phase 4 hard deletion** — delete `src/nm.{h,cc}` / `src/ib.{h,cc}` and the client/server RDMA files once we are sure the RDMA path stays gone. The soft gate is enough for now; hard deletion is intentionally deferred.
+4. **Integrate OpLog recovery callback into each CxlKvStore** — `recover_redo` exists but callers still have to write their own redo fn; a canned "replay into the store" helper would make `client_cr.cc`-style recovery a one-liner.
+5. **Official YCSB workloads** — Zipf generator exists, but hooking in the real `workloads/` dir from `setup/download_workload.sh` is still untouched.
 
 Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only under the default build. The new cxl_* files live alongside them and are selected via `-DCXL_ONLY=ON` or via linking `libfusee_cxl` directly.
 
