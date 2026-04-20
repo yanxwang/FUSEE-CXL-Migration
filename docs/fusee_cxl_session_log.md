@@ -74,3 +74,44 @@
 **Ends with**: Phase 2 complete. Queued Phase 3 (Option C KV ops) as the next concrete task; explicitly decided not to touch the existing `src/client*.{h,cc}` or `src/hashtable.{h,cc}` files yet.
 
 ---
+
+## Session 2026-04-20 ~02:00–03:50 CDT — Phases 3 + 7 (auto mode)
+
+**Context**: user added "keep pushing until 10 AM, do not wait for phase review". Executed Phases 3 and 7 back-to-back, plus a parallel side-track bench run on g3.
+
+**Phase 3 (commit a2fbc30)** — Option C KV ops:
+- `src/cxl_hashtable.h`: 128-byte bucket with 7 inline u64/u64 slots, FNV-1a hash.
+- `src/cxl_bucket_lock.{h,cc}`: extended BucketLockEntry with `write_epoch` + `staging_scratch`.
+- `src/cxl_kv_ops_C.{h,cc}`: seqlock-style C (writer lock+write+epoch-bump, reader epoch-retry).
+- `tests/cxl_kv_ops_C_test.cc`: two-proc insert/update/delete + cross-reads. Passes on /dev/dax0.0 at 2000 ops/host × 8192 buckets.
+
+**libfusee_cxl (commit 4c10c3b)**: separated CXL-only sources into their own static lib so tests stop duplicating source lists and no longer implicitly depend on libddckv (which still carries RDMA deps).
+
+**Side-track g3 bench (commit 95bb1b2)**:
+- Hardware blockers: g3 dax0.0 in system-ram mode (sudo reconfigure was only authorized for emr, so left as-is); g4 has no /dev/dax* at all.
+- Ran single-host multi-proc on g3 tmpfs (DRAM). 5 of 6 (opt, workload) configurations completed at 4p×2t×3000 ops. Option A at 3000 ops wl=A hangs (runs fine at 500 ops). A-v2 at 500 ops matches emr CXL numbers.
+- Notable: reads A≈B at ~9.7M ops/s agg; C at ~2.0M (seqlock cost). Writes: C 9.9μs < B 13.3μs on g3 tmpfs.
+- New idea 6 for side-track: A-v2 ring-full hang at higher ops (needs producer-wait-reason instrumentation).
+
+**Phase 7A (commit bf690a3)** — Option A ported to FUSEE src:
+- `src/cxl_pending_ring.h`: PendingRingEntry + PendingRingMatrix (4096 entries/ring, kMaxHosts=4).
+- `src/cxl_kv_ops_A.{h,cc}`: CxlKvStoreA with replicator std::thread, dispatch_and_wait, 2s sanity ceilings on ring-full and ACK-wait paths.
+- `tests/cxl_kv_ops_A_test.cc`: 2-proc correctness. Passes on /dev/dax0.0 at 300 ops/host, 239-243 ACKs observed.
+
+**Phase 7B (commit ea9599b)** — Option B ported:
+- `src/cxl_kv_ops_B.{h,cc}`: same ring data structure, writer does not wait on processed_op_id; replicator clears op_id directly.
+- Passes on /dev/dax0.0 at 300 ops/host.
+
+**Phase 7 switch (commit 360da05)**:
+- `src/cxl_kv_store.h`: compile-time protocol selector via `-DCONSENSUS_OPT=FUSEE_OPT_A|B|C`. Typedefs `fusee::CxlKvStore` to the chosen class. Added `stop()` + `replicated_ops()` to CxlKvStoreC for API parity.
+- `tests/cxl_kv_bench.cc` + `cxl_kv_bench_mp.cc`: unified single-proc and multi-proc benches, compiled 6 times (3 protocols × 2 variants).
+
+**Multi-proc bench results — emr /dev/dax0.0, 4 hosts × 2000 ops/host**:
+- Option A: **hangs** even at 4h × 50 ops. Correctness test at 2h × 300 ops still passes → isolated to the bench path (pre-barrier populate deadlocks 4-way SPSC ACK wait).
+- Option B: agg 847 / 371 / 234 kops/s at wratio 0 / 0.5 / 1.0. Writes 14.6–14.9 μs avg, reads ~4.8 μs avg.
+- Option C: agg 851 / 706 / 607 kops/s, writes 4.8–5.2 μs avg, reads ~4.2–4.8 μs avg.
+- Key finding: in the current cache-less port, **C beats B on writes by ~3×** because B's eager-push buys nothing (no reader cache to invalidate).
+
+**Ends with**: Phases 1–3 + 7 landed (8 feature commits on feat/cxl-migration). Queued Phase 4 (RDMA gating) as the next concrete task.
+
+---

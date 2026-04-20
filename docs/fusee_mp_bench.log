@@ -1,0 +1,39 @@
+---
+---
+---
+HOST opt=B host=0 ops=2000 wall=0.009s thpt=212062 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.67 r_p50=4.65 r_p99=5.38
+HOST opt=B host=1 ops=2000 wall=0.009s thpt=213179 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.64 r_p50=4.62 r_p99=5.39
+HOST opt=B host=2 ops=2000 wall=0.009s thpt=211766 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.68 r_p50=4.66 r_p99=5.35
+HOST opt=B host=3 ops=2000 wall=0.009s thpt=215976 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.59 r_p50=4.57 r_p99=5.30
+AGG opt=B num_hosts=4 wratio=0.00 total_ops=8000 wall_max=0.009s agg_thpt=847064
+---
+HOST opt=B host=0 ops=2000 wall=0.022s thpt=92640 w_avg=16.52 w_p50=16.50 w_p99=18.35 r_avg=5.29 r_p50=5.30 r_p99=6.42
+HOST opt=B host=1 ops=2000 wall=0.021s thpt=93212 w_avg=15.58 w_p50=15.56 w_p99=17.31 r_avg=5.37 r_p50=5.39 r_p99=6.59
+HOST opt=B host=2 ops=2000 wall=0.022s thpt=92825 w_avg=15.94 w_p50=15.90 w_p99=17.58 r_avg=5.32 r_p50=5.32 r_p99=6.43
+HOST opt=B host=3 ops=2000 wall=0.014s thpt=143930 w_avg=10.29 w_p50=10.30 w_p99=11.62 r_avg=3.63 r_p50=3.63 r_p99=4.41
+AGG opt=B num_hosts=4 wratio=0.50 total_ops=8000 wall_max=0.022s agg_thpt=370561
+---
+HOST opt=B host=0 ops=2000 wall=0.034s thpt=58559 w_avg=17.03 w_p50=16.99 w_p99=18.82 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=1 ops=2000 wall=0.033s thpt=60353 w_avg=16.52 w_p50=16.48 w_p99=18.26 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=2 ops=2000 wall=0.032s thpt=62429 w_avg=15.97 w_p50=15.92 w_p99=17.50 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=3 ops=2000 wall=0.021s thpt=97064 w_avg=10.26 w_p50=10.22 w_p99=11.35 r_avg=0.00 r_p50=0.00 r_p99=0.00
+AGG opt=B num_hosts=4 wratio=1.00 total_ops=8000 wall_max=0.034s agg_thpt=234236
+---
+HOST opt=C host=0 ops=2000 wall=0.009s thpt=212850 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.66 r_p50=4.65 r_p99=5.28
+HOST opt=C host=1 ops=2000 wall=0.009s thpt=220600 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.50 r_p50=4.44 r_p99=4.83
+HOST opt=C host=2 ops=2000 wall=0.009s thpt=224466 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=4.42 r_p50=4.37 r_p99=4.77
+HOST opt=C host=3 ops=2000 wall=0.006s thpt=319919 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.09 r_p50=3.04 r_p99=3.37
+AGG opt=C num_hosts=4 wratio=0.00 total_ops=8000 wall_max=0.009s agg_thpt=851401
+---
+HOST opt=C host=0 ops=2000 wall=0.011s thpt=176600 w_avg=5.95 w_p50=5.86 w_p99=7.09 r_avg=5.30 r_p50=5.30 r_p99=6.44
+HOST opt=C host=1 ops=2000 wall=0.010s thpt=193562 w_avg=5.01 w_p50=4.99 w_p99=6.08 r_avg=5.23 r_p50=5.23 r_p99=6.29
+HOST opt=C host=2 ops=2000 wall=0.010s thpt=197796 w_avg=4.92 w_p50=4.91 w_p99=6.01 r_avg=5.09 r_p50=5.10 r_p99=6.14
+HOST opt=C host=3 ops=2000 wall=0.007s thpt=289818 w_avg=3.35 w_p50=3.31 w_p99=4.07 r_avg=3.46 r_p50=3.45 r_p99=4.10
+AGG opt=C num_hosts=4 wratio=0.50 total_ops=8000 wall_max=0.011s agg_thpt=706400
+---
+HOST opt=C host=0 ops=2000 wall=0.013s thpt=151722 w_avg=6.55 w_p50=6.54 w_p99=7.13 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=1 ops=2000 wall=0.011s thpt=188053 w_avg=5.27 w_p50=5.29 w_p99=6.07 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=2 ops=2000 wall=0.011s thpt=189434 w_avg=5.23 w_p50=5.16 w_p99=6.13 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=3 ops=2000 wall=0.007s thpt=279850 w_avg=3.53 w_p50=3.55 w_p99=4.14 r_avg=0.00 r_p50=0.00 r_p99=0.00
+AGG opt=C num_hosts=4 wratio=1.00 total_ops=8000 wall_max=0.013s agg_thpt=606888
+---

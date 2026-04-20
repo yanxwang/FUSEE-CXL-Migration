@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phase 1 + 2 COMPLETE; Phase 3 (KV ops Option C) next
-- **Phase**: 0 skipped; Phase 1 done; Phase 2 done; Phase 3 pending
+- **Current focus**: Phases 1–3 and 7 (A, B, C protocols) all COMPLETE; Phase 4 (RDMA removal) next
+- **Phase**: 0 skipped; 1,2,3,7 done; 4,5,6,8 pending
 - **Branch**: `feat/cxl-migration` on emr
-- **Last commit**: `c1f40e6 [Phase 2] CXL BucketLock table backed by LFM`
+- **Last commit**: `360da05 [Phase 7] Compile-time protocol switch + single-proc micro-bench`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -60,31 +60,36 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 | 0: Baseline | ⏳ skipped | — | FUSEE repo already on emr; no baseline run required |
 | 1: CXL basic infra | ✅ done | a3e7a63, 60433be | `src/cxl_mm.{h,cc}` + single-proc + multi-proc tests on /dev/dax0.0 |
 | 2: BucketLock table | ✅ done | c1f40e6 | `src/cxl_bucket_lock.{h,cc}` (LFM); 100k contended incr on CXL, ~7.4 μs/crit |
-| 3: KV ops Option C | ⏳ pending | — | `src/cxl_kv_ops_C.cc` |
-| 4: Remove RDMA deps | ⏳ pending | — | Delete nm.{h,cc}, ib.{h,cc}; update CMakeLists |
+| 3: KV ops Option C | ✅ done | a2fbc30 | `cxl_kv_ops_C.{h,cc}` + hashtable + 2-proc test on /dev/dax0.0 |
+| 4: Remove RDMA deps | ⏳ pending | — | Need to split libddckv or gate RDMA files behind CMake option |
 | 5: Single-node YCSB | ⏳ pending | — | YCSB runner using new API |
 | 6: OpLog + crash recovery | ⏳ pending | — | Port `client_cr.cc` |
-| 7: Options A and B | ⏳ pending | — | compile-time switch `-DCONSENSUS_OPT=A\|B\|C` |
-| 8: Performance benchmarks | ⏳ pending | — | YCSB on all three protocols, compare to mini-bench |
+| 7: Options A and B | ✅ done | bf690a3, ea9599b, 360da05 | `cxl_kv_ops_A.{h,cc}` + `cxl_kv_ops_B.{h,cc}` + protocol switch header + bench binaries |
+| 8: Performance benchmarks | 🚧 partial | 95bb1b2 | g3 tmpfs mini-bench + plot; emr CXL multi-proc bench run (Option A hangs — logged in side-track) |
+
+## Recent results — emr /dev/dax0.0, multi-proc, 4 hosts × 2000 ops
+
+| opt | wr   | agg thpt (kops/s) | w_avg μs | w_p99 μs | r_avg μs | r_p99 μs |
+|-----|-----:|------------------:|---------:|---------:|---------:|---------:|
+| A   | *    | **hangs** (multi-proc bench bug, correctness test OK at 2h×300 ops) |
+| B   | 0.00 |               847 |        — |        — |     4.64 |     5.35 |
+| B   | 0.50 |               371 |    14.58 |    16.21 |     4.90 |     5.96 |
+| B   | 1.00 |               234 |    14.94 |    16.48 |        — |        — |
+| C   | 0.00 |               851 |        — |        — |     4.17 |     4.56 |
+| C   | 0.50 |               706 |     4.81 |     5.81 |     4.77 |     5.74 |
+| C   | 1.00 |               607 |     5.15 |     5.87 |        — |        — |
+
+Takeaway in the current (no reader-cache) port: **Option C dominates on writes** because Option B pays to push invalidations that nothing is subscribed to — the eager-push cost is ~10 μs/op of pure overhead. Once a reader cache lands, B should pull ahead on read-heavy mixed workloads. See `docs/fusee_mp_bench.png`.
 
 ## Next concrete task
 
-**Phase 3 — KV ops for Option C (lazy-RC, simplest protocol)**:
+**Phase 4 — Soft RDMA gating in CMake**:
 
-1. Design CXL region layout for Option C:
-   - Global header (magic, num_nodes, num_buckets, offsets)
-   - `BucketLockTable` (already usable from Phase 2)
-   - Per-bucket write-epoch array (cacheline-padded `cacheline_u64`)
-   - Authoritative bucket array (RACE hash buckets living on CXL for C; B and A will diverge)
-   - KV data staging area (copy-out-then-publish pattern)
-2. Port/recreate a minimal RACE hash bucket + slot layout in `src/cxl_hashtable.{h,cc}`. Start with a single subtable (no directory splits) to keep Phase 3 small.
-3. Create `src/cxl_kv_ops_C.{h,cc}`:
-   - `kv_insert(key, klen, val, vlen)` — lock bucket, scan for empty slot, write KV-data + slot, bump bucket write_epoch, unlock
-   - `kv_search(key, klen, out)` — on cache miss (epoch changed), refresh bucket from CXL; otherwise use local cached slots
-   - `kv_update(key, klen, val, vlen)` / `kv_delete(key, klen)` — similar lock+write+epoch-bump
-   - Keep the local hash-table cache per node in DRAM (FUSEE's original model)
-4. Multi-process test `tests/cxl_kv_ops_C_test.cc`: two processes do disjoint inserts + cross-reads; verify every insert from node A is visible on node B after its local epoch-check refresh.
-5. Commit as `[Phase 3] Option C KV ops + multi-proc test`
+The full Phase-4 plan is "delete nm.{h,cc}, ib.{h,cc}". Intermediate goal: add a CMake option `-DCXL_ONLY=ON` that drops all RDMA sources from libddckv and lets `make` complete without any ibverbs/RDMA headers present. libddckv with `-DCXL_ONLY=ON` becomes a pure CXL library; tests that depend on RDMA path stay gated out. Full source deletion waits until we are sure we will not need the RDMA path again.
+
+**Follow-up investigations (deferred)**:
+- Option A multi-proc bench hang (4 hosts × 100 ops times out). Correctness test at 2 hosts × 300 ops works. Something in the bench-specific path (populate-phase inserts before the barrier?) deadlocks the SPSC ring. New idea logged in `docs/option_a_side_track.md` §Idea 6.
+- Add reader-side bucket cache so Option B's eager push buys something.
 
 Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only until Phase 4. The new cxl_* files live alongside them.
 
