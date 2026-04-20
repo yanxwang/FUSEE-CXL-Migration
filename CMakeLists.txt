@@ -4,7 +4,16 @@ project(DDCKV LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 11)
 
-find_package(Boost REQUIRED)
+# CXL_ONLY=ON skips everything that depends on RDMA (libddckv's RDMA sources,
+# ycsb-test, crash-recover-test, micro-test, and the RDMA unit tests). The
+# resulting build produces only libfusee_cxl + the CXL migration tests. This
+# is the "Phase 4" intermediate — full deletion of RDMA code waits until we
+# decide we never want the RDMA path back.
+option(CXL_ONLY "Build only the CXL migration path; skip RDMA sources" OFF)
+
+if(NOT CXL_ONLY)
+    find_package(Boost REQUIRED)
+endif()
 
 include_directories(src)
 set(CMAKE_BUILD_TYPE Release)
@@ -23,9 +32,11 @@ endif()
 
 add_subdirectory(src)
 
-add_subdirectory(ycsb-test)
-add_subdirectory(crash-recover-test)
-add_subdirectory(micro-test)
+if(NOT CXL_ONLY)
+    add_subdirectory(ycsb-test)
+    add_subdirectory(crash-recover-test)
+    add_subdirectory(micro-test)
+endif()
 
 enable_testing()
 add_subdirectory(tests)

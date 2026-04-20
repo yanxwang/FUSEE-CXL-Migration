@@ -1,15 +1,17 @@
-find_package(GTest REQUIRED)
+if(NOT CXL_ONLY)
+    find_package(GTest REQUIRED)
 
-include_directories(${GTEST_INCLUDE_DIRS})
+    include_directories(${GTEST_INCLUDE_DIRS})
 
-add_executable(test_nm test_nm.cc ddckv_test.cc)
-add_executable(test_kv_utils test_kv_utils.cc ddckv_test.cc)
-# add_executable(test_server test_server.cc ddckv_test.cc)
-add_executable(test_client_server test_client_server.cc)
-add_executable(test_client_client test_client_client.cc)
-add_executable(test_remote_nm test_remote_nm.cc ddckv_test.cc)
-add_executable(client_kv_shell client_kv_shell.cc)
-add_executable(test_mm test_mm.cc ddckv_test.cc)
+    add_executable(test_nm test_nm.cc ddckv_test.cc)
+    add_executable(test_kv_utils test_kv_utils.cc ddckv_test.cc)
+    # add_executable(test_server test_server.cc ddckv_test.cc)
+    add_executable(test_client_server test_client_server.cc)
+    add_executable(test_client_client test_client_client.cc)
+    add_executable(test_remote_nm test_remote_nm.cc ddckv_test.cc)
+    add_executable(client_kv_shell client_kv_shell.cc)
+    add_executable(test_mm test_mm.cc ddckv_test.cc)
+endif()
 
 # CXL migration tests: all link against libfusee_cxl (which bundles cxl_mm,
 # cxl_bucket_lock, cxl_kv_ops_C, and the LFM mutex), so no per-test source
@@ -21,7 +23,7 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
     target_compile_options(${t} PRIVATE -mclflushopt)
 endforeach()
 
-# Unified micro-bench: three binaries, one per protocol.
+# Unified micro-bench: single-proc and multi-proc variants, three binaries each.
 foreach(opt A B C)
     if(${opt} STREQUAL "A")
         set(opt_num 1)
@@ -30,79 +32,73 @@ foreach(opt A B C)
     else()
         set(opt_num 3)
     endif()
-    add_executable(cxl_kv_bench_${opt} cxl_kv_bench.cc)
-    target_link_libraries(cxl_kv_bench_${opt} fusee_cxl)
-    target_compile_options(cxl_kv_bench_${opt}
-        PRIVATE -mclflushopt -O2
-        -DCONSENSUS_OPT=${opt_num})
+    foreach(variant kv_bench kv_bench_mp)
+        add_executable(cxl_${variant}_${opt} cxl_${variant}.cc)
+        target_link_libraries(cxl_${variant}_${opt} fusee_cxl)
+        target_compile_options(cxl_${variant}_${opt}
+            PRIVATE -mclflushopt -O2
+            -DCONSENSUS_OPT=${opt_num})
+    endforeach()
 endforeach()
 
-target_link_libraries(test_remote_nm
-    ${GTEST_BOTH_LIBRARIES}
-    libddckv
-    pthread
-    ibverbs
-)
+if(NOT CXL_ONLY)
+    target_link_libraries(test_remote_nm
+        ${GTEST_BOTH_LIBRARIES}
+        libddckv
+        pthread
+        ibverbs
+    )
 
-target_link_libraries(test_kv_utils
-    ${GTEST_BOTH_LIBRARIES}
-    libddckv
-    pthread
-)
+    target_link_libraries(test_kv_utils
+        ${GTEST_BOTH_LIBRARIES}
+        libddckv
+        pthread
+    )
 
-target_link_libraries(test_nm
-    ${GTEST_BOTH_LIBRARIES}
-    libddckv
-    pthread
-    ibverbs
-)
+    target_link_libraries(test_nm
+        ${GTEST_BOTH_LIBRARIES}
+        libddckv
+        pthread
+        ibverbs
+    )
 
-# target_link_libraries(test_server
-#     ${GTEST_BOTH_LIBRARIES}
-#     libddckv
-#     pthread
-#     ibverbs
-# )
+    target_link_libraries(test_client_server
+        libddckv
+        pthread
+        ibverbs
+    )
 
-target_link_libraries(test_client_server 
-    libddckv
-    pthread
-    ibverbs
-)
+    target_compile_options(
+        test_client_client
+        PRIVATE
+    )
 
-target_compile_options(
-    test_client_client
-    PRIVATE
-    # ${CMAKE_CXX_FLAGS_DEBUG}
-    # "-g"
-    # "-D_DEBUG"
-)
+    target_link_libraries(test_client_client
+        ${GTEST_BOTH_LIBRARIES}
+        libddckv
+        pthread
+        ibverbs
+    )
 
-target_link_libraries(test_client_client
-    ${GTEST_BOTH_LIBRARIES}
-    libddckv
-    pthread
-    ibverbs
-)
+    target_link_libraries(client_kv_shell
+        libddckv
+        pthread
+        ibverbs
+    )
 
-target_link_libraries(client_kv_shell
-    libddckv
-    pthread
-    ibverbs
-)
+    target_link_libraries(test_mm
+        ${GTEST_BOTH_LIBRARIES}
+        libddckv
+        pthread
+        ibverbs
+    )
 
-target_link_libraries(test_mm
-    ${GTEST_BOTH_LIBRARIES}
-    libddckv
-    pthread
-    ibverbs
-)
-
-gtest_discover_tests(
-    test_nm
-    test_remote_nm
-    test_kv_utils
-    # test_server
-    test_client_client
-    test_mm
-)
+    gtest_discover_tests(
+        test_nm
+        test_remote_nm
+        test_kv_utils
+        # test_server
+        test_client_client
+        test_mm
+    )
+endif()

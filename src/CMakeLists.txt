@@ -1,29 +1,31 @@
-list(APPEND source_ddckv
-    nm.cc
-    ib.cc
-    server_mm.cc
-    server.cc
-    kv_utils.cc
-    hashtable.cc
-    client_mm.cc
-    client.cc
-    client_cr.cc
-    cxl_mm.cc
-    cxl_bucket_lock.cc
-    cxl_kv_ops_C.cc)
+if(NOT CXL_ONLY)
+    # libddckv remains the original RDMA-era build. CXL sources live in
+    # libfusee_cxl (below) so libddckv does not need the cxl_shm_profiling
+    # include path or LFM dependency.
+    list(APPEND source_ddckv
+        nm.cc
+        ib.cc
+        server_mm.cc
+        server.cc
+        kv_utils.cc
+        hashtable.cc
+        client_mm.cc
+        client.cc
+        client_cr.cc)
 
-add_library(libddckv STATIC ${source_ddckv})
+    add_library(libddckv STATIC ${source_ddckv})
 
-target_compile_options(
-    libddckv
-    PRIVATE
-    "-O2"
-    # ${CMAKE_CXX_FLAGS_DEBUG}
-    "-g"
-    # "-D_DEBUG"
-)
+    target_compile_options(
+        libddckv
+        PRIVATE
+        "-O2"
+        # ${CMAKE_CXX_FLAGS_DEBUG}
+        "-g"
+        # "-D_DEBUG"
+    )
 
-target_link_libraries(libddckv ${Boost_LIBRARIES} boost_context boost_fiber tbb)
+    target_link_libraries(libddckv ${Boost_LIBRARIES} boost_context boost_fiber tbb)
+endif()
 
 # -----------------------------------------------------------------------------
 # libfusee_cxl: RDMA-free static library for the CXL migration path.
