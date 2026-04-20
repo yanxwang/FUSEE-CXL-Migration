@@ -15,6 +15,11 @@ add_executable(test_mm test_mm.cc ddckv_test.cc)
 add_executable(cxl_mm_test cxl_mm_test.cc ../src/cxl_mm.cc)
 target_include_directories(cxl_mm_test PRIVATE ../src)
 
+# Phase 1.2: multi-process shared-region verification.
+add_executable(cxl_mm_mp_test cxl_mm_mp_test.cc ../src/cxl_mm.cc)
+target_include_directories(cxl_mm_mp_test PRIVATE ../src)
+target_compile_options(cxl_mm_mp_test PRIVATE -mclflushopt)
+
 target_link_libraries(test_remote_nm
     ${GTEST_BOTH_LIBRARIES}
     libddckv
