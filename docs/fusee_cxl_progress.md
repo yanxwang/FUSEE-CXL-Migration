@@ -7,8 +7,8 @@
 - **Project name**: FUSEE CXL Migration
 - **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
 - **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
-- **Branch**: `feat/cxl-migration` on emr (35 commits)
-- **Last commit**: `4877313 [Phase 6] Symmetric recover_from_oplog for Options A and B`
+- **Branch**: `feat/cxl-migration` on emr (38 commits)
+- **Last commit**: `c861ad0 [Phase 2] bucket_lock test now prints us_per_crit + RESULT line`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
