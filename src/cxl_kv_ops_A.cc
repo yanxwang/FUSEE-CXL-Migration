@@ -96,6 +96,10 @@ static inline void bump_epoch(BucketLockEntry *e) {
 
 int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
                                    uint64_t value_word) {
+  if (recovery_mode_) {
+    (void)b_idx; (void)s_idx; (void)value_word;
+    return 0;
+  }
   // op_id = host_id in high bits + monotonic nanoseconds (unique per caller).
   uint64_t op_id =
       ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
@@ -338,6 +342,44 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) const {
     }
   }
   return -1;
+}
+
+uint64_t CxlKvStoreA::recover_from_oplog() {
+  if (!oplog_) return 0;
+  OpLog *saved = oplog_;
+  oplog_ = nullptr;
+  recovery_mode_ = true;
+
+  auto redo = +[](const OpLogEntry *e, void *user) -> int {
+    auto *self = reinterpret_cast<CxlKvStoreA *>(user);
+    int rc = 0;
+    switch (e->kind) {
+      case OpLogKind::Insert:
+        rc = self->insert(e->key, e->new_value);
+        if (rc == -2) rc = 0; // duplicate treated as already-applied
+        break;
+      case OpLogKind::Update:
+        rc = self->update(e->key, e->new_value);
+        if (rc == -1) {
+          rc = self->insert(e->key, e->new_value);
+          if (rc == -2) rc = 0;
+        }
+        break;
+      case OpLogKind::Delete:
+        rc = self->remove(e->key);
+        if (rc == -1) rc = 0; // already gone
+        break;
+      default:
+        rc = -1;
+    }
+    return rc;
+  };
+
+  uint64_t acted = saved->recover_redo(redo, this);
+
+  recovery_mode_ = false;
+  oplog_ = saved;
+  return acted;
 }
 
 void CxlKvStoreA::enable_dram_cache(bool on) {

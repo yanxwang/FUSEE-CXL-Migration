@@ -63,6 +63,14 @@ class CxlKvStoreA {
   // Optional OpLog integration for crash recovery. Same shape as CxlKvStoreC.
   void enable_oplog(OpLog *log) { oplog_ = log; }
 
+  // Replay every InProgress entry in the attached OpLog into this store.
+  // While recovery runs, ring dispatch (and the ACK wait) is short-circuited
+  // so redo does not hang on peers that have not restarted yet. The
+  // authoritative CXL slot write + epoch bump still happens, so peers that
+  // come back later will see updated values via their next seqlock retry.
+  // Returns number of entries acted on (0 if no log attached).
+  uint64_t recover_from_oplog();
+
   // DRAM cache with ring-driven invalidation. With A, the writer waits for
   // every replicator's ACK before returning — so after return, no host can
   // serve a stale cached read. Stronger than B's fire-and-forget variant.
@@ -100,6 +108,10 @@ class CxlKvStoreA {
   bool cache_enabled_ = false;
   mutable std::vector<CxlKvBucket> cache_buckets_;
   mutable std::vector<std::atomic<uint64_t>> cache_epoch_;
+
+  // When true, dispatch_and_wait skips the ring enqueue + ACK wait. Flipped
+  // on by recover_from_oplog around the redo pass only.
+  bool recovery_mode_ = false;
 };
 
 } // namespace fusee

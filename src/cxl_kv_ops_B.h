@@ -46,6 +46,11 @@ class CxlKvStoreB {
   }
   void enable_oplog(OpLog *log) { oplog_ = log; }
 
+  // Replay every InProgress entry in the attached OpLog. During recovery the
+  // ring push is skipped; peer DRAM caches will refresh via seqlock retry
+  // next time they see a mismatched write_epoch.
+  uint64_t recover_from_oplog();
+
   // Turn on the DRAM bucket cache. When on, Option B's ring-based push is
   // what it always should have been: readers serve from DRAM and only see
   // an invalidation when a peer's writer actually pushed one (detected by
@@ -80,6 +85,8 @@ class CxlKvStoreB {
   bool cache_enabled_ = false;
   mutable std::vector<CxlKvBucket> cache_buckets_;
   mutable std::vector<std::atomic<uint64_t>> cache_epoch_;
+
+  bool recovery_mode_ = false;
 };
 
 } // namespace fusee
