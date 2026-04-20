@@ -159,6 +159,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // FUSEE_CACHE=1 toggles the per-bucket DRAM cache. Off by default so the
+  // sweep has comparable cache_off and cache_on runs side by side, matching
+  // what cxl_kv_bench_mp already does.
+  const char *cache_env = getenv("FUSEE_CACHE");
+  bool cache_on = (cache_env && cache_env[0] == '1');
+  if (cache_on) store.enable_dram_cache(true);
+
   auto run_phase = [&](const std::vector<Op> &ops, const char *label) {
     uint64_t fails = 0;
     uint64_t t0 = now_ns();
@@ -188,9 +195,10 @@ int main(int argc, char **argv) {
   auto load_res = run_phase(load_ops_v, "load");
   auto trans_res = run_phase(trans_ops_v, "trans");
 
-  printf("YCSB opt=%c load_ops=%zu load_thpt=%.0f "
+  printf("YCSB opt=%c cache=%d load_ops=%zu load_thpt=%.0f "
          "trans_ops=%zu trans_thpt=%.0f\n",
-         kConsensusOpt, load_ops_v.size(), load_res.second,
+         kConsensusOpt, cache_on ? 1 : 0,
+         load_ops_v.size(), load_res.second,
          trans_ops_v.size(), trans_res.second);
 
   store.stop();

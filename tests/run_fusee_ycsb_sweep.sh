@@ -34,6 +34,10 @@ TIMEOUT_S="${TIMEOUT_S:-60}"
 # MAX_OPS: cap each phase to this many ops (0 = unlimited). Prevents a
 # 10 M-line official workload from dwarfing the sweep; override as needed.
 MAX_OPS="${MAX_OPS:-0}"
+# CACHE_MODES: space-separated list, each one of {off, on}. Wraps each run
+# in the corresponding FUSEE_CACHE env. Default runs both so the log shows
+# cache-off and cache-on side by side for every (workload, opt) pair.
+CACHE_MODES="${CACHE_MODES:-off on}"
 
 BUILD_DIR="${1:-$script_dir/../build-cxl}"
 OUT_LOG="${2:-$script_dir/../docs/fusee_ycsb_sweep.log}"
@@ -96,12 +100,27 @@ for wl in $WORKLOADS; do
   fi
   for opt in $OPTS; do
     bin="$BUILD_DIR/tests/cxl_ycsb_runner_$opt"
-    header="--- workload=$wl opt=$opt load=$(basename "$load_path") trans=$(basename "$trans_path") ---"
-    echo "$header"
-    echo "$header" >> "$OUT_LOG"
-    timeout "$TIMEOUT_S" "$bin" "$DEV" "$load_path" "$trans_path" "$NUM_BUCKETS" "$MAX_OPS" \
-      >> "$OUT_LOG" 2>&1 \
-      || echo "# (timeout or error workload=$wl opt=$opt)" >> "$OUT_LOG"
+    for cache in $CACHE_MODES; do
+      case "$cache" in
+        on)  env_prefix="FUSEE_CACHE=1"; env_token="FUSEE_CACHE=1" ;;
+        off) env_prefix="";              env_token=""             ;;
+        *)   echo "# unknown CACHE_MODE=$cache, skipping" >> "$OUT_LOG"; continue ;;
+      esac
+      header="--- workload=$wl opt=$opt cache=[$env_token] load=$(basename "$load_path") trans=$(basename "$trans_path") ---"
+      echo "$header"
+      echo "$header" >> "$OUT_LOG"
+      if [[ -n "$env_prefix" ]]; then
+        timeout "$TIMEOUT_S" env $env_prefix "$bin" \
+          "$DEV" "$load_path" "$trans_path" "$NUM_BUCKETS" "$MAX_OPS" \
+          >> "$OUT_LOG" 2>&1 \
+          || echo "# (timeout or error workload=$wl opt=$opt cache=$cache)" >> "$OUT_LOG"
+      else
+        timeout "$TIMEOUT_S" "$bin" \
+          "$DEV" "$load_path" "$trans_path" "$NUM_BUCKETS" "$MAX_OPS" \
+          >> "$OUT_LOG" 2>&1 \
+          || echo "# (timeout or error workload=$wl opt=$opt cache=$cache)" >> "$OUT_LOG"
+      fi
+    done
   done
 done
 
