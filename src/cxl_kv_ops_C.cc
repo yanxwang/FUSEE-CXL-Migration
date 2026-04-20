@@ -93,6 +93,7 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
 
   CxlKvBucket *b = &buckets_[idx];
   CxlKvSlot *empty = nullptr;
+  int empty_slot_i = -1;
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     flush_line(&b->slots[s].key);
   }
@@ -103,14 +104,25 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
       lock_table_.unlock(idx, host_id_);
       return -2; // duplicate
     }
-    if (!empty && k == kEmptyKey) empty = &b->slots[s];
+    if (!empty && k == kEmptyKey) { empty = &b->slots[s]; empty_slot_i = s; }
   }
   if (!empty) {
     lock_table_.unlock(idx, host_id_);
     return -1; // full
   }
+
+  uint64_t log_idx = 0;
+  bool logged = false;
+  if (oplog_) {
+    log_idx = oplog_->begin(OpLogKind::Insert, key, idx, (uint64_t)empty_slot_i,
+                            /*old_value=*/0, /*new_value=*/value);
+    logged = true;
+  }
+
   publish_slot(empty, key, value);
   bump_epoch(lock_table_.entry(idx));
+
+  if (logged) oplog_->commit(log_idx);
   lock_table_.unlock(idx, host_id_);
   return 0;
 }
@@ -127,10 +139,18 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
   full_fence();
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (b->slots[s].key == key) {
+      uint64_t log_idx = 0;
+      bool logged = false;
+      if (oplog_) {
+        log_idx = oplog_->begin(OpLogKind::Update, key, idx, (uint64_t)s,
+                                b->slots[s].value, value);
+        logged = true;
+      }
       b->slots[s].value = value;
       flush_line(&b->slots[s].value);
       store_fence();
       bump_epoch(lock_table_.entry(idx));
+      if (logged) oplog_->commit(log_idx);
       lock_table_.unlock(idx, host_id_);
       return 0;
     }
@@ -151,10 +171,18 @@ int CxlKvStoreC::remove(uint64_t key) {
   full_fence();
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (b->slots[s].key == key) {
+      uint64_t log_idx = 0;
+      bool logged = false;
+      if (oplog_) {
+        log_idx = oplog_->begin(OpLogKind::Delete, key, idx, (uint64_t)s,
+                                b->slots[s].value, 0);
+        logged = true;
+      }
       b->slots[s].key = kEmptyKey;
       flush_line(&b->slots[s].key);
       store_fence();
       bump_epoch(lock_table_.entry(idx));
+      if (logged) oplog_->commit(log_idx);
       lock_table_.unlock(idx, host_id_);
       return 0;
     }

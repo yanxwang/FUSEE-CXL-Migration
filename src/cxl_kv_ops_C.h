@@ -11,6 +11,7 @@
 
 #include "cxl_bucket_lock.h"
 #include "cxl_hashtable.h"
+#include "cxl_oplog.h"
 
 #include <stdint.h>
 
@@ -55,6 +56,13 @@ class CxlKvStoreC {
   int      num_hosts_ = 0;
   BucketLockTable lock_table_;
   CxlKvBucket    *buckets_ = nullptr;
+  OpLog          *oplog_ = nullptr;  // optional; set via enable_oplog()
+
+ public:
+  // Point at an external OpLog region (CXL-resident). begin/commit around
+  // every mutating op once set. Not required; pre-existing tests that do not
+  // care about recovery just leave it null.
+  void enable_oplog(OpLog *log) { oplog_ = log; }
 };
 
 } // namespace fusee
