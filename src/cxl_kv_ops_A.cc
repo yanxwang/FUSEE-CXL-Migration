@@ -135,26 +135,35 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     my_entries[dst] = e;
   }
 
-  // Spin on processed_op_id == op_id on every dst we enqueued to.
-  const int kAckWaitBudgetUs = 2000000;
-  uint64_t start = now_ns();
+  // Spin on processed_op_id == op_id on every dst we enqueued to. If any dst
+  // times out we still need to clear op_id on every slot we published (even
+  // ones that did ACK) so subsequent writes can make progress — otherwise a
+  // single slow replicator wedges the ring permanently.
+  const int kAckWaitBudgetUs = 200000; // 200 ms per dst
+  bool timed_out = false;
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
     PendingRingEntry *e = my_entries[dst];
+    uint64_t start = now_ns();
     for (;;) {
       if (CACHELINE_LOAD(&e->processed_op_id) == op_id) break;
-      if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) return -4;
+      if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
+        timed_out = true;
+        break;
+      }
       __builtin_ia32_pause();
     }
   }
 
-  // Clear op_id on every dst so the slot can be reused.
+  // Always clear op_id on every dst so the slot can be reused. If the
+  // replicator ends up processing a stale entry, it sets processed_op_id to
+  // an op_id the current writer no longer waits on — harmless.
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
     CACHELINE_STORE(&my_entries[dst]->op_id, 0ULL);
   }
 
-  return 0;
+  return timed_out ? -4 : 0;
 }
 
 int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
