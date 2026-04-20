@@ -20,6 +20,20 @@ add_executable(cxl_mm_mp_test cxl_mm_mp_test.cc ../src/cxl_mm.cc)
 target_include_directories(cxl_mm_mp_test PRIVATE ../src)
 target_compile_options(cxl_mm_mp_test PRIVATE -mclflushopt)
 
+# Phase 2: CXL bucket-lock (LFM-backed) multi-process contention test.
+# Compiles in cxl_shm_profiling's LFM implementation directly so the test
+# binary is self-contained and does not depend on libddckv (which still has
+# RDMA deps until Phase 4).
+add_executable(cxl_bucket_lock_test
+    cxl_bucket_lock_test.cc
+    ../src/cxl_mm.cc
+    ../src/cxl_bucket_lock.cc
+    ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
+target_include_directories(cxl_bucket_lock_test PRIVATE
+    ../src
+    ${CXL_SHM_PROFILING_DIR})
+target_compile_options(cxl_bucket_lock_test PRIVATE -mclflushopt)
+
 target_link_libraries(test_remote_nm
     ${GTEST_BOTH_LIBRARIES}
     libddckv

@@ -1,0 +1,56 @@
+#ifndef FUSEE_CXL_BUCKET_LOCK_H_
+#define FUSEE_CXL_BUCKET_LOCK_H_
+
+#include <stddef.h>
+#include <stdint.h>
+
+// Pull in LFM mutex from cxl_shm_profiling. CMake wires the include path via
+// CXL_SHM_PROFILING_DIR.
+extern "C" {
+#include "locks/lfm_lock.h"
+}
+
+namespace fusee {
+
+// One lock-table entry per RACE-hash bucket. Cacheline-aligned.
+//
+// For Phase 2 we only carry the mutex; protocol-specific fields (write_epoch,
+// staging_scratch, per-bucket pending-ring metadata, etc.) are added in later
+// phases so we can reason about layout changes without rewriting lock code.
+struct BucketLockEntry {
+  shm_mutex_t mutex;
+};
+
+// Thin view over a contiguous array of BucketLockEntry planted in a CXL
+// region. The table does not own the underlying memory -- callers pass in a
+// mmap'd base (typically a CXLRegion produced by cxl_mm).
+class BucketLockTable {
+ public:
+  BucketLockTable() = default;
+
+  // Place a table of `num_buckets` entries starting at `base`. Must be called
+  // before any lock/unlock. If `init_mutexes` is true, runs shm_mutex_init on
+  // each entry (exactly one process in the cluster should do this during
+  // region setup -- typically host 0).
+  void attach(void *base, uint32_t num_buckets, bool init_mutexes);
+
+  // Byte footprint of a table for `num_buckets` buckets.
+  static size_t bytes_for(uint32_t num_buckets);
+
+  // Per-bucket operations. id = caller's host index in [0, num_hosts).
+  // Returns contention count on success, UINT64_MAX on error.
+  uint64_t lock(uint32_t bucket_idx, int host_id, int num_hosts);
+  void     unlock(uint32_t bucket_idx, int host_id);
+
+  BucketLockEntry *entry(uint32_t bucket_idx) const;
+  uint32_t num_buckets() const { return num_buckets_; }
+  bool     is_valid() const { return entries_ != nullptr; }
+
+ private:
+  BucketLockEntry *entries_ = nullptr;
+  uint32_t num_buckets_ = 0;
+};
+
+} // namespace fusee
+
+#endif // FUSEE_CXL_BUCKET_LOCK_H_
