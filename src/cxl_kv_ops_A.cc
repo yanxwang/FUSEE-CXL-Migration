@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <ctime>
+#include <limits>
 
 extern "C" {
 #include "common.h"
@@ -203,6 +204,10 @@ int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
   // even if replication ACK timed out (they still see the authoritative slot).
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -237,6 +242,10 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
   int rc = dispatch_and_wait(idx, (uint32_t)match, value);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -271,6 +280,10 @@ int CxlKvStoreA::remove(uint64_t key) {
   int rc = dispatch_and_wait(idx, (uint32_t)match, 0ULL);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -280,6 +293,20 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) const {
   uint32_t idx = bucket_idx(key);
   BucketLockEntry *le = const_cast<BucketLockTable &>(lock_table_).entry(idx);
   CxlKvBucket *b = &buckets_[idx];
+
+  if (cache_enabled_) {
+    uint64_t cached = cache_epoch_[idx].load(std::memory_order_acquire);
+    if (cached != std::numeric_limits<uint64_t>::max()) {
+      const CxlKvBucket &cb = cache_buckets_[idx];
+      for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+        if (cb.slots[s].key == key) {
+          if (out) *out = cb.slots[s].value;
+          return 0;
+        }
+      }
+      return -1;
+    }
+  }
 
   for (int attempt = 0; attempt < 8; attempt++) {
     uint64_t e1 = CACHELINE_LOAD(&le->write_epoch);
@@ -291,6 +318,9 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) const {
       flush_line(&b->slots[s].value);
     }
     full_fence();
+    if (cache_enabled_) {
+      cache_buckets_[idx] = *b;
+    }
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
       if (b->slots[s].key == key) {
         captured = b->slots[s].value;
@@ -301,11 +331,25 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) const {
 
     uint64_t e2 = CACHELINE_LOAD(&le->write_epoch);
     if (e1 == e2) {
+      if (cache_enabled_) cache_epoch_[idx].store(e1, std::memory_order_release);
       if (found) { if (out) *out = captured; return 0; }
       return -1;
     }
   }
   return -1;
+}
+
+void CxlKvStoreA::enable_dram_cache(bool on) {
+  cache_enabled_ = on;
+  if (on) {
+    cache_buckets_.assign(num_buckets_, CxlKvBucket{});
+    cache_epoch_ = std::vector<std::atomic<uint64_t>>(num_buckets_);
+    for (auto &a : cache_epoch_) a.store(std::numeric_limits<uint64_t>::max(),
+                                         std::memory_order_relaxed);
+  } else {
+    cache_buckets_.clear();
+    cache_epoch_.clear();
+  }
 }
 
 void CxlKvStoreA::replicator_loop() {
@@ -325,6 +369,17 @@ void CxlKvStoreA::replicator_loop() {
         // Simulated "pull" — touch the CXL side of the source entry so the
         // replicator pays a comparable cost to a real fetch.
         (void)CACHELINE_LOAD(&e->new_value_lo);
+
+        // A's "synchronous invalidation" promise: invalidate the DRAM cache
+        // for the bucket BEFORE publishing processed_op_id. After writer
+        // sees its ACK, it knows no host can serve this bucket from stale
+        // cache.
+        uint64_t bucket_hit = CACHELINE_LOAD(&e->bucket_idx);
+        if (cache_enabled_ && bucket_hit < num_buckets_) {
+          cache_epoch_[bucket_hit].store(
+              std::numeric_limits<uint64_t>::max(),
+              std::memory_order_release);
+        }
 
         CACHELINE_STORE(&e->processed_op_id, op_id);
         head++;

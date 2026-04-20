@@ -27,6 +27,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <thread>
+#include <vector>
 
 namespace fusee {
 
@@ -57,6 +58,11 @@ class CxlKvStoreA {
   // Optional OpLog integration for crash recovery. Same shape as CxlKvStoreC.
   void enable_oplog(OpLog *log) { oplog_ = log; }
 
+  // DRAM cache with ring-driven invalidation. With A, the writer waits for
+  // every replicator's ACK before returning — so after return, no host can
+  // serve a stale cached read. Stronger than B's fire-and-forget variant.
+  void enable_dram_cache(bool on);
+
  private:
   uint32_t bucket_idx(uint64_t key) const {
     return static_cast<uint32_t>(fnv1a_u64(key) % num_buckets_);
@@ -84,6 +90,10 @@ class CxlKvStoreA {
   std::atomic<uint64_t> replicated_ops_{0};
 
   OpLog *oplog_ = nullptr;
+
+  bool cache_enabled_ = false;
+  mutable std::vector<CxlKvBucket> cache_buckets_;
+  mutable std::vector<std::atomic<uint64_t>> cache_epoch_;
 };
 
 } // namespace fusee
