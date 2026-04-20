@@ -1,0 +1,44 @@
+---opt=A wr=0.0 done---
+---opt=A wr=0.5 done---
+HOST opt=A host=0 ops=500 wall=0.209s thpt=2390 w_avg=418.29 w_p50=18.01 w_p99=23.31 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=A host=1 ops=500 wall=0.009s thpt=54681 w_avg=18.24 w_p50=17.81 w_p99=23.06 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=A host=2 ops=500 wall=0.009s thpt=54832 w_avg=18.19 w_p50=17.61 w_p99=24.43 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=A host=3 ops=500 wall=82.812s thpt=6 w_avg=165623.63 w_p50=26.02 w_p99=600020.22 r_avg=0.00 r_p50=0.00 r_p99=0.00
+AGG opt=A num_hosts=4 wratio=1.00 total_ops=2000 wall_max=82.812s agg_thpt=24
+---opt=A wr=1.0 done---
+HOST opt=B host=0 ops=500 wall=0.002s thpt=304037 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.25 r_p50=3.23 r_p99=3.71
+HOST opt=B host=1 ops=500 wall=0.000s thpt=3105590062 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=2 ops=500 wall=0.000s thpt=2222222222 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=3 ops=500 wall=0.002s thpt=303118 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.26 r_p50=3.24 r_p99=3.72
+AGG opt=B num_hosts=4 wratio=0.00 total_ops=2000 wall_max=0.002s agg_thpt=1212470
+---opt=B wr=0.0 done---
+HOST opt=B host=0 ops=500 wall=0.004s thpt=138735 w_avg=10.93 w_p50=10.88 w_p99=11.90 r_avg=3.57 r_p50=3.58 r_p99=4.26
+HOST opt=B host=1 ops=500 wall=0.002s thpt=290702 w_avg=3.27 w_p50=3.25 w_p99=4.02 r_avg=3.50 r_p50=3.49 r_p99=4.08
+HOST opt=B host=2 ops=500 wall=0.002s thpt=287401 w_avg=3.34 w_p50=3.32 w_p99=3.99 r_avg=3.52 r_p50=3.50 r_p99=4.11
+HOST opt=B host=3 ops=500 wall=0.004s thpt=139025 w_avg=10.97 w_p50=10.90 w_p99=12.23 r_avg=3.56 r_p50=3.52 r_p99=4.26
+AGG opt=B num_hosts=4 wratio=0.50 total_ops=2000 wall_max=0.004s agg_thpt=554939
+---opt=B wr=0.5 done---
+HOST opt=B host=0 ops=500 wall=0.005s thpt=91791 w_avg=10.84 w_p50=10.71 w_p99=12.17 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=1 ops=500 wall=0.002s thpt=280982 w_avg=3.50 w_p50=3.46 w_p99=4.15 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=2 ops=500 wall=0.002s thpt=281522 w_avg=3.50 w_p50=3.47 w_p99=4.12 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=B host=3 ops=500 wall=0.006s thpt=90429 w_avg=11.01 w_p50=10.93 w_p99=12.59 r_avg=0.00 r_p50=0.00 r_p99=0.00
+AGG opt=B num_hosts=4 wratio=1.00 total_ops=2000 wall_max=0.006s agg_thpt=361715
+---opt=B wr=1.0 done---
+HOST opt=C host=0 ops=500 wall=0.002s thpt=306148 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.23 r_p50=3.19 r_p99=3.63
+HOST opt=C host=1 ops=500 wall=0.002s thpt=303426 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.25 r_p50=3.23 r_p99=3.67
+HOST opt=C host=2 ops=500 wall=0.002s thpt=308939 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.20 r_p50=3.17 r_p99=3.60
+HOST opt=C host=3 ops=500 wall=0.002s thpt=302800 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=3.26 r_p50=3.24 r_p99=3.62
+AGG opt=C num_hosts=4 wratio=0.00 total_ops=2000 wall_max=0.002s agg_thpt=1211200
+---opt=C wr=0.0 done---
+HOST opt=C host=0 ops=500 wall=0.002s thpt=261900 w_avg=3.96 w_p50=3.95 w_p99=4.71 r_avg=3.60 r_p50=3.64 r_p99=4.23
+HOST opt=C host=1 ops=500 wall=0.000s thpt=3968253968 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=2 ops=500 wall=0.000s thpt=4201680672 w_avg=0.00 w_p50=0.00 w_p99=0.00 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=3 ops=500 wall=0.002s thpt=257706 w_avg=4.06 w_p50=4.07 w_p99=4.80 r_avg=3.60 r_p50=3.56 r_p99=4.23
+AGG opt=C num_hosts=4 wratio=0.50 total_ops=2000 wall_max=0.002s agg_thpt=1030825
+---opt=C wr=0.5 done---
+HOST opt=C host=0 ops=500 wall=0.002s thpt=223867 w_avg=4.42 w_p50=4.41 w_p99=4.92 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=1 ops=500 wall=0.002s thpt=276688 w_avg=3.57 w_p50=3.57 w_p99=4.19 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=2 ops=500 wall=0.002s thpt=277633 w_avg=3.56 w_p50=3.56 w_p99=4.09 r_avg=0.00 r_p50=0.00 r_p99=0.00
+HOST opt=C host=3 ops=500 wall=0.002s thpt=229405 w_avg=4.32 w_p50=4.29 w_p99=4.79 r_avg=0.00 r_p50=0.00 r_p99=0.00
+AGG opt=C num_hosts=4 wratio=1.00 total_ops=2000 wall_max=0.002s agg_thpt=895466
+---opt=C wr=1.0 done---

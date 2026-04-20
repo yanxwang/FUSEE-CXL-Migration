@@ -17,7 +17,8 @@ endif()
 # cxl_bucket_lock, cxl_kv_ops_C, and the LFM mutex), so no per-test source
 # lists are needed.
 foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
-         cxl_kv_ops_C_test cxl_kv_ops_A_test cxl_kv_ops_B_test)
+         cxl_kv_ops_C_test cxl_kv_ops_A_test cxl_kv_ops_B_test
+         cxl_oplog_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -mclflushopt)

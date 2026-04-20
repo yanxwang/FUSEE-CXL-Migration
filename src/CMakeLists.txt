@@ -39,6 +39,7 @@ set(source_fusee_cxl
     cxl_kv_ops_C.cc
     cxl_kv_ops_A.cc
     cxl_kv_ops_B.cc
+    cxl_oplog.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
 
 add_library(fusee_cxl STATIC ${source_fusee_cxl})
