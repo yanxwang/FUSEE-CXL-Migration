@@ -14,7 +14,8 @@ add_executable(test_mm test_mm.cc ddckv_test.cc)
 # CXL migration tests: all link against libfusee_cxl (which bundles cxl_mm,
 # cxl_bucket_lock, cxl_kv_ops_C, and the LFM mutex), so no per-test source
 # lists are needed.
-foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test cxl_kv_ops_C_test)
+foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
+         cxl_kv_ops_C_test cxl_kv_ops_A_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -mclflushopt)

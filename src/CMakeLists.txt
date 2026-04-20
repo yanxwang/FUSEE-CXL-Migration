@@ -35,6 +35,7 @@ set(source_fusee_cxl
     cxl_mm.cc
     cxl_bucket_lock.cc
     cxl_kv_ops_C.cc
+    cxl_kv_ops_A.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
 
 add_library(fusee_cxl STATIC ${source_fusee_cxl})
@@ -42,4 +43,5 @@ target_include_directories(fusee_cxl PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CXL_SHM_PROFILING_DIR})
 target_compile_options(fusee_cxl PRIVATE -O2 -g -mclflushopt)
+target_link_libraries(fusee_cxl PUBLIC pthread)
 
