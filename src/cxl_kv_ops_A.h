@@ -54,6 +54,11 @@ class CxlKvStoreA {
   uint64_t replicated_ops() const {
     return replicated_ops_.load(std::memory_order_relaxed);
   }
+  uint64_t ack_timeouts_to(int dst) const {
+    return (dst >= 0 && dst < kMaxHosts)
+               ? ack_timeouts_[dst].load(std::memory_order_relaxed)
+               : 0;
+  }
 
   // Optional OpLog integration for crash recovery. Same shape as CxlKvStoreC.
   void enable_oplog(OpLog *log) { oplog_ = log; }
@@ -88,6 +93,7 @@ class CxlKvStoreA {
   std::thread replicator_;
   std::atomic<bool> stop_{false};
   std::atomic<uint64_t> replicated_ops_{0};
+  std::atomic<uint64_t> ack_timeouts_[kMaxHosts] = {};
 
   OpLog *oplog_ = nullptr;
 

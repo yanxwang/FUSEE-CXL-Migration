@@ -150,6 +150,7 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
       if (CACHELINE_LOAD(&e->processed_op_id) == op_id) break;
       if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
         timed_out = true;
+        ack_timeouts_[dst].fetch_add(1, std::memory_order_relaxed);
         break;
       }
       __builtin_ia32_pause();

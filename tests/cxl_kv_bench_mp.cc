@@ -221,6 +221,16 @@ int main(int argc, char **argv) {
   }
   uint64_t t1 = now_ns();
 
+  // Dump Option A per-dst ACK-timeout counters. Stderr so stdout grep stays clean.
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  fprintf(stderr, "[host %d] A ack_timeouts: ", host_id);
+  for (int d = 0; d < num_hosts; d++) {
+    if (d == host_id) continue;
+    fprintf(stderr, "to%d=%lu ", d, store.ack_timeouts_to(d));
+  }
+  fprintf(stderr, " replicated_ops=%lu\n", store.replicated_ops());
+#endif
+
   // Record per-host stats.
   CACHELINE_STORE(&stats->hosts[host_id].wall_ns, t1 - t0);
   CACHELINE_STORE(&stats->hosts[host_id].thpt_ops, ops_per_host);
@@ -232,16 +242,18 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&stats->hosts[host_id].r_p99_ns, quantile_ns(rlat, 0.99));
   CACHELINE_STORE(&stats->hosts[host_id].done, 1ULL);
 
+  // CRITICAL: wait for every host to finish its main loop BEFORE stopping our
+  // replicator. Otherwise a host that finishes early kills its replicator
+  // while a slower host is still writing — its last writes then see ACK
+  // timeouts that are purely a bench-setup artifact, not a protocol issue.
+  for (int h = 0; h < num_hosts; h++) {
+    while (CACHELINE_LOAD(&stats->hosts[h].done) == 0) __builtin_ia32_pause();
+  }
   store.stop();
 
   if (!is_primary) {
     cxl_region_destroy(&r);
     _exit(0);
-  }
-
-  // Primary: wait for all hosts, then print per-host + aggregate.
-  for (int h = 0; h < num_hosts; h++) {
-    while (CACHELINE_LOAD(&stats->hosts[h].done) == 0) __builtin_ia32_pause();
   }
   for (pid_t p : children) {
     int status = 0;
