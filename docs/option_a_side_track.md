@@ -235,6 +235,17 @@ Plot: `docs/ycsb_abc_g3_tmpfs.png` (4 panels: aggregate throughput, write latenc
 
 **Idea 6: ring-full hang at high ops count** — at 3000 ops/proc, A-v2 hangs on g3 tmpfs (DRAM), runs fine at 500 ops/proc. The `PendingRing` is 4096 entries; with 3 dsts and 3000 ops we enqueue 9000 entries per src → ring wraps. If `processed_op_id` visibility lags and the producer spins on "ring slot free" (op_id==0 after we clear), and meanwhile the replicator on one dst falls behind, all producers can simultaneously be waiting. Needs instrumentation: log producer-wait reason (ring full vs ACK wait) and replicator consumption rate. Likely a pairwise-order invariant in the current clear-then-reuse path. Parked for later.
 
+**Idea 7: A multi-proc writer stall is asymmetric** — on emr CXL at 2 hosts × 500 pure-write ops, one host (host 0) hits ~50 × 200 ms ACK-wait timeouts while the peer (host 1) finishes 500 ops in 5 ms. Symmetric code, asymmetric outcome. Observation holds with and without the DRAM cache, so the bug is in the ring mechanism itself, not in cache invalidation.
+
+Candidate hypotheses to test:
+1. Replicator thread preempted by its own busy-writer main thread under heavy CXL store pressure (std::thread, but still same process).
+2. `ring->tail` publish and `processed_op_id` visibility have asymmetric latency across CXL due to read-vs-write cacheline traffic imbalance.
+3. The CACHELINE_STORE at the end of the enqueue loop (`CACHELINE_STORE(&ring->tail, ...)`) races with the replicator's `CACHELINE_LOAD(&ring->tail)` — fence ordering unclear enough that one direction is faster.
+
+Diagnosis would want: (a) per-dst timeout counters in `dispatch_and_wait` (which dst is the problem?); (b) replicator-side counters for "saw tail advance", "applied entry", "set processed_op_id" so the gap is visible; (c) one-sided run where only host 0 writes (is host 1's replicator even processing its ring?).
+
+Open. Logged here so that the next session picks it up.
+
 ### Conclusion for migration
 
 - **Not a regression** in A-v2 design; the hang only appears at high ops-per-run on g3 tmpfs and did not reproduce at comparable scale on emr real CXL in the earlier investigation. Treat as an open mini-bench robustness bug.
