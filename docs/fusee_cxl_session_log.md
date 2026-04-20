@@ -151,3 +151,30 @@
 **Ends with**: Phases 1–7 complete; Phase 8 (benchmarks) partially in tree, with a clean reproducible multi-proc setup and two rounds of results. Next concrete work is the Option A stall root-cause and reader-cache for Option B.
 
 ---
+
+## Session 2026-04-20 ~05:00–05:40 CDT — Honesty follow-up: close the real gaps
+
+**Context**: user pushed back on the "everything complete" framing. Real gaps: OpLog only wired into C, no recovery redo, three protocols semantically equivalent at reader level, Zipf not supported, Phase 4 hard deletion. Asked to keep pushing until 10 AM.
+
+**Commits landed**:
+- `c613b59` — OpLog wired into A and B. begin/commit around every mutation. Correctness tests all still pass.
+- `c613b59` (same) — `OpLog::recover_redo(fn, user)` that walks every InProgress entry, calls a user callback, transitions to Committed (rc=0) or Aborted (rc!=0). `tests/cxl_oplog_redo_test.cc` drives this with a `std::map`-backed replay and verifies 5 entries in → 4 keys out (Delete of never-existing key is a no-op) → 0 InProgress remaining.
+- `a1d259a` — `gen_ycsb_spec.py` now supports Zipf (theta=0.99 default) via CDF + binary search. `--dist uniform|zipf`, `--zipf-theta`. Ran wl_A / wl_C spec files at 5k load + 10k trans against all three protocols.
+- `3f8d604` — DRAM bucket cache for Option C. Opt-in via `enable_dram_cache(true)`. Reader checks cached_epoch against CXL write_epoch; on match, serves from DRAM without flushing slot cachelines. Micro-test on /dev/dax0.0: **10.1×** speedup (8306 → 820 ns/op).
+- `3f989f1` — DRAM cache for Option B with ring-driven invalidation. Replicator clears cache_epoch_[bucket_idx] when it consumes a ring entry. Reader fast path is DRAM-only (atomic load + DRAM scan, no CXL). Micro-test: **346×** speedup (4608 → 13 ns/op). 2-proc correctness: host 0 updates, host 1 sees new values after replicator drains invalidation. No stale reads.
+- `0bc1b9a` — DRAM cache for Option A with synchronous invalidation. Replicator invalidates cache_epoch_[bucket_idx] *before* publishing processed_op_id, so when the writer's ACK-wait returns, no host can serve a stale cached read. This is the strong semantic A trades writer latency for.
+- `f0354a2` — `FUSEE_CACHE=1` env var in `cxl_kv_bench_mp` opts into the DRAM cache path. Cache-on 4-host multi-proc on /dev/dax0.0: **B wins on pure reads (1.6× over C)**, **C wins on write-heavy mixes** (B's ring-push still costs ~10 μs/op). A still stalls at wr=0.5 and wr=1.0.
+- `c36d725` — logged the A multi-proc asymmetric-stall observation as Idea 7 in side-track doc: 2h×500 pure-write, host 0 sees ~50 ACK timeouts while host 1 finishes in 5 ms — symmetric code, asymmetric outcome. Diagnosis deferred (needs per-dst counters + replicator instrumentation).
+
+**Decided against**: Phase 4 hard deletion of `nm.{h,cc}` / `ib.{h,cc}`. The soft CMake gate (`CXL_ONLY=ON`) already produces a pure-CXL build; hard deletion would destroy the original FUSEE reference implementation that may still be useful to diff against.
+
+**What the cache work actually proves**: the three protocols now have meaningfully different read-side semantics in the FUSEE port:
+- **C** reads: one CXL epoch load per read, no slot flushes on hit.
+- **B** reads: zero CXL loads on hit. Peer invalidations propagate asynchronously via the ring.
+- **A** reads: zero CXL loads on hit. Peer invalidations propagate synchronously — writer blocks until everyone's cache is invalidated.
+
+The mini-bench result pattern (B beats C on reads, C beats B on writes) now holds in the FUSEE port on real CXL, where before it was coincidental noise.
+
+**Ends with**: 28 commits on `feat/cxl-migration`. Known open items listed in the progress doc's "Next concrete tasks" section.
+
+---
