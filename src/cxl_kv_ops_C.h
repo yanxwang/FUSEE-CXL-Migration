@@ -81,6 +81,12 @@ class CxlKvStoreC {
   // every mutating op once set. Not required; pre-existing tests that do not
   // care about recovery just leave it null.
   void enable_oplog(OpLog *log) { oplog_ = log; }
+
+  // Walk the attached OpLog and replay every InProgress entry into this
+  // store (calls insert/update/remove as appropriate). Returns the number
+  // of entries acted on (0 if no log is attached). Idempotent: re-applying
+  // an already-applied op is treated as success.
+  uint64_t recover_from_oplog();
 };
 
 } // namespace fusee

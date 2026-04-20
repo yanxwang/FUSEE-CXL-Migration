@@ -178,3 +178,27 @@ The mini-bench result pattern (B beats C on reads, C beats B on writes) now hold
 **Ends with**: 28 commits on `feat/cxl-migration`. Known open items listed in the progress doc's "Next concrete tasks" section.
 
 ---
+
+## Session 2026-04-20 ~08:30–09:05 CDT — emr unreachable; local consolidation + recover_from_oplog
+
+**Context**: user asked to keep pushing Phase 3+ work before 11:59 AM. emr returns `No route to host` for the entire session — no ssh, no ping. All actual CXL verification and commit activity is blocked until emr comes back.
+
+**What landed locally (no emr commit yet)**:
+- Inventoried the uncommitted src/ tree: every phase's code (cxl_kv_ops_{A,B,C}, cxl_oplog, cxl_pending_ring, cxl_hashtable, cxl_kv_store dispatcher, plus all tests) is already on disk from the previous session's emr work.
+- Audited + compiled everything locally with a `-DCXL_ONLY=ON -DCXL_SHM_PROFILING_DIR=/home/yanwang/cxl_shm_profiling` CMake configure. Full build green; 11 CXL tests + 9 bench/ycsb binaries.
+- Tmpfs regression suite, all green: cxl_kv_ops_{A,B,C}_test, cxl_oplog_test, cxl_oplog_redo_test, cxl_kv_ops_C_oplog_test, cxl_dram_cache_test, cxl_dram_cache_B_test. Local CPU is Broadwell (no clflushopt), so dropped `-mclflushopt` for direct g++ smoke runs; common.h auto-falls back to `clflush` via `#if defined(__CLFLUSHOPT__)`.
+- **New work: `CxlKvStoreC::recover_from_oplog()`** — canned redo helper. Temporarily detaches oplog_ so recovery-time insert/update/remove do not re-log themselves. Idempotent: duplicate-insert → success, update-missing → falls back to insert, delete-not-found → success.
+- **New test: `tests/cxl_kv_ops_C_recover_redo_test.cc`** — child inserts 5, logs an Update without applying, exits; parent calls recover_from_oplog and confirms key=100 goes from 900 (pre-crash) to 999 (replayed). Second recover call is a no-op (entry now Committed). Ran green on tmpfs.
+- Added `cxl_kv_ops_C_recover_redo_test` to the tests/CMakeLists.txt foreach block.
+
+**Deferred to next emr session**:
+- Symmetric `recover_from_oplog()` for A and B. Naive port hangs because `dispatch_{nowait,and_wait}` block on ring-full / ACK-wait when peers have not come back yet. Needs a `recovery_mode_` bool that short-circuits dispatch during redo; safe because the on-CXL slot write + epoch bump already make peers see the update on their next seqlock retry.
+- Sync everything to emr, rebuild with `-mclflushopt`, run the whole CXL suite on /dev/dax0.0, commit `[Phase 6] CxlKvStoreC::recover_from_oplog helper + redo integration test` onto `feat/cxl-migration`.
+
+**Resume checklist when emr is back**:
+1. `ssh emr uptime` to confirm reachability.
+2. `rsync -avz /home/yanwang/FUSEE/{src,tests,docs}/ emr:~/FUSEE/{src,tests,docs}/` (selective — avoid clobbering emr-only build artifacts).
+3. `ssh emr "cd ~/FUSEE/build && cmake --build . -j && ctest -R cxl_kv_ops_C_recover_redo_test --output-on-failure"`
+4. `git add src/cxl_kv_ops_C.{h,cc} tests/cxl_kv_ops_C_recover_redo_test.cc tests/CMakeLists.txt docs/fusee_cxl_progress.md docs/fusee_cxl_session_log.md && git commit` with a one-line-body message (avoid apostrophes / parens — heredoc truncation burned Phase 1.2).
+
+---

@@ -256,6 +256,48 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
   return -1; // too many retries; treat as not found.
 }
 
+uint64_t CxlKvStoreC::recover_from_oplog() {
+  if (!oplog_) return 0;
+
+  // Temporarily detach the oplog so that our redo-side insert/update/remove
+  // calls do not re-log (and re-recover) themselves forever. Restore after.
+  OpLog *saved = oplog_;
+  oplog_ = nullptr;
+
+  auto redo = +[](const OpLogEntry *e, void *user) -> int {
+    auto *self = reinterpret_cast<CxlKvStoreC *>(user);
+    int rc = 0;
+    switch (e->kind) {
+      case OpLogKind::Insert:
+        rc = self->insert(e->key, e->new_value);
+        // -2 == duplicate: the insert already took effect before the crash.
+        if (rc == -2) rc = 0;
+        break;
+      case OpLogKind::Update:
+        rc = self->update(e->key, e->new_value);
+        // -1 == key not present: the pre-crash writer never reached the
+        // bucket. Falling through to insert is safe because the bucket is
+        // locked and we will not race any concurrent writer during recovery.
+        if (rc == -1) {
+          rc = self->insert(e->key, e->new_value);
+          if (rc == -2) rc = 0;
+        }
+        break;
+      case OpLogKind::Delete:
+        rc = self->remove(e->key);
+        if (rc == -1) rc = 0; // already gone
+        break;
+      default:
+        rc = -1;
+    }
+    return rc;
+  };
+
+  uint64_t acted = saved->recover_redo(redo, this);
+  oplog_ = saved;
+  return acted;
+}
+
 void CxlKvStoreC::enable_dram_cache(bool on) {
   cache_enabled_ = on;
   if (on) {
