@@ -25,6 +25,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern "C" {
@@ -105,12 +106,20 @@ int main(int argc, char **argv) {
   }
 
   // Contention loop: increment the shared counter under the bucket lock.
+  struct timespec ts0 {}, ts1 {};
+  clock_gettime(CLOCK_MONOTONIC, &ts0);
   for (uint64_t i = 0; i < iters; i++) {
     tbl.lock(0, host_id, kNumHosts);
     uint64_t cur = CACHELINE_LOAD(&hdr->counter);
     CACHELINE_STORE(&hdr->counter, cur + 1);
     tbl.unlock(0, host_id);
   }
+  clock_gettime(CLOCK_MONOTONIC, &ts1);
+  uint64_t wall_ns = (ts1.tv_sec - ts0.tv_sec) * 1000000000ULL +
+                     (ts1.tv_nsec - ts0.tv_nsec);
+  double us_per_crit = (iters > 0) ? (double)wall_ns / 1e3 / (double)iters : 0.0;
+  printf("HOST host=%d iters=%lu wall_ns=%lu us_per_crit=%.3f\n",
+         host_id, iters, wall_ns, us_per_crit);
 
   if (host_id == 1) {
     cxl_region_destroy(&r);
@@ -140,5 +149,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   printf("OK: mutex held under contention on %s\n", dev);
+  printf("RESULT bench=bucket_lock dev=%s iters_per_host=%lu hosts=%d total_ops=%lu\n",
+         dev, iters, kNumHosts, expected);
   return 0;
 }
