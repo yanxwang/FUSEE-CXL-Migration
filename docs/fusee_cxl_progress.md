@@ -94,10 +94,10 @@ See also `docs/fusee_mp_bench_v2.png` (pre-cache, pre-A-fix) for contrast.
 ## Next concrete tasks (still open)
 
 1. ~~Root-cause Option A multi-proc wr=1.0 stall~~ — **RESOLVED** in commit `b8b1994`. The stall was a bench teardown race: `store.stop()` was called before every host had signaled `done`, so the primary's replicator exited while peers were still writing. Fix reorders the stop after the done barrier. Post-fix: 4h × 500 wr=1.0 agg=88k ops/s, zero ACK timeouts.
-2. **Run a cache-on multi-proc bench sweep and generate a v3 plot** — today's numbers are from ad-hoc invocations; should be a reproducible sweep with FUSEE_CACHE=1.
+2. **Run a cache-on multi-proc bench sweep and generate a v3 plot** — script landed in `df0c193` (`tests/run_fusee_mp_sweep.sh`). Re-run on /dev/dax0.0 pending: dax kept flipping back to system-ram on reboots and a reconfigure was in flight for 17+ min after an onlined-memory drain. Tmpfs dry-run OK.
 3. **Phase 4 hard deletion** — delete `src/nm.{h,cc}` / `src/ib.{h,cc}` and the client/server RDMA files once we are sure the RDMA path stays gone. The soft gate is enough for now; hard deletion is intentionally deferred.
 4. **Integrate OpLog recovery callback into each CxlKvStore** — DONE. All three protocols shipped: C in `56fb6b7`, A and B in `4877313` (symmetric `recovery_mode_` short-circuit in `dispatch_*wait`). All three green on /dev/dax0.0.
-5. **Official YCSB workloads** — Zipf generator exists, but hooking in the real `workloads/` dir from `setup/download_workload.sh` is still untouched.
+5. **Official YCSB workloads** — sweep harness ready (`tests/run_fusee_ycsb_sweep.sh`, `df0c193`). Runner already accepts real YCSB spec format (`INSERT usertable userN`); only step left is `bash setup/download_workload.sh` to populate `workloads/` and re-run with `WL_DIR=workloads`. Synthetic snapshot at `docs/fusee_ycsb_sweep.log`.
 
 Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — those remain RDMA-only under the default build. The new cxl_* files live alongside them and are selected via `-DCXL_ONLY=ON` or via linking `libfusee_cxl` directly.
 
