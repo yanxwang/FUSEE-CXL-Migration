@@ -25,3 +25,21 @@ target_compile_options(
 
 target_link_libraries(libddckv ${Boost_LIBRARIES} boost_context boost_fiber tbb)
 
+# -----------------------------------------------------------------------------
+# libfusee_cxl: RDMA-free static library for the CXL migration path.
+# Contains only the new cxl_*.cc modules plus the LFM mutex from
+# cxl_shm_profiling. Tests can link this to avoid pulling in libddckv (which
+# still carries RDMA deps until the full Phase-4 RDMA removal lands).
+# -----------------------------------------------------------------------------
+set(source_fusee_cxl
+    cxl_mm.cc
+    cxl_bucket_lock.cc
+    cxl_kv_ops_C.cc
+    ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
+
+add_library(fusee_cxl STATIC ${source_fusee_cxl})
+target_include_directories(fusee_cxl PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CXL_SHM_PROFILING_DIR})
+target_compile_options(fusee_cxl PRIVATE -O2 -g -mclflushopt)
+
