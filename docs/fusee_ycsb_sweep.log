@@ -1,0 +1,65 @@
+# FUSEE CXL YCSB sweep
+# dev=/tmp/ycsb_sweep.bin buckets=16384 wl_dir=/home/wang/FUSEE/tests/../workloads_synth
+# opts=A B C workloads= wl_A wl_A_zipf wl_C wl_C_zipf
+# started=2026-04-20T15:01:22-05:00
+--- workload=wl_A opt=A ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=312737 fails=0
+PHASE label=trans ops=5000 wall=0.013s thpt=392509 fails=0
+YCSB opt=A load_ops=5000 load_thpt=312737 trans_ops=5000 trans_thpt=392509
+--- workload=wl_A opt=B ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=312294 fails=0
+PHASE label=trans ops=5000 wall=0.013s thpt=390620 fails=0
+YCSB opt=B load_ops=5000 load_thpt=312294 trans_ops=5000 trans_thpt=390620
+--- workload=wl_A opt=C ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=322345 fails=0
+PHASE label=trans ops=5000 wall=0.012s thpt=401110 fails=0
+YCSB opt=C load_ops=5000 load_thpt=322345 trans_ops=5000 trans_thpt=401110
+--- workload=wl_A_zipf opt=A ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=311993 fails=0
+PHASE label=trans ops=10000 wall=0.026s thpt=390941 fails=0
+YCSB opt=A load_ops=5000 load_thpt=311993 trans_ops=10000 trans_thpt=390941
+--- workload=wl_A_zipf opt=B ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=319077 fails=0
+PHASE label=trans ops=10000 wall=0.025s thpt=396495 fails=0
+YCSB opt=B load_ops=5000 load_thpt=319077 trans_ops=10000 trans_thpt=396495
+--- workload=wl_A_zipf opt=C ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=320214 fails=0
+PHASE label=trans ops=10000 wall=0.025s thpt=397399 fails=0
+YCSB opt=C load_ops=5000 load_thpt=320214 trans_ops=10000 trans_thpt=397399
+--- workload=wl_C opt=A ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=312118 fails=0
+PHASE label=trans ops=5000 wall=0.011s thpt=449133 fails=0
+YCSB opt=A load_ops=5000 load_thpt=312118 trans_ops=5000 trans_thpt=449133
+--- workload=wl_C opt=B ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=321788 fails=0
+PHASE label=trans ops=5000 wall=0.011s thpt=452797 fails=0
+YCSB opt=B load_ops=5000 load_thpt=321788 trans_ops=5000 trans_thpt=452797
+--- workload=wl_C opt=C ---
+parsed 5000 load ops, 5000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=319695 fails=0
+PHASE label=trans ops=5000 wall=0.011s thpt=453004 fails=0
+YCSB opt=C load_ops=5000 load_thpt=319695 trans_ops=5000 trans_thpt=453004
+--- workload=wl_C_zipf opt=A ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=312035 fails=0
+PHASE label=trans ops=10000 wall=0.022s thpt=453097 fails=0
+YCSB opt=A load_ops=5000 load_thpt=312035 trans_ops=10000 trans_thpt=453097
+--- workload=wl_C_zipf opt=B ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=319883 fails=0
+PHASE label=trans ops=10000 wall=0.022s thpt=455735 fails=0
+YCSB opt=B load_ops=5000 load_thpt=319883 trans_ops=10000 trans_thpt=455735
+--- workload=wl_C_zipf opt=C ---
+parsed 5000 load ops, 10000 trans ops
+PHASE label=load ops=5000 wall=0.016s thpt=319791 fails=0
+PHASE label=trans ops=10000 wall=0.022s thpt=455495 fails=0
+YCSB opt=C load_ops=5000 load_thpt=319791 trans_ops=10000 trans_thpt=455495
+# finished=2026-04-20T15:01:23-05:00
