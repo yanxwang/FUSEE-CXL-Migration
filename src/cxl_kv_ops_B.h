@@ -23,6 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <thread>
+#include <vector>
 
 namespace fusee {
 
@@ -45,6 +46,13 @@ class CxlKvStoreB {
   }
   void enable_oplog(OpLog *log) { oplog_ = log; }
 
+  // Turn on the DRAM bucket cache. When on, Option B's ring-based push is
+  // what it always should have been: readers serve from DRAM and only see
+  // an invalidation when a peer's writer actually pushed one (detected by
+  // this hosts replicator setting the invalid flag). No CXL load on the
+  // read fast path.
+  void enable_dram_cache(bool on);
+
  private:
   uint32_t bucket_idx(uint64_t key) const {
     return static_cast<uint32_t>(fnv1a_u64(key) % num_buckets_);
@@ -65,6 +73,13 @@ class CxlKvStoreB {
   std::atomic<uint64_t> replicated_ops_{0};
 
   OpLog *oplog_ = nullptr;
+
+  // DRAM cache. cache_epoch_[idx] is a per-bucket atomic; UINT64_MAX means
+  // invalid (must refresh). Replicator sets it to UINT64_MAX on invalidation.
+  // Reader checks it on the fast path without touching CXL.
+  bool cache_enabled_ = false;
+  mutable std::vector<CxlKvBucket> cache_buckets_;
+  mutable std::vector<std::atomic<uint64_t>> cache_epoch_;
 };
 
 } // namespace fusee

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstring>
 #include <ctime>
+#include <limits>
 
 extern "C" {
 #include "common.h"
@@ -152,6 +153,10 @@ int CxlKvStoreB::insert(uint64_t key, uint64_t value) {
   int rc = dispatch_nowait(idx, (uint32_t)empty_idx, value);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -186,6 +191,10 @@ int CxlKvStoreB::update(uint64_t key, uint64_t value) {
   int rc = dispatch_nowait(idx, (uint32_t)match, value);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -219,6 +228,10 @@ int CxlKvStoreB::remove(uint64_t key) {
   int rc = dispatch_nowait(idx, (uint32_t)match, 0ULL);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
+  if (cache_enabled_) {
+    cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                            std::memory_order_release);
+  }
   lock_table_.unlock(idx, host_id_);
   return rc;
 }
@@ -228,6 +241,22 @@ int CxlKvStoreB::search(uint64_t key, uint64_t *out) const {
   uint32_t idx = bucket_idx(key);
   BucketLockEntry *le = const_cast<BucketLockTable &>(lock_table_).entry(idx);
   CxlKvBucket *b = &buckets_[idx];
+
+  // Fast path: DRAM cache, no CXL load. Replicator invalidates cache_epoch_
+  // to UINT64_MAX when a peer writer pushes through the ring.
+  if (cache_enabled_) {
+    uint64_t cached = cache_epoch_[idx].load(std::memory_order_acquire);
+    if (cached != std::numeric_limits<uint64_t>::max()) {
+      const CxlKvBucket &cb = cache_buckets_[idx];
+      for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+        if (cb.slots[s].key == key) {
+          if (out) *out = cb.slots[s].value;
+          return 0;
+        }
+      }
+      return -1;
+    }
+  }
 
   for (int attempt = 0; attempt < 8; attempt++) {
     uint64_t e1 = CACHELINE_LOAD(&le->write_epoch);
@@ -239,6 +268,9 @@ int CxlKvStoreB::search(uint64_t key, uint64_t *out) const {
       flush_line(&b->slots[s].value);
     }
     full_fence();
+    if (cache_enabled_) {
+      cache_buckets_[idx] = *b;
+    }
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
       if (b->slots[s].key == key) {
         captured = b->slots[s].value;
@@ -249,11 +281,25 @@ int CxlKvStoreB::search(uint64_t key, uint64_t *out) const {
 
     uint64_t e2 = CACHELINE_LOAD(&le->write_epoch);
     if (e1 == e2) {
+      if (cache_enabled_) cache_epoch_[idx].store(e1, std::memory_order_release);
       if (found) { if (out) *out = captured; return 0; }
       return -1;
     }
   }
   return -1;
+}
+
+void CxlKvStoreB::enable_dram_cache(bool on) {
+  cache_enabled_ = on;
+  if (on) {
+    cache_buckets_.assign(num_buckets_, CxlKvBucket{});
+    cache_epoch_ = std::vector<std::atomic<uint64_t>>(num_buckets_);
+    for (auto &a : cache_epoch_) a.store(std::numeric_limits<uint64_t>::max(),
+                                         std::memory_order_relaxed);
+  } else {
+    cache_buckets_.clear();
+    cache_epoch_.clear();
+  }
 }
 
 void CxlKvStoreB::replicator_loop() {
@@ -270,8 +316,13 @@ void CxlKvStoreB::replicator_loop() {
         uint64_t op_id = CACHELINE_LOAD(&e->op_id);
         if (op_id == 0) break;
 
-        // Simulated apply — touch the source-side entry.
-        (void)CACHELINE_LOAD(&e->new_value_lo);
+        // Read the bucket_idx so we can invalidate our DRAM cache.
+        uint64_t bucket_hit = CACHELINE_LOAD(&e->bucket_idx);
+        if (cache_enabled_ && bucket_hit < num_buckets_) {
+          cache_epoch_[bucket_hit].store(
+              std::numeric_limits<uint64_t>::max(),
+              std::memory_order_release);
+        }
 
         // B: no writer waits on processed_op_id, so we clear op_id directly.
         CACHELINE_STORE(&e->op_id, 0ULL);
