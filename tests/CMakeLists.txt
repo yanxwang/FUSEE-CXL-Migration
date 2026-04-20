@@ -34,6 +34,18 @@ target_include_directories(cxl_bucket_lock_test PRIVATE
     ${CXL_SHM_PROFILING_DIR})
 target_compile_options(cxl_bucket_lock_test PRIVATE -mclflushopt)
 
+# Phase 3: Option C KV ops correctness test (two processes, cross-host ops).
+add_executable(cxl_kv_ops_C_test
+    cxl_kv_ops_C_test.cc
+    ../src/cxl_mm.cc
+    ../src/cxl_bucket_lock.cc
+    ../src/cxl_kv_ops_C.cc
+    ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
+target_include_directories(cxl_kv_ops_C_test PRIVATE
+    ../src
+    ${CXL_SHM_PROFILING_DIR})
+target_compile_options(cxl_kv_ops_C_test PRIVATE -mclflushopt)
+
 target_link_libraries(test_remote_nm
     ${GTEST_BOTH_LIBRARIES}
     libddckv

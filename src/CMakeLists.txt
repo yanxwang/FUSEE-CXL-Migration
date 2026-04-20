@@ -8,7 +8,9 @@ list(APPEND source_ddckv
     client_mm.cc
     client.cc
     client_cr.cc
-    cxl_mm.cc)
+    cxl_mm.cc
+    cxl_bucket_lock.cc
+    cxl_kv_ops_C.cc)
 
 add_library(libddckv STATIC ${source_ddckv})
 

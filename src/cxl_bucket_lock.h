@@ -14,11 +14,18 @@ namespace fusee {
 
 // One lock-table entry per RACE-hash bucket. Cacheline-aligned.
 //
-// For Phase 2 we only carry the mutex; protocol-specific fields (write_epoch,
-// staging_scratch, per-bucket pending-ring metadata, etc.) are added in later
-// phases so we can reason about layout changes without rewriting lock code.
+// Protocol-specific fields are appended to this struct as phases land.
+// Phase 2: mutex only.
+// Phase 3 (Option C): write_epoch — incremented under the lock on every
+//                     mutating op; readers use seqlock-style retry.
+// Phase 7 (Option B): staging_scratch — scratch cacheline for eager-push
+//                     staging before the replicator consumes it.
+// Option A uses its own SPSC rings in a separate sub-region (see
+// docs/option_a_side_track.md); those do not live here.
 struct BucketLockEntry {
-  shm_mutex_t mutex;
+  shm_mutex_t   mutex;
+  cacheline_u64 write_epoch;
+  cacheline_u64 staging_scratch;
 };
 
 // Thin view over a contiguous array of BucketLockEntry planted in a CXL

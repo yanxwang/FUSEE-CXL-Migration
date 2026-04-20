@@ -2,6 +2,10 @@
 
 #include <cassert>
 
+extern "C" {
+#include "common.h"  // CACHELINE_STORE
+}
+
 namespace fusee {
 
 size_t BucketLockTable::bytes_for(uint32_t num_buckets) {
@@ -16,6 +20,8 @@ void BucketLockTable::attach(void *base, uint32_t num_buckets,
   if (init_mutexes) {
     for (uint32_t i = 0; i < num_buckets; i++) {
       shm_mutex_init(&entries_[i].mutex);
+      CACHELINE_STORE(&entries_[i].write_epoch, 0ULL);
+      CACHELINE_STORE(&entries_[i].staging_scratch, 0ULL);
     }
   }
 }
