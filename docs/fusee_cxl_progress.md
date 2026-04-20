@@ -5,10 +5,10 @@
 ## Current state
 
 - **Project name**: FUSEE CXL Migration
-- **Current focus**: Phase 1 ready to start (Option A perf investigation COMPLETE)
-- **Phase**: 0 skipped; Phase 1 pending
-- **Branch**: `feat/cxl-migration` created on emr (no commits yet on this branch)
-- **Last commit**: `d1e9932 initial commit` (upstream, branch parent)
+- **Current focus**: Phase 1 COMPLETE; starting Phase 2 (BucketLock table)
+- **Phase**: 0 skipped; Phase 1 done; Phase 2 pending
+- **Branch**: `feat/cxl-migration` on emr
+- **Last commit**: `60433be [Phase 1.2] Multi-process CXL shared-region verification`
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
 
@@ -57,9 +57,9 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 
 | Phase | Status | Commits | Notes |
 |---|---|---|---|
-| 0: Baseline | ⏳ pending | — | emr FUSEE build, cxl_shm_profiling build, bench sanity run |
-| 1: CXL basic infra | ⏳ pending | — | `src/cxl_mm.{h,cc}`, init region, unit test |
-| 2: BucketLock table | ⏳ pending | — | `src/cxl_bucket_lock.{h,cc}` |
+| 0: Baseline | ⏳ skipped | — | FUSEE repo already on emr; no baseline run required |
+| 1: CXL basic infra | ✅ done | a3e7a63, 60433be | `src/cxl_mm.{h,cc}` + single-proc + multi-proc tests on /dev/dax0.0 |
+| 2: BucketLock table | ⏳ pending | — | `src/cxl_bucket_lock.{h,cc}` — uses LFM from cxl_shm_profiling |
 | 3: KV ops Option C | ⏳ pending | — | `src/cxl_kv_ops_C.cc` |
 | 4: Remove RDMA deps | ⏳ pending | — | Delete nm.{h,cc}, ib.{h,cc}; update CMakeLists |
 | 5: Single-node YCSB | ⏳ pending | — | YCSB runner using new API |
@@ -69,20 +69,21 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 
 ## Next concrete task
 
-**Phase 1 — CXL basic infrastructure**:
+**Phase 2 — BucketLock table on CXL**:
 
-1. Add `cxl_shm_profiling` as git submodule under `FUSEE/external/cxl_shm_profiling/` (emr has it at `~/cxl_shm_profiling/` already)
-2. Create `src/cxl_mm.h/cc`:
-   - `cxl_region_init(dev_path, size)` — open + ftruncate-if-possible + mmap
-   - `cxl_region_destroy(region)` — munmap + close
-   - Uses `PROT_READ | PROT_WRITE | MAP_SHARED`, handles EINVAL on ftruncate for devdax
-   - Round up size to 2 MB alignment for devdax compat
-3. Create minimal test `tests/cxl_mm_test.cc` — mmap a region, write magic, read back
-4. Update `CMakeLists.txt`: add cxl_shm_profiling subdir, link libglobal_allocator
-5. Commit: `[Phase 1.1] CXL mm skeleton + unit test`
+1. Decide LFM integration: wrap `cxl_shm_profiling/shm_mutex.h` directly vs. port a minimal version into `src/`. Leaning toward direct wrap via include path — emr-only dev, no redistribution.
+2. Design `BucketLockEntry` layout: one lock per RACE hash bucket, cacheline-padded, CXL-resident. For A: also holds per-bucket `write_epoch` + `staging_scratch` (see mini-bench `ycsb_abc_bench.c` for current shape). For B/C: simpler variants.
+3. Create `src/cxl_bucket_lock.{h,cc}`:
+   - `BucketLockTable` wraps an array of BucketLockEntry in a CXLRegion
+   - `bucket_lock(idx)` / `bucket_unlock(idx)` forward to LFM's acquire/release
+   - Single-allocator init that plants the table at a known offset within the region
+4. Multi-process test: two processes contend for the same bucket; verify mutual exclusion + counter correctness.
+5. Commit: `[Phase 2] CXL BucketLock table + multi-proc mutex test`
+
+**Open design question** for Phase 2: do we use `cxl_shm_profiling`'s allocator (`shm_enable` + `shm_malloc_id`) or manage the CXL region layout ourselves (simple static offsets)? For FUSEE we know all region consumers up front, so static offsets are cleaner. Leaning that way.
 
 **Dax0.0 ready**: ✅ reconfigured to devdax mode on 2026-04-20 02:00 CDT
-**Build status**: original FUSEE may not build (RDMA deps); we'll fix in Phase 4 when we remove RDMA
+**Build status**: original FUSEE still has RDMA deps in libddckv; Phase 1 tests link cxl_mm.cc directly, bypassing libddckv. Full libddckv refactor in Phase 4.
 
 ## Decisions made
 
@@ -92,6 +93,8 @@ See `docs/option_a_perf_analysis.md` (will be created) for the live research log
 - **2026-04-20 01:40** — Preserve YCSB benchmark framework and crash recovery logic
 - **2026-04-20 01:40** — No push to remote; all commits stay local on emr
 - **2026-04-20 01:40** — Investigate Option A perf bottleneck on mini-bench **before** starting Phase 0 (user request)
+- **2026-04-20 03:10** — Skip git-submodule for cxl_shm_profiling (external-gitlab submodule blocked by policy); will reference via CMake path variable in Phase 2 when we actually need its headers
+- **2026-04-20 03:10** — Phase 1 tests compile `src/cxl_mm.cc` directly instead of linking `libddckv`, so they don't depend on RDMA build succeeding
 
 ## Open questions (need user input)
 

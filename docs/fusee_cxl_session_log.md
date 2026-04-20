@@ -27,3 +27,28 @@
 **Ends with**: investigation plan for Option A perf bottleneck (in progress)
 
 ---
+
+## Session 2026-04-20 ~02:30 CDT — Option A side-track + Phase 1
+
+**Context**: user promoted the Option A perf investigation to an ongoing side-track with its own research log, then we moved on to Phase 1.
+
+**Option A side-track (commit 7fa6f34)**:
+- Created `docs/option_a_perf_analysis.md` (first investigation report)
+- Created `docs/option_a_side_track.md` (long-term research log for future A improvements)
+- A-v2 already integrated into `cxl_shm_profiling/bench/ycsb_abc_bench.c` (SPSC ring replaces per-bucket scan, 180x write latency improvement, remaining ~2x gap vs B/C is inherent sync-ACK cost)
+- Ideas parked for later: packed ring entry (tried, reverted), write pipelining, batch ACKs, quorum ACK, NUMA-aware placement
+
+**Phase 1 (commits a3e7a63, 60433be)**:
+- Decided not to add cxl_shm_profiling as a git submodule (policy blocks external-gitlab submodules); will reference via CMake path when needed in Phase 2
+- Wrote `src/cxl_mm.{h,cc}`: `cxl_region_init` (open+ftruncate+mmap, handles EINVAL on devdax, rounds up to 2 MiB) and `cxl_region_destroy`
+- Wrote `tests/cxl_mm_test.cc` (single-proc magic-word sanity) — passes on /dev/dax0.0 and on tmpfs scratch file
+- Wrote `tests/cxl_mm_mp_test.cc` (fork both procs, each calls `cxl_region_init` independently, clflushopt-based handshake) — passes on /dev/dax0.0 and on tmpfs
+- Registered `cxl_mm.cc` in `libddckv` source list for later phases; Phase 1 tests bypass libddckv by compiling `cxl_mm.cc` directly (libddckv still has RDMA deps, to be refactored in Phase 4)
+
+**Discovered / noted**:
+- emr user is `wang`, not `yanwang`; cxl_shm_profiling lives at `/home/wang/cxl_shm_profiling/` on emr (progress doc had wrong path earlier)
+- The shell-heredoc-over-ssh commit message pattern truncates at unescaped parens in body text; Phase 1.2 commit body lost the last two lines (non-critical)
+
+**Ends with**: Phase 1 complete (both commits land on `feat/cxl-migration`). Ready for Phase 2 (BucketLock table).
+
+---
