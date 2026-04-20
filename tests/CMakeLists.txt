@@ -11,6 +11,10 @@ add_executable(test_remote_nm test_remote_nm.cc ddckv_test.cc)
 add_executable(client_kv_shell client_kv_shell.cc)
 add_executable(test_mm test_mm.cc ddckv_test.cc)
 
+# Phase 1.1: CXL mm standalone sanity test (no RDMA deps, no libddckv).
+add_executable(cxl_mm_test cxl_mm_test.cc ../src/cxl_mm.cc)
+target_include_directories(cxl_mm_test PRIVATE ../src)
+
 target_link_libraries(test_remote_nm
     ${GTEST_BOTH_LIBRARIES}
     libddckv

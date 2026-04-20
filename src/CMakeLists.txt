@@ -1,13 +1,14 @@
-list(APPEND source_ddckv 
-    nm.cc 
-    ib.cc 
-    server_mm.cc 
+list(APPEND source_ddckv
+    nm.cc
+    ib.cc
+    server_mm.cc
     server.cc
     kv_utils.cc
     hashtable.cc
     client_mm.cc
     client.cc
-    client_cr.cc)
+    client_cr.cc
+    cxl_mm.cc)
 
 add_library(libddckv STATIC ${source_ddckv})
 
