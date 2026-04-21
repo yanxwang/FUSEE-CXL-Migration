@@ -12,3 +12,23 @@ setup/install/
 setup/micro-workloads/
 setup/upd-workloads.tgz
 setup/upd-workloads/
+# Build dirs
+build-cxl/
+
+# Per-host dev artifacts not part of the migration
+run/
+logs/
+localhost_configs/
+CLIENT_ARCHITECTURE.md
+CLOUDLAB_GUIDE.md
+QUICK_START.md
+SINGLE_MACHINE_SETUP.md
+STATUS.md
+cleanup_rxe.sh
+setup_soft_roce.sh
+run_simple_test.sh
+start_all_servers.sh
+stop_all_servers.sh
+
+# Git bundle backups
+*.bundle
