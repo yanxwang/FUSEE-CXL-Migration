@@ -1,0 +1,31 @@
+Cross-host CXL fabric verification on g3 + g4
+==============================================
+
+Test binary: tests/cxl_xhost_test
+Backing:     /dev/dax0.0 on each host
+Date:        2026-04-21 ~03:00 CDT
+
+Host 0 role: g3
+Host 1 role: g4
+
+=== g3 (host 0) output ===
+[host 0] wrote payload + handshake; waiting for ACK...
+[host 0] got ACK after 0.000s
+OK: cross-host CXL fabric verified on /dev/dax0.0
+
+=== g4 (host 1) output ===
+[host 1] waiting for peer's handshake...
+[host 1] saw handshake after 1.520s; verifying payload
+[host 1] payload verified; ACK sent
+OK: cross-host CXL fabric verified on /dev/dax0.0
+
+Interpretation
+--------------
+- Handshake propagated g3 -> g4 in ~1.5 s (dominated by the start-up
+  ordering and the 200 us spin cadence in the waiter; NOT an actual
+  transport latency).
+- 12 cachelines of distinct patterns verified byte-for-byte across
+  hosts.
+- Conclusion: /dev/dax0.0 on g3 and /dev/dax0.0 on g4 point at the
+  same physical CXL memory through the PCIe switch / memory server.
+  Good to run multi-host A/B/C benches on this testbed.
