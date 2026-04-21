@@ -1,0 +1,185 @@
+# FUSEE CXL YCSB sweep
+# dev=/dev/dax0.0 buckets=262144 wl_dir=/home/wang/FUSEE/setup/workloads
+# opts=A B C workloads= workloada workloadb workloadc workloadd workloade workloadf
+# started=2026-04-21T02:47:36-05:00
+--- workload=workloada opt=A cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216563 fails=0
+PHASE label=trans ops=200000 wall=0.727s thpt=275207 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=216563 trans_ops=200000 trans_thpt=275207
+--- workload=workloada opt=A cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216421 fails=0
+PHASE label=trans ops=200000 wall=0.597s thpt=335083 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216421 trans_ops=200000 trans_thpt=335083
+--- workload=workloada opt=B cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216917 fails=0
+PHASE label=trans ops=200000 wall=0.727s thpt=275183 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=216917 trans_ops=200000 trans_thpt=275183
+--- workload=workloada opt=B cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216555 fails=0
+PHASE label=trans ops=200000 wall=0.597s thpt=335091 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216555 trans_ops=200000 trans_thpt=335091
+--- workload=workloada opt=C cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=217083 fails=0
+PHASE label=trans ops=200000 wall=0.726s thpt=275420 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=217083 trans_ops=200000 trans_thpt=275420
+--- workload=workloada opt=C cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216885 fails=0
+PHASE label=trans ops=200000 wall=0.608s thpt=329098 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=216885 trans_ops=200000 trans_thpt=329098
+--- workload=workloadb opt=A cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216412 fails=0
+PHASE label=trans ops=200000 wall=0.633s thpt=315760 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=216412 trans_ops=200000 trans_thpt=315760
+--- workload=workloadb opt=A cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216376 fails=0
+PHASE label=trans ops=200000 wall=0.169s thpt=1183336 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216376 trans_ops=200000 trans_thpt=1183336
+--- workload=workloadb opt=B cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216632 fails=0
+PHASE label=trans ops=200000 wall=0.634s thpt=315682 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=216632 trans_ops=200000 trans_thpt=315682
+--- workload=workloadb opt=B cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216492 fails=0
+PHASE label=trans ops=200000 wall=0.169s thpt=1184886 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216492 trans_ops=200000 trans_thpt=1184886
+--- workload=workloadb opt=C cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216937 fails=0
+PHASE label=trans ops=200000 wall=0.634s thpt=315694 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=216937 trans_ops=200000 trans_thpt=315694
+--- workload=workloadb opt=C cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216751 fails=0
+PHASE label=trans ops=200000 wall=0.218s thpt=919354 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=216751 trans_ops=200000 trans_thpt=919354
+--- workload=workloadc opt=A cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216413 fails=0
+PHASE label=trans ops=200000 wall=0.621s thpt=321866 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=216413 trans_ops=200000 trans_thpt=321866
+--- workload=workloadc opt=A cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216405 fails=0
+PHASE label=trans ops=200000 wall=0.108s thpt=1848773 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216405 trans_ops=200000 trans_thpt=1848773
+--- workload=workloadc opt=B cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.463s thpt=215876 fails=0
+PHASE label=trans ops=200000 wall=0.622s thpt=321354 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=215876 trans_ops=200000 trans_thpt=321354
+--- workload=workloadc opt=B cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216389 fails=0
+PHASE label=trans ops=200000 wall=0.108s thpt=1850049 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216389 trans_ops=200000 trans_thpt=1850049
+--- workload=workloadc opt=C cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=217044 fails=0
+PHASE label=trans ops=200000 wall=0.621s thpt=321883 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=217044 trans_ops=200000 trans_thpt=321883
+--- workload=workloadc opt=C cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216747 fails=0
+PHASE label=trans ops=200000 wall=0.162s thpt=1235286 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=216747 trans_ops=200000 trans_thpt=1235286
+--- workload=workloadd opt=A cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.459s thpt=217765 fails=0
+PHASE label=trans ops=200000 wall=0.639s thpt=312987 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=217765 trans_ops=200000 trans_thpt=312987
+--- workload=workloadd opt=A cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216226 fails=0
+PHASE label=trans ops=200000 wall=0.165s thpt=1210742 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216226 trans_ops=200000 trans_thpt=1210742
+--- workload=workloadd opt=B cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.463s thpt=215876 fails=0
+PHASE label=trans ops=200000 wall=0.642s thpt=311509 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=215876 trans_ops=200000 trans_thpt=311509
+--- workload=workloadd opt=B cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216515 fails=0
+PHASE label=trans ops=200000 wall=0.164s thpt=1218286 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216515 trans_ops=200000 trans_thpt=1218286
+--- workload=workloadd opt=C cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=217134 fails=0
+PHASE label=trans ops=200000 wall=0.641s thpt=312157 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=217134 trans_ops=200000 trans_thpt=312157
+--- workload=workloadd opt=C cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216837 fails=0
+PHASE label=trans ops=200000 wall=0.213s thpt=936876 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=216837 trans_ops=200000 trans_thpt=936876
+--- workload=workloade opt=A cache=[] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216463 fails=0
+PHASE label=trans ops=200000 wall=0.903s thpt=221525 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=216463 trans_ops=200000 trans_thpt=221525
+--- workload=workloade opt=A cache=[FUSEE_CACHE=1] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216715 fails=0
+PHASE label=trans ops=200000 wall=0.904s thpt=221326 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216715 trans_ops=200000 trans_thpt=221326
+--- workload=workloade opt=B cache=[] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.459s thpt=218025 fails=0
+PHASE label=trans ops=200000 wall=0.899s thpt=222371 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=218025 trans_ops=200000 trans_thpt=222371
+--- workload=workloade opt=B cache=[FUSEE_CACHE=1] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216996 fails=0
+PHASE label=trans ops=200000 wall=0.903s thpt=221507 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216996 trans_ops=200000 trans_thpt=221507
+--- workload=workloade opt=C cache=[] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.460s thpt=217179 fails=0
+PHASE label=trans ops=200000 wall=0.903s thpt=221365 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=217179 trans_ops=200000 trans_thpt=221365
+--- workload=workloade opt=C cache=[FUSEE_CACHE=1] load=workloade.spec_load trans=workloade.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.460s thpt=217224 fails=0
+PHASE label=trans ops=200000 wall=0.901s thpt=221855 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=217224 trans_ops=200000 trans_thpt=221855
+--- workload=workloadf opt=A cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216430 fails=0
+PHASE label=trans ops=200000 wall=0.691s thpt=289588 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=216430 trans_ops=200000 trans_thpt=289588
+--- workload=workloadf opt=A cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216256 fails=0
+PHASE label=trans ops=200000 wall=0.521s thpt=383519 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=216256 trans_ops=200000 trans_thpt=383519
+--- workload=workloadf opt=B cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216675 fails=0
+PHASE label=trans ops=200000 wall=0.691s thpt=289473 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=216675 trans_ops=200000 trans_thpt=289473
+--- workload=workloadf opt=B cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216486 fails=0
+PHASE label=trans ops=200000 wall=0.521s thpt=383737 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=216486 trans_ops=200000 trans_thpt=383737
+--- workload=workloadf opt=C cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.461s thpt=216951 fails=0
+PHASE label=trans ops=200000 wall=0.690s thpt=289692 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=216951 trans_ops=200000 trans_thpt=289692
+--- workload=workloadf opt=C cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+parsed 100000 load ops, 200000 trans ops
+PHASE label=load ops=100000 wall=0.462s thpt=216635 fails=0
+PHASE label=trans ops=200000 wall=0.537s thpt=372285 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=216635 trans_ops=200000 trans_thpt=372285
+# finished=2026-04-21T02:49:49-05:00
