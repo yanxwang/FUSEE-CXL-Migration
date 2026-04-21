@@ -1,0 +1,10 @@
+=== Sun Apr 19 06:45:07 PM CDT 2026 — Compile FUSEE on c1 and c2 in parallel ===
+
+[c1] build OK — built 0 key executables
+[c1] build OK — built 0 key executables
+[c2] build OK — built 0 key executables
+[c2] build OK — built 0 key executables
+
+=== Binaries inventory ===
+-rwxr-xr-x 1 root root 6856648 Apr 19 23:45 /root/FUSEE/build/micro-test/latency_test_client
+-rwxr-xr-x 1 root root 3102288 Apr 19 23:45 /root/FUSEE/build/ycsb-test/ycsb_test_server

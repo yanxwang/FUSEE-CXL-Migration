@@ -1,0 +1,20 @@
+[01:41:57] subblock=256 workloada ...
+  total=11600649 failed=0 tpt=1160064
+[01:42:35] subblock=256 workloadc ...
+  total=26069297 failed=0 tpt=2606929
+[01:43:16] subblock=512 workloada ...
+  total=11626050 failed=0 tpt=1162605
+[01:43:54] subblock=512 workloadc ...
+  total=26032344 failed=0 tpt=2603234
+[01:44:34] subblock=1024 workloada ...
+  TIMEOUT/FAIL (exit=134)
+[01:45:09] subblock=1024 workloadc ...
+  total=25509554 failed=0 tpt=2550955
+
+subblock_size,workload,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+256,workloada,11600649,0,1160064,0
+256,workloadc,26069297,0,2606929,0
+512,workloada,11626050,0,1162605,0
+512,workloadc,26032344,0,2603234,0
+1024,workloada,NA,NA,0,134
+1024,workloadc,25509554,0,2550955,0

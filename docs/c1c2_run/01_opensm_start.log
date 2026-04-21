@@ -1,0 +1,64 @@
+=== Sun Apr 19 06:42:17 PM CDT 2026 — Starting opensm on c1 DPU ===
+
+--- 1. Test DPU SSH (ubuntu/manishmunikar) ---
+localhost.localdomain
+Linux localhost.localdomain 6.8.0-1013-bluefield-64k #17-Ubuntu SMP PREEMPT_DYNAMIC Wed Nov  5 22:26:14 UTC 2025 aarch64 aarch64 aarch64 GNU/Linux
+ubuntu
+
+--- 2. Find startopensm.sh on DPU ---
+
+--- 3. cat startopensm.sh ---
+
+--- 4. Broader search for startopensm / opensm ---
+/usr/sbin/opensm
+/etc/opensm
+/etc/logrotate.d/opensm
+/var/cache/opensm
+/var/log/opensm_mlx5_0.log
+/var/log/opensm-port1.log
+/var/log/opensm-unhealthy-ports.dump
+/var/log/opensm.log.1.gz
+/var/log/opensm-port2.log
+/var/log/opensm-virtualization.dump
+/var/log/opensm.log
+/var/log/opensm_mlx5_1.log
+/var/log/opensm-statistics.0.dump
+/var/log/opensm-smdb.dump
+/var/log/opensm-activity.dump
+/var/log/opensm-routers.dump
+
+--- history of interactive shell ---
+sudo systemctl status opensmd.service
+sudo systemctl status opensmd.service 
+sudo systemctl start opensmd.service
+sudo systemctl status opensmd.service 
+sudo systemctl status opensmd
+sudo systemctl enable opensmd
+sudo systemctl start opensmd
+sudo systemctl status opensmd
+sudo systemctl status opensmd
+sudo systemctl stop opensmd.service
+
+--- 5. opensmd systemd status on c1 DPU ---
+○ opensmd.service - OpenSM
+     Loaded: loaded (/usr/lib/systemd/system/opensmd.service; disabled; preset: enabled)
+     Active: inactive (dead)
+
+--- last opensm log ---
+
+--- 6. Start opensmd service ---
+● opensmd.service - OpenSM
+     Loaded: loaded (/usr/lib/systemd/system/opensmd.service; disabled; preset: enabled)
+     Active: active (running) since Sun 2026-04-19 23:42:44 UTC; 3s ago
+   Main PID: 8934 (opensm)
+      Tasks: 56 (limit: 9424)
+     Memory: 31.1M (peak: 83.5M)
+        CPU: 75ms
+     CGroup: /system.slice/opensmd.service
+             ├─8934 /usr/sbin/opensm
+             └─8938 osm_crashd
+
+Apr 19 23:42:44 localhost.localdomain opensm[8934]:  Log File: /var/log/opensm.log
+Apr 19 23:42:44 localhost.localdomain opensm[8934]: -------------------------------------------------
+Apr 19 23:42:44 localhost.localdomain OpenSM[8934]: /var/log/opensm.log log file opened
+Apr 19 23:42:44 localhost.localdomain OpenSM[8934]: OpenSM 5.25.1.MLNX20251030.e3791a47

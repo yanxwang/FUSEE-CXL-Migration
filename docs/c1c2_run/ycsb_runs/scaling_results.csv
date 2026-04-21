@@ -1,0 +1,11 @@
+workload,num_clients,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+workloada,2,2250149,0,225014,0
+workloada,4,4576890,0,457689,0
+workloada,8,9033104,0,903310,0
+workloada,16,17631942,0,1763194,0
+workloada,32,NA,NA,0,134
+workloadc,2,4663383,0,466338,0
+workloadc,4,9620970,0,962097,0
+workloadc,8,18826626,0,1882662,0
+workloadc,16,37481187,0,3748118,0
+workloadc,32,47073451,0,4707345,0

@@ -1,0 +1,26 @@
+total 2020
+drwxr-xr-x 2 root root   4096 Apr 20 00:01 .
+drwxr-xr-x 4 root root   4096 Apr 19 23:49 ..
+-rw-r--r-- 1 root root 300009 Apr 20 00:01 delete_lat-2rp.txt
+-rw-r--r-- 1 root root 399994 Apr 19 23:50 insert_lat-1rp.txt
+-rw-r--r-- 1 root root 249216 Apr 20 00:01 insert_lat-2rp.txt
+-rw-r--r-- 1 root root 300024 Apr 19 23:50 search_lat-1rp.txt
+-rw-r--r-- 1 root root 200146 Apr 20 00:01 search_lat-2rp.txt
+-rw-r--r-- 1 root root 300081 Apr 19 23:50 update_lat-1rp.txt
+-rw-r--r-- 1 root root 295711 Apr 20 00:01 update_lat-2rp.txt
+
+--- Summary stats per file ---
+=== /root/FUSEE/build/micro-test/results/delete_lat-2rp.txt ===
+  count=100000  avg=13.32us  min=11us  med=13us  p95=15us  p99=16us  max=452us
+=== /root/FUSEE/build/micro-test/results/insert_lat-1rp.txt ===
+  count=100000  avg=113.28us  min=84us  med=113us  p95=114us  p99=116us  max=9509us
+=== /root/FUSEE/build/micro-test/results/insert_lat-2rp.txt ===
+  count=100000  avg=9.76us  min=8us  med=9us  p95=11us  p99=12us  max=9256us
+=== /root/FUSEE/build/micro-test/results/search_lat-1rp.txt ===
+  count=100000  avg=67.60us  min=41us  med=67us  p95=68us  p99=70us  max=6420us
+=== /root/FUSEE/build/micro-test/results/search_lat-2rp.txt ===
+  count=100000  avg=5.60us  min=4us  med=6us  p95=6us  p99=7us  max=210us
+=== /root/FUSEE/build/micro-test/results/update_lat-1rp.txt ===
+  count=100000  avg=78.64us  min=49us  med=79us  p95=79us  p99=80us  max=6273us
+=== /root/FUSEE/build/micro-test/results/update_lat-2rp.txt ===
+  count=100000  avg=10.52us  min=9us  med=10us  p95=11us  p99=12us  max=367us

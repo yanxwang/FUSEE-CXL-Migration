@@ -1,0 +1,338 @@
+client 0 main process running on core: 0
+client 3 main process running on core: 6
+client 1 main process running on core: 2
+client 2 main process running on core: 4
+client 6 main process running on core: 12
+client 5 main process running on core: 10
+client 4 main process running on core: 8
+client 7 main process running on core: 14
+client 8 main process running on core: 16
+client 10 main process running on core: 20
+client 9 main process running on core: 18
+client 11 main process running on core: 22
+client 12 main process running on core: 24
+client 13 main process running on core: 26
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 28000000
+mmblock 1: 28000000
+mmblock 2: 28000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+mmblock 0: 44000000
+mmblock 1: 44000000
+mmblock 2: 44000000
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+mmblock 0: 54000000
+mmblock 1: 54000000
+mmblock 2: 54000000
+allocating 268435456
+Client 0 start
+Client 4 start
+Client 6 start
+Client 5 start
+Client 10 start
+Client 2 start
+Client 13 start
+Client 1 start
+Client 3 start
+Client 8 start
+Client 9 start
+load 0 -1
+Client 7 start
+Client 11 start
+4 waiting workload
+Client 12 start
+12 waiting workload
+10 waiting workload
+5 waiting workload
+6 waiting workload
+7 waiting workload
+1 waiting workload
+8 waiting workload
+11 waiting workload
+9 waiting workload
+2 waiting workload
+poll thread on core: 9
+3 waiting workload
+13 waiting workload
+poll thread on core: 3
+poll thread on core: 5
+poll thread on core: 7
+poll thread on core: 11
+poll thread on core: 13
+poll thread on core: 15
+poll thread on core: 17
+poll thread on core: 19
+poll thread on core: 21
+poll thread on core: 25
+poll thread on core: 23
+poll thread on core: 27
+poll thread on core: 1
+load 100000 operations
+Load phase start
+Load phase ends (Failed 0)
+time spent: 13348.461914 ms
+0 passed load barrier
+load 0 100000
+12 passed load barrier
+4 passed load barrier
+13 passed load barrier
+11 passed load barrier
+load 0 100000
+5 passed load barrier
+load 0 100000
+9 passed load barrier
+load 0 100000
+10 passed load barrier
+load 0 100000
+7 passed load barrier
+load 0 100000
+6 passed load barrier
+load 0 100000
+8 passed load barrier
+load 0 100000
+load 0 100000
+load 0 100000
+1 passed load barrier
+load 0 100000
+3 passed load barrier
+load 0 100000
+load 0 100000
+2 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+Test phase start
+0 initializes timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+6 wait for timer
+Test phase start
+3 wait for timer
+4 wait for timer
+2 wait for timer
+5 wait for timer
+1 wait for timer
+8 wait for timer
+10 wait for timer
+9 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+12 wait for timer
+7 wait for timer
+11 wait for timer
+13 wait for timer
+13 passed barrier
+4 passed barrier
+0 passed barrier
+12 passed barrier
+6 passed barrier
+1 passed barrier
+3 passed barrier
+2 passed barrier
+10 passed barrier
+7 passed barrier
+9 passed barrier
+11 passed barrier
+5 passed barrier
+8 passed barrier
+fb0 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb0 finished
+fb2 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb2 finished
+fb3 finished
+fb1 finished
+fb4 finished
+fb2 finished
+fb5 finished
+fb6 finished
+fb2 finished
+fb3 finished
+fb2 finished
+fb3 finished
+fb3 finished
+fb1 finished
+fb4 finished
+fb2 finished
+fb3 finished
+fb3 finished
+fb4 finished
+fb3 finished
+fb5 finished
+fb6 finished
+fb1 finished
+fb7 finished
+fb2 finished
+fb3 finished
+fb3 finished
+fb4 finished
+fb4 finished
+fb3 finished
+fb5 finished
+fb5 finished
+fb6 finished
+fb3 finished
+fb7 finished
+fb4 finished
+fb1 finished
+fb1 finished
+fb4 finished
+fb5 finished
+fb5 finished
+fb6 finished
+fb6 finished
+fb6 finished
+fb4 finished
+fb7 finished
+fb5 finished
+fb4 finished
+fb2 finished
+fb2 finished
+fb3 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb7 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb5 finished
+fb4 finished
+fb7 finished
+fb4 finished
+fb4 finished
+fb6 finished
+fb7 finished
+fb6 finished
+fb7 finished
+fb5 finished
+fb5 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb6 finished
+fb7 finished
+fb7 finished
+fb6 finished
+fb7 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 0 141083 ops/s
+0 failed
+thread: 6 144921 ops/s
+0 failed
+thread: 3 145743 ops/s
+0 failed
+thread: 4 143743 ops/s
+0 failed
+thread: 2 143852 ops/s
+0 failed
+thread: 5 145580 ops/s
+0 failed
+thread: 8 125529 ops/s
+0 failed
+thread: 10 126378 ops/s
+0 failed
+thread: 9 126407 ops/s
+0 failed
+thread: 1 144679 ops/s
+0 failed
+thread: 12 124011 ops/s
+0 failed
+thread: 7 125443 ops/s
+0 failed
+thread: 11 125522 ops/s
+0 failed
+thread: 13 124871 ops/s
+0 failed
+total: 18877685 ops
+failed: 0 ops
+tpt: 1887768 ops/s

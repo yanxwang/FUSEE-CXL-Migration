@@ -1,0 +1,5 @@
+=== Sun Apr 19 06:46:08 PM CDT 2026 — Start MN on c1, run latency test on c2 ===
+--- Kill any stale processes ---
+
+--- Start MN on c1 (server_id=0) ---
+MN0 PID: 7979

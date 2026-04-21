@@ -1,0 +1,104 @@
+=== Sun Apr 19 06:44:15 PM CDT 2026 — Install build deps + clone FUSEE on c1/c2 ===
+
+---- [c1] installing ----
+---- [c1] installing ----
+---- [c2] installing ----
+---- [c2] installing ----
+Fetched 1,057 kB in 1s (844 kB/s)
+Reading package lists...
+Fetched 1,057 kB in 1s (844 kB/s)
+Reading package lists...
+Fetched 4,625 kB in 1s (3,174 kB/s)
+Reading package lists...
+Fetched 4,625 kB in 1s (3,174 kB/s)
+Reading package lists...
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+---- [c1] check versions ----
+---- [c1] check versions ----
+cmake version 3.28.3
+cmake version 3.28.3
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+libboost-all-dev 1.83.0.1ubuntu2
+libgtest-dev:amd64 1.14.0-1
+libibverbs-dev:amd64 2510.0.11-1
+librdmacm-dev:amd64 2510.0.11-1
+libtbb-dev:amd64 2021.11.0-2ubuntu2
+libtbb12:amd64 2021.11.0-2ubuntu2
+libtbbbind-2-5:amd64 2021.11.0-2ubuntu2
+libtbbmalloc2:amd64 2021.11.0-2ubuntu2
+memcached 1.6.24-1build3
+libboost-all-dev 1.83.0.1ubuntu2
+libgtest-dev:amd64 1.14.0-1
+libibverbs-dev:amd64 2510.0.11-1
+librdmacm-dev:amd64 2510.0.11-1
+libtbb-dev:amd64 2021.11.0-2ubuntu2
+libtbb12:amd64 2021.11.0-2ubuntu2
+libtbbbind-2-5:amd64 2021.11.0-2ubuntu2
+libtbbmalloc2:amd64 2021.11.0-2ubuntu2
+memcached 1.6.24-1build3
+---- [c1] clone FUSEE ----
+---- [c1] clone FUSEE ----
+Cloning into '/root/FUSEE'...
+Cloning into '/root/FUSEE'...
+CMakeLists.txt
+crash-recover-test
+documents
+micro-test
+README.md
+CMakeLists.txt
+crash-recover-test
+documents
+micro-test
+README.md
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+---- [c2] check versions ----
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+---- [c2] check versions ----
+cmake version 3.28.3
+cmake version 3.28.3
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+libboost-all-dev 1.83.0.1ubuntu2
+libgtest-dev:amd64 1.14.0-1
+libibverbs-dev:amd64 2510.0.11-1
+librdmacm-dev:amd64 2510.0.11-1
+libtbb-dev:amd64 2021.11.0-2ubuntu2
+libtbb12:amd64 2021.11.0-2ubuntu2
+libtbbbind-2-5:amd64 2021.11.0-2ubuntu2
+libtbbmalloc2:amd64 2021.11.0-2ubuntu2
+memcached 1.6.24-1build3
+libboost-all-dev 1.83.0.1ubuntu2
+libgtest-dev:amd64 1.14.0-1
+libibverbs-dev:amd64 2510.0.11-1
+librdmacm-dev:amd64 2510.0.11-1
+libtbb-dev:amd64 2021.11.0-2ubuntu2
+libtbb12:amd64 2021.11.0-2ubuntu2
+libtbbbind-2-5:amd64 2021.11.0-2ubuntu2
+libtbbmalloc2:amd64 2021.11.0-2ubuntu2
+memcached 1.6.24-1build3
+---- [c2] clone FUSEE ----
+---- [c2] clone FUSEE ----
+Cloning into '/root/FUSEE'...
+Cloning into '/root/FUSEE'...
+CMakeLists.txt
+crash-recover-test
+documents
+micro-test
+README.md
+CMakeLists.txt
+crash-recover-test
+documents
+micro-test
+README.md
+
+=== Both installs done ===

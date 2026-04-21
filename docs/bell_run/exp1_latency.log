@@ -1,0 +1,21 @@
+main process running on core: 0
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 28000000
+mmblock 1: 28000000
+mmblock 2: 28000000
+mmblock 0: 2c000000
+mmblock 1: 2c000000
+mmblock 2: 2c000000
+mmblock 0: 30000000
+mmblock 1: 30000000
+mmblock 2: 30000000
+allocating 268435456
+lat test INSERT
+Failed: 0
+lat test READ
+Failed: 0
+lat test UPDATE
+Failed: 0
+lat test DELETE
+Failed: 0

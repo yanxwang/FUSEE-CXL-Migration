@@ -1,0 +1,1177 @@
+client 0 main process running on core: 0
+client 1 main process running on core: 2
+client 2 main process running on core: 4
+client 3 main process running on core: 6
+client 4 main process running on core: 8
+client 6 main process running on core: 12
+client 7 main process running on core: 14
+client 9 main process running on core: 18
+client 8 main process running on core: 16
+client 10 main process running on core: 20
+client 24 main process running on core: 0
+client 24 main process running on core: 1
+client 24 main process running on core: 2
+client 24 main process running on core: 3
+client 27 main process running on core: 0
+client 26 main process running on core: 0
+client 25 main process running on core: 0
+client 24 main process running on core: 4
+client 27 main process running on core: 1
+client 26 main process running on core: 1
+client 11 main process running on core: 22
+client 25 main process running on core: 1
+client 24 main process running on core: 5
+client 27 main process running on core: 2
+client 26 main process running on core: 2
+client 28 main process running on core: 0
+client 25 main process running on core: 2
+client 24 main process running on core: 6
+client 27 main process running on core: 3
+client 26 main process running on core: 3
+client 28 main process running on core: 1
+client 25 main process running on core: 3
+client 24 main process running on core: 7
+client 27 main process running on core: 4
+client 26 main process running on core: 4
+client 28 main process running on core: 2
+client 25 main process running on core: 4
+client 5 main process running on core: 10
+client 24 main process running on core: 8
+client 26 main process running on core: 5
+client 25 main process running on core: 5
+client 27 main process running on core: 5
+client 28 main process running on core: 3
+client 24 main process running on core: 9
+client 12 main process running on core: 24
+client 26 main process running on core: 6
+client 25 main process running on core: 6
+client 29 main process running on core: 0
+client 28 main process running on core: 4
+client 24 main process running on core: 10
+client 27 main process running on core: 6
+client 26 main process running on core: 7
+client 31 main process running on core: 0
+client 30 main process running on core: 0
+client 28 main process running on core: 5
+client 25 main process running on core: 7
+client 29 main process running on core: 1
+client 24 main process running on core: 11
+client 26 main process running on core: 8
+client 30 main process running on core: 1
+client 28 main process running on core: 6
+client 31 main process running on core: 1
+client 27 main process running on core: 7
+client 25 main process running on core: 8
+client 29 main process running on core: 2
+client 24 main process running on core: 12
+client 30 main process running on core: 2
+client 26 main process running on core: 9
+client 28 main process running on core: 7
+client 31 main process running on core: 2
+client 27 main process running on core: 8
+client 25 main process running on core: 9
+client 29 main process running on core: 3
+client 24 main process running on core: 13
+client 13 main process running on core: 26
+client 30 main process running on core: 3
+client 28 main process running on core: 8
+client 26 main process running on core: 10
+client 31 main process running on core: 3
+client 27 main process running on core: 9
+client 29 main process running on core: 4
+client 25 main process running on core: 10
+client 24 main process running on core: 14
+client 30 main process running on core: 4
+client 28 main process running on core: 9
+client 26 main process running on core: 11
+client 27 main process running on core: 10
+client 29 main process running on core: 5
+client 25 main process running on core: 11
+client 24 main process running on core: 15
+client 31 main process running on core: 4
+client 30 main process running on core: 5
+client 28 main process running on core: 10
+client 26 main process running on core: 12
+client 29 main process running on core: 6
+client 25 main process running on core: 12
+client 24 main process running on core: 16
+client 31 main process running on core: 5
+client 27 main process running on core: 11
+client 30 main process running on core: 6
+client 28 main process running on core: 11
+client 26 main process running on core: 13
+client 29 main process running on core: 7
+client 25 main process running on core: 13
+client 24 main process running on core: 17
+client 31 main process running on core: 6
+client 28 main process running on core: 12
+client 26 main process running on core: 14
+client 29 main process running on core: 8
+client 25 main process running on core: 14
+client 27 main process running on core: 12
+client 30 main process running on core: 7
+client 24 main process running on core: 18
+client 31 main process running on core: 7
+client 28 main process running on core: 13
+client 29 main process running on core: 9
+client 25 main process running on core: 15
+client 26 main process running on core: 15
+client 30 main process running on core: 8
+client 27 main process running on core: 13
+client 24 main process running on core: 19
+client 31 main process running on core: 8
+client 28 main process running on core: 14
+client 15 main process running on core: 30
+client 29 main process running on core: 10
+client 25 main process running on core: 16
+client 26 main process running on core: 16
+client 30 main process running on core: 9
+client 27 main process running on core: 14
+client 31 main process running on core: 9
+client 28 main process running on core: 15
+client 24 main process running on core: 20
+client 25 main process running on core: 17
+client 29 main process running on core: 11
+client 26 main process running on core: 17
+client 30 main process running on core: 10
+client 27 main process running on core: 15
+client 31 main process running on core: 10
+client 28 main process running on core: 16
+client 24 main process running on core: 21
+client 25 main process running on core: 18
+client 29 main process running on core: 12
+client 26 main process running on core: 18
+client 30 main process running on core: 11
+client 27 main process running on core: 16
+client 31 main process running on core: 11
+client 28 main process running on core: 17
+client 24 main process running on core: 22
+client 25 main process running on core: 19
+client 16 main process running on core: 32
+client 26 main process running on core: 19
+client 30 main process running on core: 12
+client 28 main process running on core: 18
+client 27 main process running on core: 17
+client 14 main process running on core: 28
+client 31 main process running on core: 12
+client 29 main process running on core: 13
+client 25 main process running on core: 20
+client 24 main process running on core: 23
+client 26 main process running on core: 20
+client 30 main process running on core: 13
+client 28 main process running on core: 19
+client 31 main process running on core: 13
+client 29 main process running on core: 14
+client 25 main process running on core: 21
+client 27 main process running on core: 18
+client 24 main process running on core: 24
+client 26 main process running on core: 21
+client 30 main process running on core: 14
+client 28 main process running on core: 20
+client 31 main process running on core: 14
+client 25 main process running on core: 22
+client 29 main process running on core: 15
+client 27 main process running on core: 19
+client 24 main process running on core: 25
+client 26 main process running on core: 22
+client 30 main process running on core: 15
+client 28 main process running on core: 21
+client 31 main process running on core: 15
+client 27 main process running on core: 20
+client 25 main process running on core: 23
+client 29 main process running on core: 16
+client 24 main process running on core: 26
+client 26 main process running on core: 23
+client 30 main process running on core: 16
+client 28 main process running on core: 22
+client 31 main process running on core: 16
+client 17 main process running on core: 34
+client 24 main process running on core: 27
+client 27 main process running on core: 21
+client 25 main process running on core: 24
+client 29 main process running on core: 17
+client 26 main process running on core: 24
+client 30 main process running on core: 17
+client 28 main process running on core: 23
+client 31 main process running on core: 17
+client 24 main process running on core: 28
+client 27 main process running on core: 22
+client 25 main process running on core: 25
+client 29 main process running on core: 18
+client 26 main process running on core: 25
+client 28 main process running on core: 24
+client 31 main process running on core: 18
+client 30 main process running on core: 18
+client 24 main process running on core: 29
+client 27 main process running on core: 23
+client 25 main process running on core: 26
+client 29 main process running on core: 19
+client 26 main process running on core: 26
+client 28 main process running on core: 25
+client 31 main process running on core: 19
+client 30 main process running on core: 19
+client 24 main process running on core: 30
+client 27 main process running on core: 24
+client 25 main process running on core: 27
+client 29 main process running on core: 20
+client 26 main process running on core: 27
+client 28 main process running on core: 26
+client 30 main process running on core: 20
+client 18 main process running on core: 36
+client 31 main process running on core: 20
+client 24 main process running on core: 31
+client 27 main process running on core: 25
+client 26 main process running on core: 28
+client 25 main process running on core: 28
+client 28 main process running on core: 27
+client 29 main process running on core: 21
+client 30 main process running on core: 21
+client 31 main process running on core: 21
+client 24 main process running on core: 32
+client 27 main process running on core: 26
+client 25 main process running on core: 29
+client 26 main process running on core: 29
+client 28 main process running on core: 28
+client 30 main process running on core: 22
+client 29 main process running on core: 22
+client 31 main process running on core: 22
+client 24 main process running on core: 33
+client 27 main process running on core: 27
+client 25 main process running on core: 30
+client 26 main process running on core: 30
+client 28 main process running on core: 29
+client 30 main process running on core: 23
+client 31 main process running on core: 23
+client 24 main process running on core: 34
+client 27 main process running on core: 28
+client 25 main process running on core: 31
+client 26 main process running on core: 31
+client 29 main process running on core: 23
+client 19 main process running on core: 38
+client 30 main process running on core: 24
+client 28 main process running on core: 30
+client 31 main process running on core: 24
+client 25 main process running on core: 32
+client 27 main process running on core: 29
+client 26 main process running on core: 32
+client 24 main process running on core: 35
+client 29 main process running on core: 24
+client 30 main process running on core: 25
+client 20 main process running on core: 40
+client 28 main process running on core: 31
+client 31 main process running on core: 25
+client 25 main process running on core: 33
+client 24 main process running on core: 36
+client 30 main process running on core: 26
+client 26 main process running on core: 33
+client 29 main process running on core: 25
+client 28 main process running on core: 32
+client 31 main process running on core: 26
+client 27 main process running on core: 30
+client 25 main process running on core: 34
+client 24 main process running on core: 37
+client 30 main process running on core: 27
+client 26 main process running on core: 34
+client 29 main process running on core: 26
+client 31 main process running on core: 27
+client 28 main process running on core: 33
+client 27 main process running on core: 31
+client 25 main process running on core: 35
+client 24 main process running on core: 38
+client 30 main process running on core: 28
+client 26 main process running on core: 35
+client 29 main process running on core: 27
+client 31 main process running on core: 28
+client 25 main process running on core: 36
+client 28 main process running on core: 34
+client 27 main process running on core: 32
+client 24 main process running on core: 39
+client 21 main process running on core: 42
+client 26 main process running on core: 36
+client 29 main process running on core: 28
+client 25 main process running on core: 37
+client 30 main process running on core: 29
+client 31 main process running on core: 29
+client 27 main process running on core: 33
+client 24 main process running on core: 40
+client 28 main process running on core: 35
+client 26 main process running on core: 37
+client 29 main process running on core: 29
+client 25 main process running on core: 38
+client 27 main process running on core: 34
+client 30 main process running on core: 30
+client 31 main process running on core: 30
+client 24 main process running on core: 41
+client 28 main process running on core: 36
+client 26 main process running on core: 38
+client 29 main process running on core: 30
+client 25 main process running on core: 39
+client 27 main process running on core: 35
+client 30 main process running on core: 31
+client 24 main process running on core: 42
+client 28 main process running on core: 37
+client 31 main process running on core: 31
+client 26 main process running on core: 39
+client 25 main process running on core: 40
+client 29 main process running on core: 31
+client 24 main process running on core: 43
+client 30 main process running on core: 32
+client 27 main process running on core: 36
+client 28 main process running on core: 38
+client 31 main process running on core: 32
+client 22 main process running on core: 44
+client 26 main process running on core: 40
+client 28 main process running on core: 39
+client 25 main process running on core: 41
+client 29 main process running on core: 32
+client 24 main process running on core: 44
+client 28 main process running on core: 40
+client 25 main process running on core: 42
+client 31 main process running on core: 33
+client 26 main process running on core: 41
+client 24 main process running on core: 45
+client 27 main process running on core: 37
+client 29 main process running on core: 33
+client 25 main process running on core: 43
+client 28 main process running on core: 41
+client 31 main process running on core: 34
+client 26 main process running on core: 42
+client 24 main process running on core: 46
+client 27 main process running on core: 38
+client 23 main process running on core: 46
+client 30 main process running on core: 33
+client 25 main process running on core: 44
+client 28 main process running on core: 42
+client 31 main process running on core: 35
+client 26 main process running on core: 43
+client 24 main process running on core: 47
+client 30 main process running on core: 34
+client 29 main process running on core: 34
+client 28 main process running on core: 43
+client 27 main process running on core: 39
+client 26 main process running on core: 44
+client 31 main process running on core: 36
+client 25 main process running on core: 45
+client 29 main process running on core: 35
+client 27 main process running on core: 40
+client 26 main process running on core: 45
+client 28 main process running on core: 44
+client 29 main process running on core: 36
+client 30 main process running on core: 35
+client 27 main process running on core: 41
+client 26 main process running on core: 46
+client 25 main process running on core: 46
+client 31 main process running on core: 37
+client 30 main process running on core: 36
+client 28 main process running on core: 45
+client 25 main process running on core: 47
+client 29 main process running on core: 37
+client 27 main process running on core: 42
+client 26 main process running on core: 47
+client 27 main process running on core: 43
+client 30 main process running on core: 37
+client 27 main process running on core: 44
+client 31 main process running on core: 38
+client 29 main process running on core: 38
+client 31 main process running on core: 39
+client 29 main process running on core: 39
+client 31 main process running on core: 40
+client 29 main process running on core: 40
+client 31 main process running on core: 41
+client 29 main process running on core: 41
+client 31 main process running on core: 42
+client 29 main process running on core: 42
+client 28 main process running on core: 46
+client 27 main process running on core: 45
+client 30 main process running on core: 38
+client 27 main process running on core: 46
+client 29 main process running on core: 43
+client 31 main process running on core: 43
+client 28 main process running on core: 47
+client 27 main process running on core: 47
+client 29 main process running on core: 44
+client 29 main process running on core: 45
+client 31 main process running on core: 44
+client 29 main process running on core: 46
+client 31 main process running on core: 45
+client 29 main process running on core: 47
+client 31 main process running on core: 46
+client 30 main process running on core: 39
+client 31 main process running on core: 47
+client 30 main process running on core: 40
+client 30 main process running on core: 41
+client 30 main process running on core: 42
+client 30 main process running on core: 43
+client 30 main process running on core: 44
+client 30 main process running on core: 45
+client 30 main process running on core: 46
+client 30 main process running on core: 47
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 28000000
+mmblock 1: 28000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+mmblock 0: 44000000
+mmblock 1: 44000000
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+Client 0 start
+Client 19 start
+Client 3 start
+Client 14 start
+Client 8 start
+Client 13 start
+Client 25 start
+Client 23 start
+Client 31 start
+Client 24 start
+Client 2 start
+Client 5 start
+Client 20 start
+Client 11 start
+Client 28 start
+Client 12 start
+Client 6 start
+Client 9 start
+Client 15 start
+Client 10 start
+Client 29 start
+Client 21 start
+Client 22 start
+Client 17 start
+Client 4 start
+Client 26 start
+Client 1 start
+Client 18 start
+Client 30 start
+Client 16 start
+Client 7 start
+Client 27 start
+19 waiting workload
+load 0 -1
+poll thread on core: 1
+3 waiting workload
+14 waiting workload
+2 waiting workload
+20 waiting workload
+5 waiting workload
+poll thread on core: 39
+9 waiting workload
+12 waiting workload
+15 waiting workload
+6 waiting workload
+21 waiting workload
+31 waiting workload
+11 waiting workload
+28 waiting workload
+29 waiting workload
+30 waiting workload
+17 waiting workload
+26 waiting workload
+10 waiting workload
+16 waiting workload
+4 waiting workload
+13 waiting workload
+22 waiting workload
+18 waiting workload
+7 waiting workload
+1 waiting workload
+23 waiting workload
+25 waiting workload
+24 waiting workload
+poll thread on core: 0
+8 waiting workload
+poll thread on core: 1
+poll thread on core: 0
+poll thread on core: 2
+poll thread on core: 0
+poll thread on core: 0
+poll thread on core: 0
+poll thread on core: 1
+poll thread on core: 3
+poll thread on core: 1
+poll thread on core: 1
+poll thread on core: 1
+poll thread on core: 2
+poll thread on core: 4
+poll thread on core: 2
+poll thread on core: 5
+poll thread on core: 3
+poll thread on core: 2
+poll thread on core: 3
+poll thread on core: 2
+poll thread on core: 5
+poll thread on core: 3
+poll thread on core: 7
+poll thread on core: 3
+poll thread on core: 4
+poll thread on core: 6
+poll thread on core: 3
+poll thread on core: 4
+poll thread on core: 4
+poll thread on core: 5
+poll thread on core: 4
+27 waiting workload
+poll thread on core: 5
+poll thread on core: 5
+poll thread on core: 5
+poll thread on core: 6
+poll thread on core: 6
+poll thread on core: 6
+poll thread on core: 6
+poll thread on core: 7
+poll thread on core: 7
+poll thread on core: 7
+poll thread on core: 7
+poll thread on core: 8
+poll thread on core: 11
+poll thread on core: 8
+poll thread on core: 8
+poll thread on core: 8
+poll thread on core: 9
+poll thread on core: 9
+poll thread on core: 9
+poll thread on core: 9
+poll thread on core: 10
+poll thread on core: 10
+poll thread on core: 10
+poll thread on core: 13
+poll thread on core: 11
+poll thread on core: 12
+poll thread on core: 0
+poll thread on core: 13
+poll thread on core: 17
+poll thread on core: 1
+poll thread on core: 14
+poll thread on core: 2
+poll thread on core: 15
+poll thread on core: 16
+poll thread on core: 3
+poll thread on core: 19
+poll thread on core: 17
+poll thread on core: 4
+poll thread on core: 18
+poll thread on core: 5
+poll thread on core: 19
+poll thread on core: 6
+poll thread on core: 25
+poll thread on core: 23
+poll thread on core: 0
+poll thread on core: 27
+poll thread on core: 31
+poll thread on core: 1
+poll thread on core: 2
+poll thread on core: 3
+poll thread on core: 4
+poll thread on core: 29
+poll thread on core: 5
+poll thread on core: 33
+poll thread on core: 35
+poll thread on core: 11
+poll thread on core: 6
+poll thread on core: 12
+poll thread on core: 7
+poll thread on core: 13
+poll thread on core: 8
+poll thread on core: 9
+poll thread on core: 37
+poll thread on core: 14
+poll thread on core: 9
+poll thread on core: 21
+poll thread on core: 10
+poll thread on core: 15
+poll thread on core: 11
+poll thread on core: 15
+poll thread on core: 7
+poll thread on core: 12
+poll thread on core: 8
+poll thread on core: 13
+poll thread on core: 9
+poll thread on core: 10
+poll thread on core: 14
+poll thread on core: 0
+poll thread on core: 10
+poll thread on core: 11
+poll thread on core: 41
+poll thread on core: 1
+poll thread on core: 15
+poll thread on core: 11
+poll thread on core: 12
+poll thread on core: 2
+poll thread on core: 16
+poll thread on core: 12
+poll thread on core: 3
+poll thread on core: 17
+poll thread on core: 13
+poll thread on core: 4
+poll thread on core: 13
+poll thread on core: 18
+poll thread on core: 14
+poll thread on core: 5
+poll thread on core: 14
+poll thread on core: 19
+poll thread on core: 15
+poll thread on core: 6
+poll thread on core: 15
+poll thread on core: 16
+poll thread on core: 20
+poll thread on core: 45
+poll thread on core: 16
+poll thread on core: 17
+poll thread on core: 21
+poll thread on core: 7
+poll thread on core: 17
+poll thread on core: 18
+poll thread on core: 22
+poll thread on core: 8
+poll thread on core: 18
+poll thread on core: 19
+poll thread on core: 23
+poll thread on core: 9
+poll thread on core: 19
+poll thread on core: 24
+poll thread on core: 10
+poll thread on core: 20
+poll thread on core: 25
+poll thread on core: 20
+poll thread on core: 11
+poll thread on core: 26
+poll thread on core: 21
+poll thread on core: 21
+poll thread on core: 27
+poll thread on core: 22
+poll thread on core: 22
+poll thread on core: 12
+poll thread on core: 23
+poll thread on core: 28
+poll thread on core: 24
+poll thread on core: 23
+poll thread on core: 29
+poll thread on core: 13
+poll thread on core: 25
+poll thread on core: 30
+poll thread on core: 24
+poll thread on core: 14
+poll thread on core: 26
+poll thread on core: 31
+poll thread on core: 25
+poll thread on core: 15
+poll thread on core: 27
+poll thread on core: 32
+poll thread on core: 26
+poll thread on core: 16
+poll thread on core: 28
+poll thread on core: 33
+poll thread on core: 20
+poll thread on core: 16
+poll thread on core: 27
+poll thread on core: 7
+poll thread on core: 34
+poll thread on core: 17
+poll thread on core: 17
+poll thread on core: 11
+poll thread on core: 18
+poll thread on core: 35
+poll thread on core: 28
+poll thread on core: 12
+poll thread on core: 18
+poll thread on core: 29
+poll thread on core: 36
+poll thread on core: 13
+poll thread on core: 21
+poll thread on core: 29
+poll thread on core: 19
+poll thread on core: 8
+poll thread on core: 14
+poll thread on core: 37
+poll thread on core: 30
+poll thread on core: 20
+poll thread on core: 22
+poll thread on core: 15
+poll thread on core: 30
+poll thread on core: 38
+poll thread on core: 19
+poll thread on core: 23
+poll thread on core: 31
+poll thread on core: 31
+poll thread on core: 9
+poll thread on core: 16
+poll thread on core: 32
+poll thread on core: 39
+poll thread on core: 32
+poll thread on core: 21
+poll thread on core: 17
+poll thread on core: 40
+poll thread on core: 33
+poll thread on core: 20
+poll thread on core: 24
+poll thread on core: 22
+poll thread on core: 34
+poll thread on core: 41
+poll thread on core: 47
+poll thread on core: 18
+poll thread on core: 21
+poll thread on core: 42
+poll thread on core: 19
+poll thread on core: 25
+poll thread on core: 22
+poll thread on core: 33
+poll thread on core: 23
+poll thread on core: 24
+poll thread on core: 25
+poll thread on core: 20
+poll thread on core: 26
+poll thread on core: 21
+poll thread on core: 43
+poll thread on core: 22
+poll thread on core: 44
+poll thread on core: 26
+poll thread on core: 23
+poll thread on core: 45
+poll thread on core: 23
+poll thread on core: 27
+poll thread on core: 43
+poll thread on core: 46
+poll thread on core: 27
+poll thread on core: 24
+poll thread on core: 28
+poll thread on core: 24
+poll thread on core: 47
+poll thread on core: 35
+poll thread on core: 25
+poll thread on core: 34
+poll thread on core: 28
+poll thread on core: 29
+poll thread on core: 26
+poll thread on core: 36
+poll thread on core: 29
+poll thread on core: 25
+poll thread on core: 30
+poll thread on core: 27
+poll thread on core: 35
+poll thread on core: 26
+poll thread on core: 31
+poll thread on core: 37
+poll thread on core: 28
+poll thread on core: 27
+poll thread on core: 36
+poll thread on core: 38
+poll thread on core: 29
+poll thread on core: 28
+poll thread on core: 30
+poll thread on core: 39
+poll thread on core: 29
+poll thread on core: 32
+poll thread on core: 40
+poll thread on core: 31
+poll thread on core: 30
+poll thread on core: 37
+poll thread on core: 31
+poll thread on core: 41
+poll thread on core: 32
+poll thread on core: 42
+poll thread on core: 32
+poll thread on core: 33
+poll thread on core: 30
+poll thread on core: 43
+poll thread on core: 34
+poll thread on core: 31
+poll thread on core: 33
+poll thread on core: 33
+poll thread on core: 32
+poll thread on core: 35
+poll thread on core: 34
+poll thread on core: 36
+poll thread on core: 34
+poll thread on core: 35
+poll thread on core: 37
+poll thread on core: 44
+poll thread on core: 36
+poll thread on core: 33
+poll thread on core: 38
+poll thread on core: 35
+poll thread on core: 45
+poll thread on core: 39
+poll thread on core: 37
+poll thread on core: 36
+poll thread on core: 34
+poll thread on core: 46
+poll thread on core: 38
+poll thread on core: 37
+poll thread on core: 39
+poll thread on core: 38
+poll thread on core: 35
+poll thread on core: 47
+poll thread on core: 39
+poll thread on core: 36
+poll thread on core: 40
+poll thread on core: 40
+poll thread on core: 37
+poll thread on core: 40
+poll thread on core: 41
+poll thread on core: 41
+poll thread on core: 38
+poll thread on core: 41
+poll thread on core: 42
+poll thread on core: 39
+poll thread on core: 42
+poll thread on core: 42
+poll thread on core: 43
+poll thread on core: 43
+poll thread on core: 43
+poll thread on core: 40
+poll thread on core: 44
+poll thread on core: 44
+poll thread on core: 45
+poll thread on core: 46
+poll thread on core: 45
+poll thread on core: 44
+poll thread on core: 47
+poll thread on core: 46
+poll thread on core: 41
+poll thread on core: 42
+poll thread on core: 47
+poll thread on core: 43
+poll thread on core: 44
+poll thread on core: 45
+poll thread on core: 46
+poll thread on core: 45
+poll thread on core: 47
+poll thread on core: 46
+poll thread on core: 47
+poll thread on core: 10
+poll thread on core: 11
+poll thread on core: 38
+poll thread on core: 12
+poll thread on core: 39
+poll thread on core: 13
+poll thread on core: 40
+poll thread on core: 41
+poll thread on core: 14
+poll thread on core: 42
+poll thread on core: 15
+poll thread on core: 16
+poll thread on core: 17
+poll thread on core: 18
+poll thread on core: 43
+poll thread on core: 19
+poll thread on core: 44
+poll thread on core: 45
+poll thread on core: 46
+poll thread on core: 47
+poll thread on core: 20
+poll thread on core: 21
+poll thread on core: 22
+poll thread on core: 23
+poll thread on core: 24
+poll thread on core: 25
+poll thread on core: 26
+poll thread on core: 27
+poll thread on core: 28
+poll thread on core: 29
+poll thread on core: 30
+poll thread on core: 31
+poll thread on core: 32
+poll thread on core: 33
+poll thread on core: 34
+poll thread on core: 35
+poll thread on core: 36
+poll thread on core: 37
+poll thread on core: 38
+poll thread on core: 39
+poll thread on core: 40
+poll thread on core: 41
+poll thread on core: 42
+poll thread on core: 43
+poll thread on core: 44
+poll thread on core: 45
+poll thread on core: 46
+poll thread on core: 47
+load 100000 operations
+Load phase start
+Load phase ends (Failed 0)
+time spent: 15420.036133 ms
+14 passed load barrier
+9 passed load barrier
+21 passed load barrier
+31 passed load barrier
+load 0 100000
+19 passed load barrier
+17 passed load barrier
+load 0 100000
+7 passed load barrier
+25 passed load barrier
+27 passed load barrier
+load 0 100000
+load 0 100000
+28 passed load barrier
+16 passed load barrier
+load 0 100000
+29 passed load barrier
+4 passed load barrier
+load 0 100000
+load 0 100000
+10 passed load barrier
+13 passed load barrier
+load 0 100000
+load 0 100000
+24 passed load barrier
+load 0 100000
+2 passed load barrier
+load 0 100000
+load 0 100000
+30 passed load barrier
+load 0 100000
+22 passed load barrier
+load 0 100000
+23 passed load barrier
+8 passed load barrier
+15 passed load barrier
+11 passed load barrier
+18 passed load barrier
+load 0 100000
+26 passed load barrier
+load 0 100000
+load 0 100000
+0 passed load barrier
+load 0 100000
+1 passed load barrier
+load 0 100000
+12 passed load barrier
+load 0 100000
+5 passed load barrier
+load 0 100000
+load 0 100000
+3 passed load barrier
+load 0 100000
+load 0 100000
+load 0 100000
+load 0 100000
+6 passed load barrier
+load 0 100000
+load 0 100000
+load 0 100000
+load 0 100000
+load 0 100000
+20 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+Test phase start
+16 wait for timer
+Test phase start
+12 wait for timer
+Test phase start
+13 wait for timer
+Test phase start
+19 wait for timer
+Test phase start
+4 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+21 wait for timer
+17 wait for timer
+14 wait for timer
+22 wait for timer
+3 wait for timer
+Test phase start
+Test phase start
+10 wait for timer
+20 wait for timer
+Test phase start
+26 wait for timer
+Test phase start
+31 wait for timer
+Test phase start
+Test phase start
+1 wait for timer
+0 initializes timer
+Test phase start
+5 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+27 wait for timer
+Test phase start
+8 wait for timer
+6 wait for timer
+18 wait for timer
+9 wait for timer
+Test phase start
+Test phase start
+28 wait for timer
+24 wait for timer
+Test phase start
+Test phase start
+Test phase start
+29 wait for timer
+15 wait for timer
+11 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+30 wait for timer
+7 wait for timer
+2 wait for timer
+Test phase start
+25 wait for timer
+23 wait for timer
+4 passed barrier
+14 passed barrier
+17 passed barrier
+21 passed barrier
+3 passed barrier
+31 passed barrier
+6 passed barrier
+27 passed barrier
+0 passed barrier
+1 passed barrier
+15 passed barrier
+11 passed barrier
+22 passed barrier
+26 passed barrier
+9 passed barrier
+28 passed barrier
+8 passed barrier
+16 passed barrier
+30 passed barrier
+13 passed barrier
+5 passed barrier
+7 passed barrier
+20 passed barrier
+2 passed barrier
+23 passed barrier
+19 passed barrier
+12 passed barrier
+10 passed barrier
+18 passed barrier
+29 passed barrier
+25 passed barrier
+24 passed barrier
+double free or corruption (!prev)

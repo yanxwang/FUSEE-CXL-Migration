@@ -1,0 +1,22 @@
+================================================================================
+A / B / C Protocol Comparison Results
+================================================================================
+opt wl        thpt (ops/s)   w_avg (us)   w_p99 (us)   r_avg (us)   r_p99 (us)
+--------------------------------------------------------------------------------
+A   A               20,493       773.85      1154.84         0.42         1.47
+A   C           77,149,141           --           --         0.08         0.72
+B   A            1,004,395        14.20        20.84         1.21         7.90
+B   C           13,771,106           --           --         0.35         6.26
+C   A            1,055,222        10.29        14.77         4.22        10.80
+C   C            1,948,933           --           --         3.78         9.39
+--------------------------------------------------------------------------------
+
+Key trends:
+  - Write throughput (YCSB A): C/A = 51.5x
+  - Write latency avg (YCSB A): A/C = 75.2x
+  - Option A pays large sync-replication cost on writes
+  - Option C has lowest write latency (Lazy RC)
+
+Backing: tmpfs (flush+fence ~105ns/149ns for store/load)
+Real CXL would be ~2-5x slower (latencies higher, throughput lower)
+Relative trends between A/B/C should remain the same.

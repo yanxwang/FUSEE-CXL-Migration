@@ -1,0 +1,7 @@
+memory_num,workload,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+1,workloada,14299882,0,1429988,0
+1,workloadc,30209982,0,3020998,0
+2,workloada,12813912,0,1281391,0
+2,workloadc,27771887,0,2777188,0
+3,workloada,10704742,0,1070474,0
+3,workloadc,26109759,0,2610975,0

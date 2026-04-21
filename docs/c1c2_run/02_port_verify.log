@@ -1,0 +1,95 @@
+=== Sun Apr 19 06:43:01 PM CDT 2026 — Port state after opensm on c1 DPU ===
+
+--- c1 host mlx5_0/_1 ibstat ---
+CA 'mlx5_0'
+	CA type: MT41692
+	Number of ports: 1
+	Firmware version: 32.47.1088
+	Hardware version: 1
+	Node GUID: 0xc470bd0300b8638a
+	System image GUID: 0xc470bd0300b8638a
+	Port 1:
+		State: Active
+		Physical state: LinkUp
+		Rate: 100
+		Base lid: 7
+		LMC: 0
+		SM lid: 5
+		Capability mask: 0xa751ec48
+		Port GUID: 0xc470bd0300b8638a
+		Link layer: InfiniBand
+---
+CA 'mlx5_1'
+	CA type: MT41692
+	Number of ports: 1
+	Firmware version: 32.47.1088
+	Hardware version: 1
+	Node GUID: 0xc470bd0300b8638b
+	System image GUID: 0xc470bd0300b8638a
+	Port 1:
+		State: Down
+		Physical state: LinkUp
+		Rate: 100
+		Base lid: 65535
+		LMC: 0
+		SM lid: 0
+		Capability mask: 0xa751ec48
+		Port GUID: 0xc470bd0300b8638b
+		Link layer: InfiniBand
+
+--- c2 host mlx5_0/_1 ibstat ---
+CA 'mlx5_0'
+	CA type: MT41692
+	Number of ports: 1
+	Firmware version: 32.47.1088
+	Hardware version: 1
+	Node GUID: 0xc470bd0300b866ce
+	System image GUID: 0xc470bd0300b866ce
+	Port 1:
+		State: Active
+		Physical state: LinkUp
+		Rate: 100
+		Base lid: 8
+		LMC: 0
+		SM lid: 5
+		Capability mask: 0xa751ec48
+		Port GUID: 0xc470bd0300b866ce
+		Link layer: InfiniBand
+---
+CA 'mlx5_1'
+	CA type: MT41692
+	Number of ports: 1
+	Firmware version: 32.47.1088
+	Hardware version: 1
+	Node GUID: 0xc470bd0300b866cf
+	System image GUID: 0xc470bd0300b866ce
+	Port 1:
+		State: Down
+		Physical state: LinkUp
+		Rate: 100
+		Base lid: 65535
+		LMC: 0
+		SM lid: 0
+		Capability mask: 0xa751ec48
+		Port GUID: 0xc470bd0300b866cf
+		Link layer: InfiniBand
+
+--- rdma link show on c1 ---
+link mlx5_0/1 subnet_prefix fe80:0000:0000:0000 lid 7 sm_lid 5 lmc 0 state ACTIVE physical_state LINK_UP 
+link mlx5_1/1 subnet_prefix fe80:0000:0000:0000 lid 65535 sm_lid 0 lmc 0 state DOWN physical_state LINK_UP 
+
+--- rdma link show on c2 ---
+link mlx5_0/1 subnet_prefix fe80:0000:0000:0000 lid 8 sm_lid 5 lmc 0 state ACTIVE physical_state LINK_UP 
+link mlx5_1/1 subnet_prefix fe80:0000:0000:0000 lid 65535 sm_lid 0 lmc 0 state DOWN physical_state LINK_UP 
+
+--- ibhosts from c1 (should see fabric now) ---
+ibwarn: [4887] get_smi_gsi_pair: Can't open UMAD port (No such device) ((null):0)
+ibwarn: [4887] mad_rpc_open_port2: can't open UMAD port ((null):0)
+./libibnetdisc/ibnetdisc.c:799; can't open MAD port ((null):0)
+/usr/sbin/ibnetdiscover: iberror: failed: discover failed
+
+--- ibswitches from c1 ---
+ibwarn: [4940] get_smi_gsi_pair: Can't open UMAD port (No such device) ((null):0)
+ibwarn: [4940] mad_rpc_open_port2: can't open UMAD port ((null):0)
+./libibnetdisc/ibnetdisc.c:799; can't open MAD port ((null):0)
+/usr/sbin/ibnetdiscover: iberror: failed: discover failed

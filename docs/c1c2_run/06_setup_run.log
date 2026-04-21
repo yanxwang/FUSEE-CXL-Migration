@@ -1,0 +1,18 @@
+=== Sun Apr 19 06:45:52 PM CDT 2026 — HugePages + configs + run test ===
+--- HugePages ---
+vm.nr_hugepages = 7168
+HugePages_Total:    7168
+HugePages_Free:     7168
+(c1 above)
+vm.nr_hugepages = 7168
+HugePages_Total:    7168
+HugePages_Free:     7168
+(c2 above)
+
+--- IB device enumeration (need ib_dev_id 0 == mlx5_0 Active) ---
+    device          	   node GUID
+    ------          	----------------
+    mlx5_0          	c470bd0300b8638a
+    mlx5_1          	c470bd0300b8638b
+
+Configs deployed: c1=MN(server_id=0), c2=CN(server_id=1)

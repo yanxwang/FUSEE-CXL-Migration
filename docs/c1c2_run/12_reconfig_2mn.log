@@ -1,0 +1,2 @@
+=== Sun Apr 19 06:53:35 PM CDT 2026 — Reconfigure with 2 MN (num_replication=2) ===
+=== Start MN0 on c1, MN1 on c2, client on c2 ===

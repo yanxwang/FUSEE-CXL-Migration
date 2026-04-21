@@ -1,0 +1,57 @@
+client 0 main process running on core: 0
+client 1 main process running on core: 2
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 28000000
+mmblock 1: 28000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 2c000000
+mmblock 1: 2c000000
+allocating 268435456
+allocating 268435456
+Client 0 start
+Client 1 start
+load 0 -1
+1 waiting workload
+poll thread on core: 3
+poll thread on core: 1
+load 100000 operations
+Load phase start
+Load phase ends (Failed 0)
+time spent: 15386.808594 ms
+0 passed load barrier
+load 0 100000
+1 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+Test phase start
+1 wait for timer
+Test phase start
+0 initializes timer
+0 passed barrier
+1 passed barrier
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 1 116958 ops/s
+0 failed
+thread: 0 108056 ops/s
+0 failed
+total: 2250149 ops
+failed: 0 ops
+tpt: 225014 ops/s

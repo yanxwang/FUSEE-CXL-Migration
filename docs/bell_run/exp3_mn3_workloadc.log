@@ -1,0 +1,200 @@
+client 0 main process running on core: 0
+client 1 main process running on core: 2
+client 2 main process running on core: 4
+client 3 main process running on core: 6
+client 4 main process running on core: 8
+client 5 main process running on core: 10
+client 6 main process running on core: 12
+client 7 main process running on core: 14
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 34000000
+mmblock 1: 34000000
+mmblock 2: 34000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+mmblock 0: 44000000
+mmblock 1: 44000000
+mmblock 2: 44000000
+allocating 268435456
+allocating 268435456
+allocating 268435456
+mmblock 0: 3c000000
+mmblock 1: 3c000000
+mmblock 2: 3c000000
+allocating 268435456
+Client 0 start
+Client 3 start
+Client 4 start
+Client 5 start
+Client 6 start
+Client 2 start
+Client 1 start
+Client 7 start
+3 waiting workload
+5 waiting workload
+load 0 -1
+4 waiting workload
+6 waiting workload
+2 waiting workload
+1 waiting workload
+7 waiting workload
+poll thread on core: 7
+poll thread on core: 3
+poll thread on core: 5
+poll thread on core: 9
+poll thread on core: 11
+poll thread on core: 13
+poll thread on core: 15
+poll thread on core: 1
+load 100000 operations
+Load phase start
+Load phase ends (Failed 0)
+time spent: 13348.156250 ms
+0 passed load barrier
+load 0 100000
+6 passed load barrier
+load 0 100000
+3 passed load barrier
+load 0 100000
+5 passed load barrier
+load 0 100000
+4 passed load barrier
+load 0 100000
+2 passed load barrier
+load 0 100000
+7 passed load barrier
+load 0 100000
+1 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+0 initializes timer
+4 wait for timer
+5 wait for timer
+6 wait for timer
+3 wait for timer
+2 wait for timer
+1 wait for timer
+7 wait for timer
+7 passed barrier
+3 passed barrier
+6 passed barrier
+1 passed barrier
+4 passed barrier
+5 passed barrier
+2 passed barrier
+0 passed barrier
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb2 finished
+fb0 finished
+fb0 finished
+fb3 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb3 finished
+fb4 finished
+fb4 finished
+fb2 finished
+fb4 finished
+fb1 finished
+fb5 finished
+fb6 finished
+fb3 finished
+fb4 finished
+fb3 finished
+fb5 finished
+fb6 finished
+fb2 finished
+fb7 finished
+fb3 finished
+fb5 finished
+fb7 finished
+fb4 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb6 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 0 327139 ops/s
+0 failed
+thread: 4 333722 ops/s
+0 failed
+thread: 5 324902 ops/s
+0 failed
+thread: 6 322411 ops/s
+0 failed
+thread: 3 331951 ops/s
+0 failed
+thread: 2 331820 ops/s
+0 failed
+thread: 7 314343 ops/s
+0 failed
+thread: 1 324684 ops/s
+0 failed
+total: 26109759 ops
+failed: 0 ops
+tpt: 2610975 ops/s

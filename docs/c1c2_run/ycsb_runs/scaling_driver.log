@@ -1,0 +1,34 @@
+[02:11:48] workloada N=2 ...
+  total=2250149 failed=0 tpt=225014
+[02:12:23] workloada N=4 ...
+  total=4576890 failed=0 tpt=457689
+[02:12:59] workloada N=8 ...
+  total=9033104 failed=0 tpt=903310
+[02:13:36] workloada N=16 ...
+  total=17631942 failed=0 tpt=1763194
+[02:14:15] workloada N=32 ...
+bash: line 1: 262052 Aborted                 (core dumped) stdbuf -oL numactl -N 0 -m 0 ./ycsb_test_multi_client ./client_config.json workloada 32 2>&1
+  TIMEOUT/FAIL (exit=134)
+[02:14:56] workloadc N=2 ...
+  total=4663383 failed=0 tpt=466338
+[02:15:32] workloadc N=4 ...
+  total=9620970 failed=0 tpt=962097
+[02:16:08] workloadc N=8 ...
+  total=18826626 failed=0 tpt=1882662
+[02:16:45] workloadc N=16 ...
+  total=37481187 failed=0 tpt=3748118
+[02:17:25] workloadc N=32 ...
+  total=47073451 failed=0 tpt=4707345
+
+=== SCALING DONE ===
+workload,num_clients,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+workloada,2,2250149,0,225014,0
+workloada,4,4576890,0,457689,0
+workloada,8,9033104,0,903310,0
+workloada,16,17631942,0,1763194,0
+workloada,32,NA,NA,0,134
+workloadc,2,4663383,0,466338,0
+workloadc,4,9620970,0,962097,0
+workloadc,8,18826626,0,1882662,0
+workloadc,16,37481187,0,3748118,0
+workloadc,32,47073451,0,4707345,0

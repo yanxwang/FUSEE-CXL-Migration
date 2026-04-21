@@ -1,0 +1,96 @@
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=A wratio=0.50 threads=1] total=500 ops in 0.401s
+  throughput: 1247 ops/sec
+  RESULT node_id=1 opt=A wl=A wratio=0.50 thpt=1247  w_avg=1534.54 w_p50=1546.60 w_p99=2884.96  r_avg=1.51 r_p50=2.38 r_p99=3.29
+[node 0 opt=A wratio=0.50 threads=1] total=500 ops in 0.397s
+  throughput: 1260 ops/sec
+  RESULT node_id=0 opt=A wl=A wratio=0.50 thpt=1260  w_avg=1530.69 w_p50=1542.81 w_p99=2905.00  r_avg=1.48 r_p50=2.38 r_p99=3.16
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=A wratio=0.50 threads=2] total=500 ops in 0.198s
+  throughput: 2531 ops/sec
+  RESULT node_id=0 opt=A wl=A wratio=0.50 thpt=2531  w_avg=1456.32 w_p50=1398.45 w_p99=2988.50  r_avg=1.39 r_p50=0.71 r_p99=3.12
+[node 1 opt=A wratio=0.50 threads=2] total=500 ops in 0.204s
+  throughput: 2456 ops/sec
+  RESULT node_id=1 opt=A wl=A wratio=0.50 thpt=2456  w_avg=1544.10 w_p50=1532.58 w_p99=3052.14  r_avg=1.40 r_p50=0.71 r_p99=3.01
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=A wratio=0.50 threads=4] total=500 ops in 0.106s
+  throughput: 4718 ops/sec
+  RESULT node_id=1 opt=A wl=A wratio=0.50 thpt=4718  w_avg=1599.26 w_p50=1662.97 w_p99=3110.47  r_avg=1.41 r_p50=0.69 r_p99=3.26
+[node 0 opt=A wratio=0.50 threads=4] total=500 ops in 0.119s
+  throughput: 4206 ops/sec
+  RESULT node_id=0 opt=A wl=A wratio=0.50 thpt=4206  w_avg=1608.04 w_p50=1626.77 w_p99=3009.85  r_avg=1.61 r_p50=2.42 r_p99=3.38
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=A wratio=0.50 threads=8] total=496 ops in 0.060s
+  throughput: 8262 ops/sec
+  RESULT node_id=0 opt=A wl=A wratio=0.50 thpt=8262  w_avg=1494.94 w_p50=1402.97 w_p99=3210.98  r_avg=1.75 r_p50=2.43 r_p99=4.88
+[node 1 opt=A wratio=0.50 threads=8] total=496 ops in 0.059s
+  throughput: 8384 ops/sec
+  RESULT node_id=1 opt=A wl=A wratio=0.50 thpt=8384  w_avg=1521.04 w_p50=1448.13 w_p99=3265.58  r_avg=1.64 r_p50=2.35 r_p99=5.68
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=B wratio=0.50 threads=1] total=2000 ops in 0.023s
+  throughput: 85581 ops/sec
+  RESULT node_id=0 opt=B wl=A wratio=0.50 thpt=85581  w_avg=20.62 w_p50=20.85 w_p99=25.69  r_avg=2.26 r_p50=2.52 r_p99=5.25
+[node 1 opt=B wratio=0.50 threads=1] total=2000 ops in 0.023s
+  throughput: 86984 ops/sec
+  RESULT node_id=1 opt=B wl=A wratio=0.50 thpt=86984  w_avg=20.79 w_p50=20.93 w_p99=25.75  r_avg=2.31 r_p50=3.13 r_p99=5.30
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=B wratio=0.50 threads=2] total=2000 ops in 0.012s
+  throughput: 163229 ops/sec
+  RESULT node_id=0 opt=B wl=A wratio=0.50 thpt=163229  w_avg=21.65 w_p50=21.25 w_p99=26.71  r_avg=2.44 r_p50=2.95 r_p99=5.67
+[node 1 opt=B wratio=0.50 threads=2] total=2000 ops in 0.012s
+  throughput: 164983 ops/sec
+  RESULT node_id=1 opt=B wl=A wratio=0.50 thpt=164983  w_avg=21.55 w_p50=21.52 w_p99=26.26  r_avg=2.50 r_p50=3.52 r_p99=5.60
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=B wratio=0.50 threads=4] total=2000 ops in 0.007s
+  throughput: 295464 ops/sec
+  RESULT node_id=0 opt=B wl=A wratio=0.50 thpt=295464  w_avg=22.46 w_p50=22.59 w_p99=26.89  r_avg=2.60 r_p50=3.07 r_p99=8.11
+[node 1 opt=B wratio=0.50 threads=4] total=2000 ops in 0.007s
+  throughput: 296736 ops/sec
+  RESULT node_id=1 opt=B wl=A wratio=0.50 thpt=296736  w_avg=21.97 w_p50=21.61 w_p99=26.81  r_avg=2.60 r_p50=3.04 r_p99=6.17
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 0 opt=B wratio=0.50 threads=8] total=2000 ops in 0.003s
+  throughput: 620941 ops/sec
+  RESULT node_id=0 opt=B wl=A wratio=0.50 thpt=620941  w_avg=22.55 w_p50=22.06 w_p99=28.11  r_avg=2.52 r_p50=1.02 r_p99=7.13
+[node 1 opt=B wratio=0.50 threads=8] total=2000 ops in 0.003s
+  throughput: 576466 ops/sec
+  RESULT node_id=1 opt=B wl=A wratio=0.50 thpt=576466  w_avg=22.58 w_p50=22.34 w_p99=32.11  r_avg=2.66 r_p50=1.25 r_p99=6.84
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=C wratio=0.50 threads=1] total=2000 ops in 0.028s
+  throughput: 71152 ops/sec
+  RESULT node_id=1 opt=C wl=A wratio=0.50 thpt=71152  w_avg=20.07 w_p50=20.07 w_p99=23.98  r_avg=7.64 r_p50=7.69 r_p99=10.26
+[node 0 opt=C wratio=0.50 threads=1] total=2000 ops in 0.028s
+  throughput: 72691 ops/sec
+  RESULT node_id=0 opt=C wl=A wratio=0.50 thpt=72691  w_avg=20.38 w_p50=20.34 w_p99=24.11  r_avg=7.66 r_p50=7.26 r_p99=10.52
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=C wratio=0.50 threads=2] total=2000 ops in 0.014s
+  throughput: 138223 ops/sec
+  RESULT node_id=1 opt=C wl=A wratio=0.50 thpt=138223  w_avg=20.62 w_p50=20.59 w_p99=23.81  r_avg=7.90 r_p50=7.43 r_p99=10.50
+[node 0 opt=C wratio=0.50 threads=2] total=2000 ops in 0.015s
+  throughput: 137080 ops/sec
+  RESULT node_id=0 opt=C wl=A wratio=0.50 thpt=137080  w_avg=20.48 w_p50=20.47 w_p99=24.04  r_avg=8.03 r_p50=8.35 r_p99=10.40
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=C wratio=0.50 threads=4] total=2000 ops in 0.008s
+  throughput: 266050 ops/sec
+  RESULT node_id=1 opt=C wl=A wratio=0.50 thpt=266050  w_avg=21.32 w_p50=21.21 w_p99=24.02  r_avg=8.20 r_p50=7.70 r_p99=10.59
+[node 0 opt=C wratio=0.50 threads=4] total=2000 ops in 0.008s
+  throughput: 259623 ops/sec
+  RESULT node_id=0 opt=C wl=A wratio=0.50 thpt=259623  w_avg=21.42 w_p50=21.11 w_p99=24.48  r_avg=8.25 r_p50=8.43 r_p99=11.93
+[node 0] init region (520.0 MB)
+[node 1] attached
+[node 1 opt=C wratio=0.50 threads=8] total=2000 ops in 0.004s
+  throughput: 498707 ops/sec
+  RESULT node_id=1 opt=C wl=A wratio=0.50 thpt=498707  w_avg=21.66 w_p50=21.44 w_p99=26.80  r_avg=8.36 r_p50=8.64 r_p99=12.51
+[node 0 opt=C wratio=0.50 threads=8] total=2000 ops in 0.004s
+  throughput: 497879 ops/sec
+  RESULT node_id=0 opt=C wl=A wratio=0.50 thpt=497879  w_avg=21.68 w_p50=21.32 w_p99=25.77  r_avg=8.30 r_p50=8.79 r_p99=12.11

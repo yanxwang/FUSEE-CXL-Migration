@@ -1,0 +1,379 @@
+client 0 main process running on core: 0
+client 2 main process running on core: 4
+client 1 main process running on core: 2
+client 4 main process running on core: 8
+client 5 main process running on core: 10
+client 3 main process running on core: 6
+client 6 main process running on core: 12
+client 7 main process running on core: 14
+client 8 main process running on core: 16
+client 9 main process running on core: 18
+client 10 main process running on core: 20
+client 11 main process running on core: 22
+client 12 main process running on core: 24
+client 14 main process running on core: 28
+client 13 main process running on core: 26
+client 15 main process running on core: 30
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 28000000
+mmblock 1: 28000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+allocating 268435456
+mmblock 0: 5c000000
+mmblock 1: 5c000000
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+Client 0 start
+Client 13 start
+Client 14 start
+Client 2 start
+Client 10 start
+Client 1 start
+Client 9 start
+Client 15 start
+Client 4 start
+Client 8 start
+Client 11 start
+Client 5 start
+Client 6 start
+Client 3 start
+Client 7 start
+Client 12 start
+10 waiting workload
+load 0 -1
+13 waiting workload
+2 waiting workload
+14 waiting workload
+8 waiting workload
+5 waiting workload
+6 waiting workload
+1 waiting workload
+4 waiting workload
+7 waiting workload
+11 waiting workload
+9 waiting workload
+3 waiting workload
+15 waiting workload
+12 waiting workload
+poll thread on core: 5
+poll thread on core: 3
+poll thread on core: 7
+poll thread on core: 21
+poll thread on core: 17
+poll thread on core: 13
+poll thread on core: 15
+poll thread on core: 27
+poll thread on core: 19
+poll thread on core: 23
+poll thread on core: 25
+poll thread on core: 31
+poll thread on core: 1
+load 100000 operations
+poll thread on core: 9
+poll thread on core: 11
+poll thread on core: 29
+Load phase start
+Load phase ends (Failed 0)
+time spent: 15435.292969 ms
+10 passed load barrier
+9 passed load barrier
+15 passed load barrier
+7 passed load barrier
+5 passed load barrier
+8 passed load barrier
+4 passed load barrier
+load 0 100000
+2 passed load barrier
+load 0 100000
+14 passed load barrier
+load 0 100000
+11 passed load barrier
+load 0 100000
+load 0 100000
+load 0 100000
+3 passed load barrier
+load 0 100000
+0 passed load barrier
+load 0 100000
+load 0 100000
+1 passed load barrier
+load 0 100000
+load 0 100000
+load 0 100000
+load 0 100000
+13 passed load barrier
+load 0 100000
+6 passed load barrier
+load 0 100000
+12 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+Test phase start
+14 wait for timer
+Test phase start
+Test phase start
+Test phase start
+11 wait for timer
+Test phase start
+4 wait for timer
+3 wait for timer
+Test phase start
+2 wait for timer
+10 wait for timer
+Test phase start
+9 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+5 wait for timer
+Test phase start
+8 wait for timer
+Test phase start
+Test phase start
+Test phase start
+7 wait for timer
+12 wait for timer
+6 wait for timer
+Test phase start
+13 wait for timer
+1 wait for timer
+15 wait for timer
+0 initializes timer
+4 passed barrier
+2 passed barrier
+5 passed barrier
+12 passed barrier
+13 passed barrier
+11 passed barrier
+9 passed barrier
+10 passed barrier
+6 passed barrier
+7 passed barrier
+8 passed barrier
+14 passed barrier
+1 passed barrier
+0 passed barrier
+15 passed barrier
+3 passed barrier
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb0 finished
+fb2 finished
+fb3 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb1 finished
+fb3 finished
+fb2 finished
+fb4 finished
+fb3 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb2 finished
+fb5 finished
+fb1 finished
+fb1 finished
+fb3 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb2 finished
+fb3 finished
+fb6 finished
+fb7 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb6 finished
+fb4 finished
+fb7 finished
+fb6 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb3 finished
+fb3 finished
+fb4 finished
+fb4 finished
+fb5 finished
+fb3 finished
+fb5 finished
+fb6 finished
+fb1 finished
+fb7 finished
+fb5 finished
+fb4 finished
+fb4 finished
+fb5 finished
+fb7 finished
+fb6 finished
+fb7 finished
+fb7 finished
+fb6 finished
+fb4 finished
+fb2 finished
+fb6 finished
+fb5 finished
+fb7 finished
+fb6 finished
+fb5 finished
+fb7 finished
+fb4 finished
+fb6 finished
+fb5 finished
+fb7 finished
+fb3 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb7 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb6 finished
+fb7 finished
+thread: 14 113482 ops/s
+0 failed
+thread: 11 106922 ops/s
+0 failed
+thread: 4 113155 ops/s
+0 failed
+thread: 3 111244 ops/s
+0 failed
+thread: 2 115188 ops/s
+0 failed
+thread: 10 110351 ops/s
+0 failed
+thread: 9 111910 ops/s
+0 failed
+thread: 5 110884 ops/s
+0 failed
+thread: 8 105856 ops/s
+0 failed
+thread: 7 113430 ops/s
+0 failed
+thread: 12 112169 ops/s
+0 failed
+thread: 6 108327 ops/s
+0 failed
+thread: 13 109724 ops/s
+0 failed
+thread: 1 109921 ops/s
+0 failed
+thread: 15 109218 ops/s
+0 failed
+thread: 0 101405 ops/s
+0 failed
+total: 17631942 ops
+failed: 0 ops
+tpt: 1763194 ops/s

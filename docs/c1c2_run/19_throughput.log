@@ -1,0 +1,796 @@
+client 1 main process running on core: 2
+client 0 main process running on core: 0
+client 2 main process running on core: 4
+client 4 main process running on core: 8
+client 3 main process running on core: 6
+client 6 main process running on core: 12
+client 5 main process running on core: 10
+client 7 main process running on core: 14
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+mmblock 0: 38000000
+mmblock 1: 38000000
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+allocating 268435456
+allocating 268435456
+mmblock 0: 44000000
+mmblock 1: 44000000
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+allocating 268435456
+press to sync start INSERT
+2 start INSERT
+7 start INSERT
+1 start INSERT
+6 start INSERT
+poll thread on core: 3
+3 start INSERT
+5 start INSERT
+0 start INSERT
+poll thread on core: 5
+4 start INSERT
+poll thread on core: 1
+poll thread on core: 7
+poll thread on core: 9
+poll thread on core: 11
+poll thread on core: 13
+poll thread on core: 15
+Test phase start
+0 initializes timer
+Test phase start
+2 wait for timer
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+3 wait for timer
+Test phase start
+1 wait for timer
+6 wait for timer
+Test phase start
+4 wait for timer
+5 wait for timer
+7 wait for timer
+7 passed barrier
+2 passed barrier
+1 passed barrier
+5 passed barrier
+3 passed barrier
+6 passed barrier
+4 passed barrier
+0 passed barrier
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 1 5213 ops/s
+0 failed
+1 INSERT finished
+fb3 finished
+fb4 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 0 5395 ops/s
+0 failed
+0 INSERT finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 6 5651 ops/s
+0 failed
+6 INSERT finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+thread: 4 5888 ops/s
+fb1 finished
+fb7 finished
+thread: 2 5770 ops/s
+0 failed
+2 INSERT finished
+0 failed
+4 INSERT finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 3 5838 ops/s
+0 failed
+3 INSERT finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 5 5912 ops/s
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+0 failed
+5 INSERT finished
+fb7 finished
+thread: 7 5829 ops/s
+0 failed
+7 INSERT finished
+press to sync start READ
+0 start READ
+7 start READ
+1 start READ
+6 start READ
+2 start READ
+3 start READ
+5 start READ
+4 start READ
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+1 wait for timer
+7 wait for timer
+2 wait for timer
+3 wait for timer
+5 wait for timer
+Test phase start
+0 initializes timer
+Test phase start
+Test phase start
+4 wait for timer
+6 wait for timer
+6 passed barrier
+1 passed barrier
+3 passed barrier
+0 passed barrier
+2 passed barrier
+7 passed barrier
+5 passed barrier
+4 passed barrier
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+fb1 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 4 111345 ops/s
+0 failed
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 2 108736 ops/s
+0 failed
+2 READ finished
+thread: 3 109737 ops/s
+0 failed
+3 READ finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 1 96168 ops/s
+fb0 finished
+fb3 finished
+fb1 finished
+fb4 finished
+fb7 finished
+4 READ finished
+thread: 5 111243 ops/s
+0 failed
+5 READ finished
+0 failed
+fb2 finished
+1 READ finished
+fb5 finished
+fb6 finished
+fb5 finished
+fb3 finished
+fb6 finished
+fb7 finished
+fb7 finished
+thread: 7 106175 ops/s
+fb4 finished
+thread: 0 112011 ops/s
+0 failed
+0 READ finished
+fb5 finished
+fb6 finished
+0 failed
+7 READ finished
+fb7 finished
+thread: 6 106471 ops/s
+0 failed
+6 READ finished
+press to sync start UPDATE
+0 start UPDATE
+6 start UPDATE
+5 start UPDATE
+7 start UPDATE
+2 start UPDATE
+4 start UPDATE
+1 start UPDATE
+3 start UPDATE
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+Test phase start
+5 wait for timer
+4 wait for timer
+1 wait for timer
+2 wait for timer
+7 wait for timer
+3 wait for timer
+Test phase start
+Test phase start
+6 wait for timer
+0 initializes timer
+0 passed barrier
+5 passed barrier
+4 passed barrier
+6 passed barrier
+1 passed barrier
+7 passed barrier
+3 passed barrier
+2 passed barrier
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb0 finished
+fb3 finished
+fb1 finished
+fb4 finished
+fb5 finished
+fb3 finished
+fb1 finished
+fb4 finished
+fb5 finished
+fb2 finished
+fb3 finished
+fb6 finished
+fb0 finished
+fb2 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb7 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb6 finished
+fb3 finished
+fb7 finished
+thread: 3 38800 ops/s
+fb2 finished
+fb1 finished
+fb3 finished
+fb5 finished
+thread: 5 39111 ops/s
+fb6 finished
+0 failed
+0 failed
+5 UPDATE finished
+3 UPDATE finished
+fb4 finished
+thread: 0 42023 ops/s
+fb4 finished
+fb7 finished
+fb4 finished
+fb5 finished
+fb5 finished
+fb6 finished
+fb6 finished
+fb2 finished
+0 failed
+fb5 finished
+thread: 2 39413 ops/s
+fb7 finished
+0 failed
+fb7 finished
+fb3 finished
+0 UPDATE finished
+fb6 finished
+thread: 4 39518 ops/s
+fb7 finished
+0 failed
+thread: 6 38261 ops/s
+0 failed
+6 UPDATE finished
+4 UPDATE finished
+thread: 1 36070 ops/s
+0 failed
+1 UPDATE finished
+2 UPDATE finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 7 38719 ops/s
+0 failed
+7 UPDATE finished
+press to sync start DELETE
+0 start DELETE
+7 start DELETE
+6 start DELETE
+2 start DELETE
+5 start DELETE
+3 start DELETE
+1 start DELETE
+4 start DELETE
+Test phase start
+Test phase start
+3 wait for timer
+Test phase start
+2 wait for timer
+5 wait for timer
+Test phase start
+1 wait for timer
+Test phase start
+0 initializes timer
+Test phase start
+4 wait for timer
+Test phase start
+7 wait for timer
+Test phase start
+6 wait for timer
+6 passed barrier
+3 passed barrier
+0 passed barrier
+4 passed barrier
+2 passed barrier
+7 passed barrier
+5 passed barrier
+1 passed barrier
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+finished!
+fb0 finished
+fb0 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb1 finished
+fb0 finished
+fb1 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 7 4103 ops/s
+0 failed
+7 DELETE finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 4 4164 ops/s
+0 failed
+4 DELETE finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb2 finished
+fb2 finished
+fb7 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb3 finished
+fb4 finished
+fb6 finished
+thread: 2 4072 ops/s
+fb5 finished
+fb6 finished
+fb7 finished
+fb7 finished
+thread: 1 3544 ops/s
+0 failed
+1 DELETE finished
+thread: 5 4126 ops/s
+0 failed
+5 DELETE finished
+0 failed
+2 DELETE finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 6 4053 ops/s
+0 failed
+6 DELETE finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 3 4085 ops/s
+0 failed
+3 DELETE finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 0 4063 ops/s
+0 failed
+0 DELETE finished
+insert total: 454994 ops
+insert failed: 0 ops
+insert tpt: 909988 ops/s
+update total: 3119188 ops
+update failed: 0 ops
+update tpt: 623837 ops/s
+search total: 8618905 ops
+search failed: 0 ops
+search tpt: 5794 ops/s
+delete total: 322132 ops
+delete failed: 0 ops
+delete tpt: 644264 ops/s

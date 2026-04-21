@@ -1,0 +1,11 @@
+num_replication,num_idx_rep,workload,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+2,1,workloada,12345559,0,1234555,0
+2,1,workloadc,26371653,0,2637165,0
+2,2,workloada,9444714,0,944471,0
+2,2,workloadc,25939387,0,2593938,0
+3,1,workloada,11630750,0,1163075,0
+3,1,workloadc,25642687,0,2564268,0
+3,3,workloada,8169140,0,816914,0
+3,3,workloadc,25637650,0,2563765,0
+3,2,workloada,8707421,0,870742,0
+3,2,workloadc,25877088,0,2587708,0

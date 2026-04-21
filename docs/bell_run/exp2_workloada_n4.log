@@ -1,0 +1,108 @@
+client 0 main process running on core: 0
+client 1 main process running on core: 2
+client 2 main process running on core: 4
+client 3 main process running on core: 6
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+mmblock 0: 34000000
+mmblock 1: 34000000
+mmblock 2: 34000000
+server_kv_area_addr: 28000000 58
+num_rep_blocks: 58
+allocating 268435456
+mmblock 0: 2c000000
+mmblock 1: 2c000000
+mmblock 2: 2c000000
+allocating 268435456
+allocating 268435456
+mmblock 0: 3c000000
+mmblock 1: 3c000000
+mmblock 2: 3c000000
+allocating 268435456
+Client 0 start
+Client 1 start
+Client 3 start
+Client 2 start
+3 waiting workload
+2 waiting workload
+load 0 -1
+1 waiting workload
+poll thread on core: 3
+poll thread on core: 5
+poll thread on core: 7
+poll thread on core: 1
+load 100000 operations
+Load phase start
+Load phase ends (Failed 0)
+time spent: 13348.237305 ms
+0 passed load barrier
+load 0 100000
+3 passed load barrier
+load 0 100000
+2 passed load barrier
+load 0 100000
+1 passed load barrier
+load 0 100000
+load 78125 operations
+load 78125 operations
+load 78125 operations
+load 78125 operations
+Test phase start
+Test phase start
+Test phase start
+0 initializes timer
+Test phase start
+2 wait for timer
+3 wait for timer
+1 wait for timer
+1 passed barrier
+0 passed barrier
+2 passed barrier
+3 passed barrier
+fb0 finished
+fb0 finished
+fb1 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb0 finished
+fb1 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+fb2 finished
+fb3 finished
+fb4 finished
+fb5 finished
+fb6 finished
+fb7 finished
+thread: 0 151290 ops/s
+0 failed
+thread: 2 152976 ops/s
+0 failed
+thread: 3 157752 ops/s
+0 failed
+thread: 1 154133 ops/s
+0 failed
+total: 6161523 ops
+failed: 0 ops
+tpt: 616152 ops/s

@@ -1,0 +1,13 @@
+7979 bash -c cd /root/FUSEE/build/ycsb-test && nohup stdbuf -oL numactl -N 0 -m 0 ./ycsb_test_server 0 > /tmp/mn0.log 2>&1 < /dev/null & echo 'MN0 PID: '$!
+7980 ./ycsb_test_server 0
+8669 bash -c pgrep -af ycsb_test_server; echo '-- mn0.log --'; cat /tmp/mn0.log 2>/dev/null; echo '-- hugepages --'; grep -E 'HugePages_(Total|Free)' /proc/meminfo
+-- mn0.log --
+===== Starting Server 0 =====
+kv_area_addr: 18000000, block_size: 4000000
+my_sid_: 0, num_memory_: 1
+num_rep_blocks: 26, num_blocks: 26, limit: 90000000
+press to exit
+===== Ending Server 0 =====
+-- hugepages --
+HugePages_Total:    7168
+HugePages_Free:     6144

@@ -1,0 +1,13 @@
+[02:19:02] Plan B: workloada, 2 CNs × 8 clients
+  CN_A: tpt=1345212 failed=0
+  CN_B: tpt=386191 failed=3998424
+[02:19:41] Plan B: workloadc, 2 CNs × 8 clients
+  CN_A: tpt=3079450 failed=0
+  CN_B: tpt=362190 failed=2127842
+
+=== Plan B DONE ===
+workload,cn,tpt,failed
+workloada,A,1345212,0
+workloada,B,386191,3998424
+workloadc,A,3079450,0
+workloadc,B,362190,2127842

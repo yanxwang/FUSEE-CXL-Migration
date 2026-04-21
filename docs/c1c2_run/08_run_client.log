@@ -1,0 +1,38 @@
+=== Sun Apr 19 06:48:51 PM CDT 2026 — Run latency_test_client on c2 ===
+CN PID: 10017
+bash: line 1: 10018 Segmentation fault      (core dumped) nohup stdbuf -oL numactl -N 0 -m 0 ./latency_test_client ./client_config.json > /tmp/client.log 2>&1 < /dev/null
+--- Initial client log ---
+main process running on core: 0
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+mmblock 0: 28000000
+allocating 268435456
+lat test INSERT
+Failed: 0
+
+--- Full client log ---
+main process running on core: 0
+server_kv_area_addr: 28000000 26
+num_rep_blocks: 26
+mmblock 0: 28000000
+allocating 268435456
+lat test INSERT
+Failed: 0
+
+--- c2 coredump check ---
+total 228
+drwxrwsrwt  2 root root   4096 Apr 19 06:19 .
+drwxr-xr-x 13 root root   4096 Apr  1 17:07 ..
+-rw-r--r--  1 root root   1178 Apr 19 06:17 iser-dkms.0.crash
+-rw-r--r--  1 root root   1183 Apr 19 06:17 isert-dkms.0.crash
+
+--- MN log on c1 after client ran ---
+===== Starting Server 0 =====
+kv_area_addr: 18000000, block_size: 4000000
+my_sid_: 0, num_memory_: 1
+num_rep_blocks: 26, num_blocks: 26, limit: 90000000
+press to exit
+===== Ending Server 0 =====
+
+--- Results files from latency test (if any) ---
+ls: cannot access '/root/FUSEE/build/micro-test/results/': No such file or directory

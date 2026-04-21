@@ -1,0 +1,20 @@
+fb7 finished
+thread: 0 83636 ops/s
+542865 failed
+thread: 4 90215 ops/s
+579738 failed
+thread: 5 90822 ops/s
+586566 failed
+thread: 3 90683 ops/s
+583864 failed
+thread: 2 91036 ops/s
+585197 failed
+thread: 1 90224 ops/s
+581617 failed
+thread: 6 89641 ops/s
+578423 failed
+thread: 7 89273 ops/s
+573741 failed
+total: 7155330 ops
+failed: 4612011 ops
+tpt: 254331 ops/s

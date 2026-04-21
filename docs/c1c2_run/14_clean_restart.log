@@ -1,0 +1,15 @@
+=== Kill everything ===
+pkill: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pkill -f' option to match against the complete command line.
+pkill: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pkill -f' option to match against the complete command line.
+7980 ./ycsb_test_server 0
+10161 ./ycsb_test_server 0
+pkill: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pkill -f' option to match against the complete command line.
+pkill: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pkill -f' option to match against the complete command line.
+10797 ./latency_test_client ./client_config.json
+
+=== Start MN0 on c1 ===
+MN0_PID=10966

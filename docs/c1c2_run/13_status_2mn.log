@@ -1,0 +1,42 @@
+=== Status check ===
+-- MNs running --
+7979 bash -c cd /root/FUSEE/build/ycsb-test && nohup stdbuf -oL numactl -N 0 -m 0 ./ycsb_test_server 0 > /tmp/mn0.log 2>&1 < /dev/null & echo 'MN0 PID: '$!
+7980 ./ycsb_test_server 0
+10160 bash -c cd /root/FUSEE/build/ycsb-test && nohup stdbuf -oL numactl -N 0 -m 0 ./ycsb_test_server 0 > /tmp/mn0.log 2>&1 < /dev/null & echo MN0 PID: $!
+10161 ./ycsb_test_server 0
+10855 bash -c pgrep -af ycsb_test_server; cat /tmp/mn0.log
+===== Starting Server 0 =====
+kv_area_addr: 18000000, block_size: 4000000
+my_sid_: 0, num_memory_: 2
+num_rep_blocks: 26, num_blocks: 26, limit: 90000000
+press to exit
+===== Ending Server 0 =====
+
+12351 bash -c pgrep -af ycsb_test_server; cat /tmp/mn1.log
+cat: /tmp/mn1.log: No such file or directory
+
+-- client running? --
+10795 bash -c cd /root/FUSEE/build/micro-test && ls results/ && nohup stdbuf -oL numactl -N 0 -m 0 ./latency_test_client ./client_config.json > /tmp/client.log 2>&1 < /dev/null & echo 'CN PID: '$!
+10797 ./latency_test_client ./client_config.json
+12400 bash -c pgrep -af latency_test_client; echo '--log--'; tail -20 /tmp/client.log 2>/dev/null
+--log--
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+no match!
+Failed: 100000
+lat test UPDATE
+Failed: 100000
+lat test DELETE

@@ -1,0 +1,20 @@
+[01:37:22] mn=1 workloada ...
+  total=14299882 failed=0 tpt=1429988
+[01:37:59] mn=1 workloadc ...
+  total=30209982 failed=0 tpt=3020998
+[01:38:39] mn=2 workloada ...
+  total=12813912 failed=0 tpt=1281391
+[01:39:17] mn=2 workloadc ...
+  total=27771887 failed=0 tpt=2777188
+[01:39:57] mn=3 workloada ...
+  total=10704742 failed=0 tpt=1070474
+[01:40:36] mn=3 workloadc ...
+  total=26109759 failed=0 tpt=2610975
+
+memory_num,workload,total_ops,failed_ops,tpt_ops_per_sec,exit_code
+1,workloada,14299882,0,1429988,0
+1,workloadc,30209982,0,3020998,0
+2,workloada,12813912,0,1281391,0
+2,workloadc,27771887,0,2777188,0
+3,workloada,10704742,0,1070474,0
+3,workloadc,26109759,0,2610975,0
