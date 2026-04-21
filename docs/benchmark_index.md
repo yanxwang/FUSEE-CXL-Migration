@@ -4,6 +4,37 @@ One-screen answer to "which phase has which perf data, and where does it live?"
 
 Written 2026-04-20. Entries should be appended as new artifacts land.
 
+## Session-level summary pages
+
+| Date (CDT)   | Document                                      | Purpose |
+|--------------|-----------------------------------------------|---------|
+| 2026-04-21   | `docs/overnight_summary_20260421.md`          | One-pager: what shipped + current blockers |
+| 2026-04-21   | `docs/fusee_cxl_progress.md`                  | Phase tracker (single source of truth) |
+| 2026-04-21   | `docs/fusee_cxl_session_log.md`               | Per-session narrative |
+| 2026-04-21   | `docs/g34_bench/g34_lfm_finding.md`           | LFM wedge at N≥3 on PCIe-switched CXL |
+| 2026-04-21   | `docs/g34_bench/g34_incident_20260421.md`     | 03:01 CDT outage timeline + hypotheses |
+| 2026-04-21   | `docs/g34_bench/xhost_verification.log`       | g3↔g4 byte-level fabric verification |
+
+## Real-CXL emr data (2026-04-21)
+
+| File | What it is |
+|---|---|
+| `docs/fusee_mp_bench_emr_20260421.log` | Full MP sweep (4 hosts × 500 ops × 3 opts × 3 wr × 2 cache) on /dev/dax0.0 |
+| `docs/fusee_mp_bench_emr_20260421_cache_on.png` | Plot of the above (cache-on subset, 2×2 panel) |
+| `docs/fusee_ycsb_sweep_emr_20260421.log` | Real YCSB a..f × 3 opts × 2 cache on /dev/dax0.0 |
+| `docs/fusee_ycsb_sweep_emr_20260421.png` | Grouped bar chart (workload × opt × cache) |
+| `docs/fusee_ycsb_sweep_tmpfs.log` | Same YCSB matrix on tmpfs (cache off baseline) |
+| `docs/fusee_ycsb_sweep_tmpfs_cache.log` | Same, cache off + on |
+| `docs/fusee_ycsb_sweep_tmpfs_cache.png` | Plot of the above |
+
+Key takeaways (real CXL, 4 hosts × 500 ops, cache on):
+
+- Reads (wr=0): A/B/C all tied at ≈ 1.2 M ops/s agg (DRAM cache saturates).
+- Writes (wr=1): C 596 k ops/s (6.1 μs) > B 230 k (15.6 μs) > A 169 k (23.1 μs);
+  C is 2.6× B and 3.5× A.
+- YCSB cache-on speedup on read-heavy workloadc: A/B 5.7×, C 3.6×
+  (C still does one CXL epoch load on a cache hit).
+
 ## Per-phase measurements
 
 | Phase | What we measure | Artifact(s) | How to reproduce |
@@ -32,6 +63,18 @@ Written 2026-04-20. Entries should be appended as new artifacts land.
 
 ## Audit gaps still open
 
-1. **Real YCSB workloads not committed**. `setup/download_workload.sh` pulls from Google Drive; once the tarball is fetched and unpacked into `workloads/`, re-run `WL_DIR=workloads bash tests/run_fusee_ycsb_sweep.sh` to get real-trace numbers alongside the synthetic ones.
-2. **Phase 2 CXL number is historical**. The 7.4 μs number cited in commit `c1f40e6` has not been re-measured since the `BucketLockEntry` grew `write_epoch` and `staging_scratch`. Re-run `cxl_bucket_lock_test /dev/dax0.0 50000` after the next devdax reconfigure and append the result here.
-3. **Multi-proc cache-off path is fragile**. `fusee_mp_bench_v3.log` historical notes mark some cache-off rows timed out; v3 plot intentionally uses cache-on only. Root cause is the same ring-full class of bug tracked in the Option A side-track.
+1. ~~Real YCSB workloads not committed~~ — **done**. Fetched via
+   `setup/download_workload.sh`; tmpfs + real-CXL sweeps committed above.
+2. **Phase 2 CXL number is historical**. The 7.4 μs number cited in commit
+   `c1f40e6` has not been re-measured since the `BucketLockEntry` grew
+   `write_epoch` and `staging_scratch`. Re-run
+   `cxl_bucket_lock_test /dev/dax0.0 50000` after the next devdax reconfigure
+   and append the result here.
+3. **Multi-proc cache-off path is fragile**. `fusee_mp_bench_v3.log` historical
+   notes mark some cache-off rows timed out; v3 plot intentionally uses
+   cache-on only. Root cause is the same ring-full class of bug tracked in
+   the Option A side-track.
+4. **g3+g4 multi-host sweep**. Cross-host fabric verified, role-mode
+   binaries built on both slaves. Full A/B/C × workloadA+C × cache off+on
+   matrix pending g3/g4 return from outage; launch with
+   `bash scripts/run_g34_full_sweep.sh`.
