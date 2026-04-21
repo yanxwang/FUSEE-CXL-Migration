@@ -99,6 +99,20 @@ python3 docs/plot_fusee_ycsb.py logs/g34_full_sweep_*/SUMMARY.log
 ```
 This should take ~10-15 min end-to-end.
 
+## Close-out
+
+**Final state at 09:29 CDT 2026-04-21** (stopping autonomous run at 10 AM
+as instructed):
+- Outage duration: ≈ 6 h 28 min (from 03:01 onset).
+- g3 and g4 both still unreachable with the same error profile as at
+  onset; no status change at any retry interval overnight.
+- No further ssh retries scheduled; the rekey+bootstrap+sweep commands
+  above will work on the next manually-triggered session once slaves
+  return.
+- 70+ commits on `feat/cxl-migration` landed this session; 4-way sync
+  and GitHub mirror verified; all research docs recovered and committed;
+  real-CXL emr sweeps + plots + tmpfs-vs-CXL comparison all shipped.
+
 ## Current commit state
 
 - GitHub HEAD: (see below)
