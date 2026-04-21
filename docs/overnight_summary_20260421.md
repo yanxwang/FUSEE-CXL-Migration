@@ -62,12 +62,25 @@ Reason 2 — g3 + g4 went offline at 03:01 CDT and have not returned:
   maintenance window. Monitor task `bhfky5v4i` watching for both to come
   back.
 
-Whenever g3 and g4 are both reachable again:
+Whenever g3 and g4 are both reachable again (tested `scripts/rekey_slave.sh`
+handles the PXE-wipe path too):
 ```bash
-scripts/bootstrap_slave.sh g3 && scripts/bootstrap_slave.sh g4
-bash scripts/run_g34_full_sweep.sh  # 12 runs, ~5-10 min
+scripts/rekey_slave.sh g3    && scripts/rekey_slave.sh g4        # if ssh key was wiped
+scripts/bootstrap_slave.sh g3 && scripts/bootstrap_slave.sh g4   # restore code + rebuild
+bash scripts/run_g34_full_sweep.sh                               # 12 runs, ~5-10 min
 python3 docs/plot_fusee_ycsb.py logs/g34_full_sweep_*/SUMMARY.log
+# For the post-mortem while slaves are healthy:
+scripts/collect_post_outage_diag.sh g3
+scripts/collect_post_outage_diag.sh g4
 ```
+
+**Outage status as of 06:26 CDT 2026-04-21**: still ongoing.
+- g3: hard offline (no ICMP, no TCP — "No route to host"). Likely mid-PXE cycle.
+- g4: pings at 0.3 ms but sshd rejects with PAM `Not allowed at this time`
+  / `Connection reset by peer`. Specific to daily maintenance window.
+- Tried password ssh via `expect`; also rejected — this is PAM account-phase
+  denial, independent of auth method.
+- No user intervention on the slave side has been possible. Waiting.
 
 ## Current commit state
 
