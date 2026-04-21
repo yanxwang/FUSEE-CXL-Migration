@@ -228,3 +228,85 @@ The mini-bench result pattern (B beats C on reads, C beats B on writes) now hold
 **Ends with**: 43 commits on `feat/cxl-migration`. Open tasks #2 still blocked on devdax, #5 advanced (tmpfs reference done, devdax-backed run pending same unblock).
 
 ---
+
+## Session 2026-04-21 ~01:45–04:00 CDT — 4-way sync + real CXL bench + g3/g4 bring-up (auto mode)
+
+**Context**: user left a directive to auto-run until 10 AM 2026-04-21 with a
+9 AM target of running real A/B/C × YCSB workload-A/C across g3 + g4. GitHub
+private mirror + 4-way sync also set up at the start of the session per
+earlier agreement.
+
+**4-way sync (no more single-point-of-failure on emr)**:
+- Created bundle backup of emr `feat/cxl-migration` and rsync'd to
+  `/home/yanwang/fusee_backups/`. 46 commits portable; verified restoration
+  via `git clone` from the bundle.
+- Pushed emr → GitHub (`git@github.com:yanxwang/FUSEE-CXL-Migration.git`,
+  private). Renamed the existing `dmemsys/FUSEE` remote to `upstream`.
+- Local `/home/yanwang/FUSEE/` re-synced: archived 41 divergent files
+  into a tarball first (so nothing is lost), then `git checkout feat/cxl-migration`
+  from GitHub.
+- Realised afterward that ~30 earlier design docs (INDEX.md, SUMMARY.md,
+  cxl_architecture_plan.md, cxl_implementation_guide.md, consensus_*.md,
+  bell_run/ + c1c2_run/ + tigon_presentation/ subdirs, pptx + png design
+  artifacts, generator scripts) had only ever lived as untracked files on
+  local and were not on emr. Recovered them from the pre-sync tarball and
+  committed as `83b7219` (197 files).
+- g3 / g4 are PXE-wiped daily so they cannot hold credentials. Wrote
+  `scripts/bootstrap_slave.sh` so `scripts/bootstrap_slave.sh g3` from local
+  bundles HEAD, rsyncs bundle + cxl_shm_profiling, clones/updates
+  `~/FUSEE_CXL`, and rebuilds. Documented in `docs/sync_workflow.md`.
+
+**Real-CXL emr sweeps (open tasks #2 and #5)**:
+- After emr reboot, reconfigured `dax0.0` to devdax, chmod 666.
+- `run_fusee_mp_sweep.sh` 4-host × 500 ops × 3 opts × 3 wr × 2 cache =
+  54 runs → `docs/fusee_mp_bench_emr_20260421.log`. Key numbers on writes
+  (wr=1.0): C 596 k ops/s (6.1 μs w_avg), B 230 k (15.6 μs), A 169 k
+  (23.1 μs). Read-side wr=0.0: all three tie at ~1.2 M ops/s agg with
+  DRAM cache on.
+- `run_fusee_ycsb_sweep.sh` on real workloads (a..f × A/B/C × cache off+on)
+  = 36 runs → `docs/fusee_ycsb_sweep_emr_20260421.log`. Cache-on speed-up
+  on read-heavy workloads: workloadc A/B 5.7×, C 3.6× (C still does one
+  CXL epoch load on a cache hit). Plot committed.
+
+**Cross-host orchestration**:
+- `FUSEE_HOST_ID` env on `cxl_kv_bench_mp` and `FUSEE_NUM_HOSTS` +
+  `FUSEE_HOST_ID` on `cxl_ycsb_runner`: when set, skip the internal fork
+  and run as ONE host of N. Each host coordinates through CXL shared
+  stats region at the end of the mapping. Host 0 prints the aggregated
+  summary. Verified on emr tmpfs with 2-proc role-mode runs.
+- `tests/cxl_xhost_test.cc`: magic-word handshake between two hosts,
+  writer/reader roles via `FUSEE_HOST_ID`. **Verified g3 ↔ g4 share the
+  same physical CXL bytes**: g3 wrote 12 cachelines of pattern + handshake;
+  g4 saw it in 1.52 s; byte-for-byte match; ACK cycle <1 ms. Logged to
+  `docs/g34_bench/xhost_verification.log`.
+- `scripts/run_xhost_bench.sh` and `scripts/run_g34_full_sweep.sh`:
+  orchestrator scripts that ssh-launch role-mode runs across g3 + g4 from
+  local, ship workload files on first use, aggregate summary lines.
+
+**g3/g4 real-CXL blocker (LFM wedge at N ≥ 3)**:
+- Documented in `docs/g34_bench/g34_lfm_finding.md`.
+- 2-proc LFM contention on g4 `/dev/dax0.0`: 17 μs / critical section,
+  passes; 4-proc fork-mode MP bench wedges indefinitely at 99 % CPU.
+  Hypothesis: PCIe-switched CXL fabric's write-visibility window is wide
+  enough that Lamport's fast path never succeeds once three or more
+  contenders are active.
+- Workaround for the 9 AM goal: run with `FUSEE_NUM_HOSTS=2` (one process
+  per slave) to stay inside the fast-path window.
+
+**g3/g4 availability blocker (3 AM-ish)**:
+- g3 went hard-offline at 03:01 CDT (during my first cross-host bench attempt);
+  ping fails. g4 stays pingable but sshd returns `kex_exchange_identification:
+  banner line 0: Not allowed at this time`. Almost certainly the user's daily
+  PXE maintenance window. Cannot resume g3+g4 bench until window closes.
+- Monitor `bhfky5v4i` is watching for both slaves to come back online.
+
+**Deliverables still pending for 9 AM**:
+- Re-bootstrap g3 + g4 after maintenance window.
+- Run `scripts/run_g34_full_sweep.sh` (2 workloads × 3 opts × 2 cache modes
+  = 12 cross-host runs).
+- Plot + commit.
+
+**Ends with**: 60 commits on `feat/cxl-migration`; 4-way sync working; emr
+real-CXL data committed + plotted. g3/g4 bench waiting on PXE window.
+
+---
