@@ -110,13 +110,37 @@ int main(int argc, char **argv) {
                   fusee::kCxlDevdaxAlign;
 
   // Fork num_hosts-1 children.
+  // Two ways to spawn hosts:
+  //   (a) fork mode (default): this invocation forks num_hosts-1 children,
+  //       used for single-machine tests where every host is on the same
+  //       physical box sharing one /dev/dax0.0.
+  //   (b) role mode: set FUSEE_HOST_ID=N to make THIS invocation play host
+  //       N, and do NOT fork. Use when every host is on a separate machine
+  //       and gets a separate ssh invocation. Host 0 still prints the
+  //       final HOST/AGG summary; other hosts publish their row into the
+  //       shared stats page and exit.
   std::vector<pid_t> children;
   int host_id = 0;
-  for (int i = 1; i < num_hosts; i++) {
-    pid_t p = fork();
-    if (p < 0) { perror("fork"); return 1; }
-    if (p == 0) { host_id = i; children.clear(); break; }
-    children.push_back(p);
+  bool role_mode = false;
+  {
+    const char *role_env = getenv("FUSEE_HOST_ID");
+    if (role_env && role_env[0] != '\0') {
+      role_mode = true;
+      host_id = atoi(role_env);
+      if (host_id < 0 || host_id >= num_hosts) {
+        fprintf(stderr, "FUSEE_HOST_ID=%d out of range [0,%d)\n",
+                host_id, num_hosts);
+        return 2;
+      }
+    }
+  }
+  if (!role_mode) {
+    for (int i = 1; i < num_hosts; i++) {
+      pid_t p = fork();
+      if (p < 0) { perror("fork"); return 1; }
+      if (p == 0) { host_id = i; children.clear(); break; }
+      children.push_back(p);
+    }
   }
 
   CXLRegion r{};
