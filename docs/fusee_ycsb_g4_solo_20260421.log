@@ -1,0 +1,76 @@
+# YCSB sweep on g4 alone (fork-mode, num_hosts=2), real PCIe-switched CXL dax0.0
+# max_ops=200000 num_buckets=65536
+# started 2026-04-21T14:45:25-05:00
+--- RUN workloada_optA_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.019s thpt=98141 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.222s thpt=163625 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=98141 trans_ops=200000 trans_thpt=163625
+
+--- RUN workloada_optA_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=0.993s thpt=100723 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.039s thpt=192573 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=100723 trans_ops=200000 trans_thpt=192573
+
+--- RUN workloada_optB_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=0.933s thpt=107235 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.197s thpt=167029 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=107235 trans_ops=200000 trans_thpt=167029
+
+--- RUN workloada_optB_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.009s thpt=99062 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.002s thpt=199674 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=99062 trans_ops=200000 trans_thpt=199674
+
+--- RUN workloada_optC_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.081s thpt=92549 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.272s thpt=157262 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=92549 trans_ops=200000 trans_thpt=157262
+
+--- RUN workloada_optC_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.007s thpt=99300 fails=0
+PHASE host=0 label=trans ops=200000 wall=1.090s thpt=183439 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=99300 trans_ops=200000 trans_thpt=183439
+
+--- RUN workloadc_optA_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.002s thpt=99807 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.662s thpt=302079 fails=0
+YCSB opt=A cache=0 load_ops=100000 load_thpt=99807 trans_ops=200000 trans_thpt=302079
+
+--- RUN workloadc_optA_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.013s thpt=98681 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.093s thpt=2158131 fails=0
+YCSB opt=A cache=1 load_ops=100000 load_thpt=98681 trans_ops=200000 trans_thpt=2158131
+
+--- RUN workloadc_optB_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=0.995s thpt=100477 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.645s thpt=309940 fails=0
+YCSB opt=B cache=0 load_ops=100000 load_thpt=100477 trans_ops=200000 trans_thpt=309940
+
+--- RUN workloadc_optB_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=0.991s thpt=100882 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.088s thpt=2280848 fails=0
+YCSB opt=B cache=1 load_ops=100000 load_thpt=100882 trans_ops=200000 trans_thpt=2280848
+
+--- RUN workloadc_optC_cacheoff ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.114s thpt=89789 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.520s thpt=384702 fails=0
+YCSB opt=C cache=0 load_ops=100000 load_thpt=89789 trans_ops=200000 trans_thpt=384702
+
+--- RUN workloadc_optC_cacheon ---
+parsed 100000 load ops, 200000 trans ops
+PHASE host=0 label=load ops=100000 wall=1.006s thpt=99406 fails=0
+PHASE host=0 label=trans ops=200000 wall=0.195s thpt=1025271 fails=0
+YCSB opt=C cache=1 load_ops=100000 load_thpt=99406 trans_ops=200000 trans_thpt=1025271
+
+# finished 2026-04-21T14:46:11-05:00
