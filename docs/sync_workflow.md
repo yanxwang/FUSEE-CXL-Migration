@@ -7,8 +7,8 @@ mirrored across four working copies:
 |--------|----------------------------|-------------------------------|-------------|
 | emr    | `~/FUSEE`                  | Primary dev + benchmark       | SSH (yanxwang) ✓ |
 | local  | `/home/yanwang/FUSEE`      | Primary dev + editing         | SSH (yanxwang) ✓ |
-| g3     | `~/FUSEE_CXL`              | Benchmark slave               | **TBD** — account is `heatheart3`, read-only to this private repo until collaborator invite or deploy key |
-| g4     | `~/FUSEE_CXL`              | Benchmark slave               | **TBD** — same as g3 |
+| g3     | `~/FUSEE_CXL`              | Benchmark slave (PXE-wiped daily) | **N/A by design** — re-bootstrapped from local via `scripts/bootstrap_slave.sh g3` |
+| g4     | `~/FUSEE_CXL`              | Benchmark slave (PXE-wiped daily) | **N/A by design** — same as g3 |
 
 **`upstream`** (= `git@github.com:dmemsys/FUSEE.git`) is set on emr and local
 for occasional rebase / diff against the original FAST'23 FUSEE code.
@@ -28,35 +28,24 @@ git push origin feat/cxl-migration
 git pull --ff-only origin feat/cxl-migration
 ```
 
-g3 and g4 are currently **read-only** copies. Until auth is solved:
+g3 and g4 are **ephemeral** — homedirs live on local NVMe and PXE-reboot
+daily, wiping `~/`, `~/.ssh/`, and any installed SSH key. They never
+hold credentials for anything. Instead, **local is the orchestrator**:
 
 ```bash
-# on emr after a relevant commit
-git bundle create /tmp/fusee.bundle feat/cxl-migration --all
-rsync /tmp/fusee.bundle g3:/tmp/ g4:/tmp/
-
-# on g3 or g4
-cd ~/FUSEE_CXL
-git pull /tmp/fusee.bundle feat/cxl-migration
+# after a PXE reboot, or whenever code needs refreshing on a slave:
+scripts/bootstrap_slave.sh g3    # or g4
 ```
 
-Once g3/g4 have GitHub auth, the bundle step disappears and they run the
-same `git pull` as emr/local.
+This script runs on local, bundles the current HEAD of local's FUSEE,
+rsyncs the bundle + cxl_shm_profiling to the slave, clones/updates
+`~/FUSEE_CXL` there from the bundle, and rebuilds the CXL-only target.
+Slaves never push; their output (benchmark logs) is rsynced back to
+local by whoever launched the bench.
 
-## Getting g3 and g4 GitHub-authed
-
-Pick one:
-
-1. **Invite `heatheart3` as collaborator** on the private repo (settings →
-   collaborators). After accepting, g3 can push/pull over SSH with its
-   existing key. g4 needs its own key added to whichever account you use
-   there.
-2. **Deploy key per host**: generate `ssh-keygen` on g3 (and g4), add the
-   public key under *repo settings → deploy keys* on GitHub. This grants
-   the specific machine (not the user) access. Safer for shared machines.
-3. **HTTPS + PAT**: clone via `https://github.com/...`, use a fine-grained
-   personal access token in `~/.git-credentials`. Works but rotate the
-   token regularly.
+Why this instead of GitHub deploy keys / HTTPS-PAT / collaborator invite:
+all three require credentials to persist on the slave, which the daily
+PXE reboot prevents.
 
 ## Backups
 
@@ -86,10 +75,19 @@ hosts when the LFM or bench code changes.
 
 ## Known non-sync risks
 
-- **g3 dax0.1 is still system-ram** (2026-04-21 02:08 CDT). Reconfigure
-  to devdax before running any CXL benchmark on g3. Sudo required.
-- **Cross-host shared CXL region unconfirmed**. g3/g4/emr each expose
-  `/dev/dax0.*`, but whether those devices map the *same physical bytes*
-  via the CXL switch fabric has not been verified yet. First step of the
-  multi-machine benchmark push should be a cross-host magic-word mmap
-  test (one host writes, the others read back the same offset).
+- **emr, g3, g4 are TWO testbeds, not one**:
+  - **emr** has a private direct-attach 256 GB CXL Type-3 expander
+    (`/dev/dax0.0`). Single-machine multi-process benchmarks over emr
+    measure the CXL load/store path without the PCIe-switch hop.
+  - **g3 + g4** share a 4-card ~512 GB CXL memory server behind a PCIe
+    switch; each host sees partitions `/dev/dax0.0` (256 GB),
+    `/dev/dax0.1` (128 GB), `/dev/dax0.2` (128 GB). Cross-machine KV
+    benchmarks run here.
+  Data from the two testbeds is **complementary, not directly
+  comparable**. Keep separate output logs (`..._emr.log`, `..._g34.log`).
+- **g3 dax0.1 still system-ram** as of 2026-04-21 02:10 CDT (devdax for
+  `dax0.0` and `dax0.2`). Reconfigure dax0.1 only if we need the full
+  fabric; dax0.0 alone is more than sufficient for current bench sizes.
+- **Cross-host (g3↔g4) shared-region byte-equality unverified**. First
+  cut of the multi-machine bench should be a magic-word mmap test:
+  g3 writes a pattern to dax0.0 offset 0, g4 reads back, bytes match.
