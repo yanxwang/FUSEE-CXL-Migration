@@ -41,6 +41,23 @@ ts=$(date +%Y%m%d_%H%M%S)
 bundle="$BACKUP_DIR/fusee_bootstrap_${ts}.bundle"
 mkdir -p "$BACKUP_DIR"
 
+# Preflight: the slave may have been PXE-wiped overnight, losing its
+# authorized_keys. Make sure we can ssh (passwordless) before spending
+# time on the bundle.
+if ! timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 \
+                   -o StrictHostKeyChecking=accept-new "$host" \
+                   'echo reachable' >/dev/null 2>&1; then
+  cat <<EOF >&2
+error: cannot reach $host without a password.
+  This is expected right after a PXE reboot — the slave's ~/.ssh/authorized_keys
+  was wiped. Re-seat your key with:
+      ssh-copy-id root@$host
+  (password for the slave is in /home/yanwang/fusee_dev_credentials.md, NOT committed).
+  Then re-run: scripts/bootstrap_slave.sh $host
+EOF
+  exit 2
+fi
+
 echo "[1/5] bundling from $FUSEE_LOCAL..."
 ( cd "$FUSEE_LOCAL" && git bundle create "$bundle" --all ) >/dev/null
 ls -lh "$bundle"
