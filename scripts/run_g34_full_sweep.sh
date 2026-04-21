@@ -27,13 +27,32 @@ set -u
 : "${WORKLOADS:=workloada workloadc}"
 : "${TIMEOUT_S:=120}"
 
-HOST0=g3
-HOST1=g4
-DEV=/dev/dax0.0
+: "${HOST0:=g3}"
+: "${HOST1:=g4}"
+: "${DEV:=/dev/dax0.0}"
 
 stamp=$(date +%Y%m%d_%H%M%S)
 OUT="$HOME/FUSEE/logs/g34_full_sweep_$stamp"
 mkdir -p "$OUT"
+
+# Preflight: slaves reachable + dax0.0 is devdax + binaries exist.
+for h in "$HOST0" "$HOST1"; do
+  if ! timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" \
+         'echo reachable' >/dev/null 2>&1; then
+    echo "error: $h not ssh-reachable; run scripts/bootstrap_slave.sh $h first" >&2
+    exit 2
+  fi
+  mode=$(ssh "$h" "daxctl list 2>/dev/null | python3 -c \
+    \"import json,sys;d=json.load(sys.stdin);print(d[0].get('mode','?'))\"" 2>/dev/null || echo "?")
+  if [[ "$mode" != "devdax" ]]; then
+    echo "error: $h has /dev/dax0.0 in mode '$mode'; reconfigure to devdax first" >&2
+    exit 2
+  fi
+  if ! ssh "$h" "test -x ~/FUSEE_CXL/build-cxl/tests/cxl_ycsb_runner_C"; then
+    echo "error: $h missing cxl_ycsb_runner_C; run scripts/bootstrap_slave.sh $h" >&2
+    exit 2
+  fi
+done
 
 agg="$OUT/SUMMARY.log"
 {
