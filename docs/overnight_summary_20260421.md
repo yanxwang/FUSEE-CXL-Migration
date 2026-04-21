@@ -74,13 +74,30 @@ scripts/collect_post_outage_diag.sh g3
 scripts/collect_post_outage_diag.sh g4
 ```
 
-**Outage status as of 06:26 CDT 2026-04-21**: still ongoing.
-- g3: hard offline (no ICMP, no TCP — "No route to host"). Likely mid-PXE cycle.
-- g4: pings at 0.3 ms but sshd rejects with PAM `Not allowed at this time`
-  / `Connection reset by peer`. Specific to daily maintenance window.
-- Tried password ssh via `expect`; also rejected — this is PAM account-phase
-  denial, independent of auth method.
-- No user intervention on the slave side has been possible. Waiting.
+**Outage status as of 08:27 CDT 2026-04-21**: still ongoing (~5h 26m).
+- g3: hard offline (no ICMP, no TCP — "No route to host"). Likely mid-PXE
+  cycle or full power-off during the maintenance window.
+- g4: pings at 0.3 ms but sshd rejects every connection with PAM
+  `Not allowed at this time` → later `Connection reset by peer`.
+- Tried password ssh via `expect` (credentials from local notes file) —
+  also rejected, confirming this is a PAM account-phase denial independent
+  of auth method.
+- No automated recovery possible. Slaves come back when the user's
+  maintenance window closes.
+
+**Bottom line for the 9 AM target**: the g3+g4 cross-host A/B/C × YCSB
+A+C sweep did NOT run. All enabling infrastructure IS ready (role-mode
+binaries built on both slaves, cross-host fabric verified, orchestrator
++ preflight + diag + rekey scripts all committed and tested in the 02:30
+window when the slaves were briefly up). One-line execution once the
+slaves return:
+```bash
+scripts/rekey_slave.sh g3 && scripts/rekey_slave.sh g4 && \
+scripts/bootstrap_slave.sh g3 && scripts/bootstrap_slave.sh g4 && \
+bash scripts/run_g34_full_sweep.sh && \
+python3 docs/plot_fusee_ycsb.py logs/g34_full_sweep_*/SUMMARY.log
+```
+This should take ~10-15 min end-to-end.
 
 ## Current commit state
 
