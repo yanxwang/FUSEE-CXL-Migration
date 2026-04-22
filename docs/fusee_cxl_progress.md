@@ -7,8 +7,9 @@
 - **Project name**: FUSEE CXL Migration
 - **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
 - **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
-- **Branch**: `feat/cxl-migration` on emr + GitHub origin (60 commits); 4-way synced (local, emr, g3, g4) via GitHub (local/emr) + bootstrap_slave (g3/g4)
-- **Last commit**: `a6ae378 [Phase 8] Plot updated from 2026-04-21 real-CXL emr sweep`
+- **Branch**: `feat/cxl-migration` on emr + GitHub origin (80+ commits); 4-way synced (local, emr, g3, g4)
+- **Last commit**: `d70afd5 [task 5] Full 5-workload g3+g4 cross-host sweep (30 runs)` — 2026-04-22 02:47 CDT
+- **Kernel transition**: g3/g4 now on 6.15.0 (was something pre-6.15). Fixes the overnight hard-offline issue; raises LFM fork-mode N threshold. See `docs/g34_bench/g34_kernel_new_observations.md`.
 - **GitHub**: https://github.com/yanxwang/FUSEE-CXL-Migration (private)
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
 - **Sudo authorization**: user wang authorized sudo on emr; password kept in session memory, not written to repo files
