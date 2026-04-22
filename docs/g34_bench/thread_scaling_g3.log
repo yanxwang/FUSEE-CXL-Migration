@@ -1,0 +1,127 @@
+# Thread scaling on g3 /dev/dax0.0 — C semantics, single process, pthreads
+# num_buckets=65536 ops_per_thread=5000
+# started 2026-04-22T01:42:55-05:00
+--- wr=0.0 threads=1 ---
+THREAD tid=0 ops=5000 wall=0.003s thpt=1822414 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.77
+AGG threads=1 wratio=0.00 total_ops=5000 wall_max=0.003s wall_total=0.051s agg_thpt=1822414
+--- wr=0.0 threads=2 ---
+THREAD tid=0 ops=5000 wall=0.003s thpt=1846870 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.76
+THREAD tid=1 ops=5000 wall=0.003s thpt=1787809 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.80
+AGG threads=2 wratio=0.00 total_ops=10000 wall_max=0.003s wall_total=0.051s agg_thpt=3575618
+--- wr=0.0 threads=4 ---
+THREAD tid=0 ops=5000 wall=0.003s thpt=1822762 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.78
+THREAD tid=1 ops=5000 wall=0.003s thpt=1855722 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.78
+THREAD tid=2 ops=5000 wall=0.003s thpt=1868621 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.76
+THREAD tid=3 ops=5000 wall=0.003s thpt=1792847 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.81
+AGG threads=4 wratio=0.00 total_ops=20000 wall_max=0.003s wall_total=0.051s agg_thpt=7171386
+--- wr=0.0 threads=8 ---
+THREAD tid=0 ops=5000 wall=0.003s thpt=1816106 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.85
+THREAD tid=1 ops=5000 wall=0.003s thpt=1877160 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.78
+THREAD tid=2 ops=5000 wall=0.003s thpt=1850379 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.80
+THREAD tid=3 ops=5000 wall=0.003s thpt=1788562 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.83
+THREAD tid=4 ops=5000 wall=0.003s thpt=1865535 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.79
+THREAD tid=5 ops=5000 wall=0.003s thpt=1859672 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.80
+THREAD tid=6 ops=5000 wall=0.003s thpt=1873441 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.78
+THREAD tid=7 ops=5000 wall=0.003s thpt=1817168 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.82
+AGG threads=8 wratio=0.00 total_ops=40000 wall_max=0.003s wall_total=0.053s agg_thpt=14308495
+--- wr=0.0 threads=16 ---
+THREAD tid=0 ops=5000 wall=0.003s thpt=1741044 w_avg=0.00 w_p99=0.00 r_avg=0.55 r_p99=0.89
+THREAD tid=1 ops=5000 wall=0.003s thpt=1799327 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.85
+THREAD tid=2 ops=5000 wall=0.003s thpt=1815813 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.82
+THREAD tid=3 ops=5000 wall=0.003s thpt=1827411 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.81
+THREAD tid=4 ops=5000 wall=0.003s thpt=1775001 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.87
+THREAD tid=5 ops=5000 wall=0.003s thpt=1800960 w_avg=0.00 w_p99=0.00 r_avg=0.53 r_p99=0.88
+THREAD tid=6 ops=5000 wall=0.003s thpt=1752753 w_avg=0.00 w_p99=0.00 r_avg=0.54 r_p99=0.91
+THREAD tid=7 ops=5000 wall=0.003s thpt=1686926 w_avg=0.00 w_p99=0.00 r_avg=0.57 r_p99=0.95
+THREAD tid=8 ops=5000 wall=0.003s thpt=1698340 w_avg=0.00 w_p99=0.00 r_avg=0.56 r_p99=0.94
+THREAD tid=9 ops=5000 wall=0.003s thpt=1850958 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.84
+THREAD tid=10 ops=5000 wall=0.003s thpt=1843648 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.84
+THREAD tid=11 ops=5000 wall=0.003s thpt=1833509 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.84
+THREAD tid=12 ops=5000 wall=0.003s thpt=1739228 w_avg=0.00 w_p99=0.00 r_avg=0.55 r_p99=0.92
+THREAD tid=13 ops=5000 wall=0.003s thpt=1749890 w_avg=0.00 w_p99=0.00 r_avg=0.54 r_p99=0.88
+THREAD tid=14 ops=5000 wall=0.003s thpt=1858470 w_avg=0.00 w_p99=0.00 r_avg=0.51 r_p99=0.80
+THREAD tid=15 ops=5000 wall=0.003s thpt=1831784 w_avg=0.00 w_p99=0.00 r_avg=0.52 r_p99=0.84
+AGG threads=16 wratio=0.00 total_ops=80000 wall_max=0.003s wall_total=0.057s agg_thpt=26990817
+--- wr=0.5 threads=1 ---
+THREAD tid=0 ops=5000 wall=0.025s thpt=202996 w_avg=7.98 w_p99=10.00 r_avg=1.88 r_p99=3.85
+AGG threads=1 wratio=0.50 total_ops=5000 wall_max=0.025s wall_total=0.072s agg_thpt=202996
+--- wr=0.5 threads=2 ---
+THREAD tid=0 ops=5000 wall=0.025s thpt=197243 w_avg=8.25 w_p99=10.32 r_avg=1.91 r_p99=3.93
+THREAD tid=1 ops=5000 wall=0.025s thpt=201262 w_avg=7.96 w_p99=9.98 r_avg=1.94 r_p99=3.83
+AGG threads=2 wratio=0.50 total_ops=10000 wall_max=0.025s wall_total=0.073s agg_thpt=394486
+--- wr=0.5 threads=4 ---
+THREAD tid=0 ops=5000 wall=0.025s thpt=200743 w_avg=8.10 w_p99=10.11 r_avg=1.88 r_p99=3.87
+THREAD tid=1 ops=5000 wall=0.025s thpt=202064 w_avg=7.94 w_p99=10.01 r_avg=1.93 r_p99=3.83
+THREAD tid=2 ops=5000 wall=0.026s thpt=190504 w_avg=8.27 w_p99=10.23 r_avg=1.98 r_p99=3.81
+THREAD tid=3 ops=5000 wall=0.025s thpt=198742 w_avg=8.13 w_p99=10.09 r_avg=1.89 r_p99=3.88
+AGG threads=4 wratio=0.50 total_ops=20000 wall_max=0.026s wall_total=0.075s agg_thpt=762017
+--- wr=0.5 threads=8 ---
+THREAD tid=0 ops=5000 wall=0.025s thpt=196955 w_avg=8.25 w_p99=10.27 r_avg=1.93 r_p99=3.89
+THREAD tid=1 ops=5000 wall=0.025s thpt=200990 w_avg=7.98 w_p99=10.05 r_avg=1.94 r_p99=3.84
+THREAD tid=2 ops=5000 wall=0.026s thpt=193163 w_avg=8.16 w_p99=10.15 r_avg=1.95 r_p99=3.84
+THREAD tid=3 ops=5000 wall=0.025s thpt=201674 w_avg=8.00 w_p99=10.00 r_avg=1.87 r_p99=3.79
+THREAD tid=4 ops=5000 wall=0.026s thpt=191427 w_avg=8.24 w_p99=10.28 r_avg=1.98 r_p99=3.87
+THREAD tid=5 ops=5000 wall=0.026s thpt=192719 w_avg=8.17 w_p99=10.10 r_avg=1.97 r_p99=3.80
+THREAD tid=6 ops=5000 wall=0.025s thpt=199325 w_avg=8.09 w_p99=9.99 r_avg=1.88 r_p99=3.82
+THREAD tid=7 ops=5000 wall=0.025s thpt=198654 w_avg=8.00 w_p99=9.91 r_avg=1.91 r_p99=3.77
+AGG threads=8 wratio=0.50 total_ops=40000 wall_max=0.026s wall_total=0.077s agg_thpt=1531413
+--- wr=0.5 threads=16 ---
+THREAD tid=0 ops=5000 wall=0.025s thpt=202861 w_avg=8.00 w_p99=10.08 r_avg=1.88 r_p99=3.83
+THREAD tid=1 ops=5000 wall=0.026s thpt=195435 w_avg=8.23 w_p99=10.23 r_avg=1.98 r_p99=3.87
+THREAD tid=2 ops=5000 wall=0.026s thpt=193166 w_avg=8.17 w_p99=10.14 r_avg=1.93 r_p99=3.80
+THREAD tid=3 ops=5000 wall=0.025s thpt=200520 w_avg=8.08 w_p99=10.07 r_avg=1.85 r_p99=3.81
+THREAD tid=4 ops=5000 wall=0.025s thpt=197386 w_avg=7.99 w_p99=9.99 r_avg=1.93 r_p99=3.80
+THREAD tid=5 ops=5000 wall=0.026s thpt=192425 w_avg=8.15 w_p99=10.14 r_avg=2.00 r_p99=3.91
+THREAD tid=6 ops=5000 wall=0.026s thpt=195525 w_avg=8.22 w_p99=10.24 r_avg=1.94 r_p99=3.90
+THREAD tid=7 ops=5000 wall=0.026s thpt=194509 w_avg=8.16 w_p99=10.12 r_avg=1.96 r_p99=3.91
+THREAD tid=8 ops=5000 wall=0.026s thpt=192060 w_avg=8.31 w_p99=10.31 r_avg=1.99 r_p99=3.94
+THREAD tid=9 ops=5000 wall=0.026s thpt=194677 w_avg=8.25 w_p99=10.32 r_avg=1.98 r_p99=3.98
+THREAD tid=10 ops=5000 wall=0.025s thpt=202674 w_avg=8.11 w_p99=10.15 r_avg=1.90 r_p99=3.87
+THREAD tid=11 ops=5000 wall=0.025s thpt=197559 w_avg=8.08 w_p99=10.06 r_avg=1.95 r_p99=3.89
+THREAD tid=12 ops=5000 wall=0.025s thpt=196905 w_avg=8.22 w_p99=10.26 r_avg=1.93 r_p99=3.89
+THREAD tid=13 ops=5000 wall=0.026s thpt=193970 w_avg=8.36 w_p99=10.40 r_avg=1.94 r_p99=3.98
+THREAD tid=14 ops=5000 wall=0.026s thpt=188882 w_avg=8.37 w_p99=10.41 r_avg=2.04 r_p99=4.03
+THREAD tid=15 ops=5000 wall=0.025s thpt=196394 w_avg=8.16 w_p99=10.18 r_avg=1.95 r_p99=3.84
+AGG threads=16 wratio=0.50 total_ops=80000 wall_max=0.026s wall_total=0.081s agg_thpt=3022109
+--- wr=1.0 threads=1 ---
+THREAD tid=0 ops=5000 wall=0.046s thpt=109224 w_avg=9.11 w_p99=10.11 r_avg=0.00 r_p99=0.00
+AGG threads=1 wratio=1.00 total_ops=5000 wall_max=0.046s wall_total=0.093s agg_thpt=109224
+--- wr=1.0 threads=2 ---
+THREAD tid=0 ops=5000 wall=0.046s thpt=109346 w_avg=9.09 w_p99=10.13 r_avg=0.00 r_p99=0.00
+THREAD tid=1 ops=5000 wall=0.047s thpt=106948 w_avg=9.30 w_p99=10.28 r_avg=0.00 r_p99=0.00
+AGG threads=2 wratio=1.00 total_ops=10000 wall_max=0.047s wall_total=0.096s agg_thpt=213896
+--- wr=1.0 threads=4 ---
+THREAD tid=0 ops=5000 wall=0.046s thpt=109356 w_avg=9.10 w_p99=10.15 r_avg=0.00 r_p99=0.00
+THREAD tid=1 ops=5000 wall=0.047s thpt=106860 w_avg=9.30 w_p99=10.36 r_avg=0.00 r_p99=0.00
+THREAD tid=2 ops=5000 wall=0.046s thpt=108143 w_avg=9.20 w_p99=10.18 r_avg=0.00 r_p99=0.00
+THREAD tid=3 ops=5000 wall=0.046s thpt=108433 w_avg=9.17 w_p99=10.16 r_avg=0.00 r_p99=0.00
+AGG threads=4 wratio=1.00 total_ops=20000 wall_max=0.047s wall_total=0.096s agg_thpt=427439
+--- wr=1.0 threads=8 ---
+THREAD tid=0 ops=5000 wall=0.046s thpt=108105 w_avg=9.20 w_p99=10.28 r_avg=0.00 r_p99=0.00
+THREAD tid=1 ops=5000 wall=0.046s thpt=109359 w_avg=9.09 w_p99=10.14 r_avg=0.00 r_p99=0.00
+THREAD tid=2 ops=5000 wall=0.047s thpt=106619 w_avg=9.33 w_p99=10.29 r_avg=0.00 r_p99=0.00
+THREAD tid=3 ops=5000 wall=0.046s thpt=107795 w_avg=9.22 w_p99=10.25 r_avg=0.00 r_p99=0.00
+THREAD tid=4 ops=5000 wall=0.046s thpt=108370 w_avg=9.18 w_p99=10.18 r_avg=0.00 r_p99=0.00
+THREAD tid=5 ops=5000 wall=0.046s thpt=109451 w_avg=9.09 w_p99=10.07 r_avg=0.00 r_p99=0.00
+THREAD tid=6 ops=5000 wall=0.046s thpt=108233 w_avg=9.19 w_p99=10.22 r_avg=0.00 r_p99=0.00
+THREAD tid=7 ops=5000 wall=0.047s thpt=106826 w_avg=9.31 w_p99=10.26 r_avg=0.00 r_p99=0.00
+AGG threads=8 wratio=1.00 total_ops=40000 wall_max=0.047s wall_total=0.097s agg_thpt=852950
+--- wr=1.0 threads=16 ---
+THREAD tid=0 ops=5000 wall=0.046s thpt=107796 w_avg=9.22 w_p99=10.36 r_avg=0.00 r_p99=0.00
+THREAD tid=1 ops=5000 wall=0.045s thpt=109937 w_avg=9.05 w_p99=10.21 r_avg=0.00 r_p99=0.00
+THREAD tid=2 ops=5000 wall=0.047s thpt=106714 w_avg=9.32 w_p99=10.39 r_avg=0.00 r_p99=0.00
+THREAD tid=3 ops=5000 wall=0.047s thpt=107294 w_avg=9.27 w_p99=10.48 r_avg=0.00 r_p99=0.00
+THREAD tid=4 ops=5000 wall=0.047s thpt=107283 w_avg=9.27 w_p99=10.80 r_avg=0.00 r_p99=0.00
+THREAD tid=5 ops=5000 wall=0.046s thpt=109019 w_avg=9.12 w_p99=10.20 r_avg=0.00 r_p99=0.00
+THREAD tid=6 ops=5000 wall=0.046s thpt=108435 w_avg=9.17 w_p99=10.29 r_avg=0.00 r_p99=0.00
+THREAD tid=7 ops=5000 wall=0.047s thpt=105633 w_avg=9.41 w_p99=10.98 r_avg=0.00 r_p99=0.00
+THREAD tid=8 ops=5000 wall=0.047s thpt=107159 w_avg=9.28 w_p99=10.46 r_avg=0.00 r_p99=0.00
+THREAD tid=9 ops=5000 wall=0.048s thpt=104069 w_avg=9.56 w_p99=11.47 r_avg=0.00 r_p99=0.00
+THREAD tid=10 ops=5000 wall=0.048s thpt=104793 w_avg=9.49 w_p99=11.56 r_avg=0.00 r_p99=0.00
+THREAD tid=11 ops=5000 wall=0.047s thpt=107217 w_avg=9.28 w_p99=10.41 r_avg=0.00 r_p99=0.00
+THREAD tid=12 ops=5000 wall=0.046s thpt=107993 w_avg=9.21 w_p99=10.51 r_avg=0.00 r_p99=0.00
+THREAD tid=13 ops=5000 wall=0.047s thpt=106092 w_avg=9.37 w_p99=10.82 r_avg=0.00 r_p99=0.00
+THREAD tid=14 ops=5000 wall=0.048s thpt=103919 w_avg=9.57 w_p99=11.57 r_avg=0.00 r_p99=0.00
+THREAD tid=15 ops=5000 wall=0.048s thpt=104338 w_avg=9.53 w_p99=11.59 r_avg=0.00 r_p99=0.00
+AGG threads=16 wratio=1.00 total_ops=80000 wall_max=0.048s wall_total=0.102s agg_thpt=1662700
+# finished 2026-04-22T01:43:12-05:00

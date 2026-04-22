@@ -269,3 +269,27 @@ When implementing the FUSEE `src/cxl_kv_ops.cc` (Phase 3/7 of main migration):
 3. **Phase ordering**: since A is most complex, we should do A **last** in Phase 7. Start with C (simplest), then B, then A.
 
 4. **If we discover more A optimizations during migration** (e.g., packed entries finally works), we retroactively update both this doc and the main bench.
+
+## 2026-04-22: packed entry retry deferred
+
+Scoped task 2.1 of the 2026-04-22 plan: retry packed PendingRingEntry
+(5 cachelines → 2 cachelines: one writer payload, one consumer ACK).
+
+Aborted during the overnight session without running. Rationale:
+
+- The writer-side win is ~150 ns per op (replacing 4 × CACHELINE_STORE
+  flushes with 1 combined flush). At observed A write cost of ~40 μs
+  at N=2 on g3, the saving is <0.4 % and within run-to-run noise of
+  the YCSB bench.
+- The consumer side gains little because `processed_op_id` is already
+  on its own cacheline in the current layout — a plain flush+fence.
+- The previous attempt (2026-04-20) packed everything into a single
+  cacheline and regressed 15 % because the consumer's ACK write then
+  invalidated the still-hot producer payload. The "producer-separate,
+  consumer-separate" split proposed here would avoid that.
+
+Leaving the idea here; it's still the right shape if Option A ever
+becomes bottlenecked on writer flush count. Today A is bottlenecked
+on the per-peer sync-ACK wait (`trans_wall_max` for workload-a A at
+2 hosts is 1.1s vs B 0.87s vs C 0.60s), not on the writer-local flush
+count.
