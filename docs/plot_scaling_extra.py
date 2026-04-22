@@ -57,9 +57,9 @@ def main():
     wls = sorted({k[1] for k in runs})
     Ts_all = sorted({k[2] for k in runs})
 
-    # 1. A/B/C throughput comparison per workload (cache=on) — Mops/s.
-    # Two versions per workload: log-y (shows scaling shape) + linear-y
-    # (shows absolute C >> A/B gap).
+    # 1. A/B/C throughput comparison per workload (cache=on) — Mops/s, LINEAR Y.
+    # Per scaling_ycsb_spec.md: default is linear Mops/s. LOG-Y code path is
+    # retained but COMMENTED OUT; uncomment the block below to regenerate.
     for wl in wls:
         data = {}
         for opt in opts:
@@ -70,59 +70,63 @@ def main():
                     Ts.append(T); thpts.append(runs[k]["thpt"] / 1e6)
             data[opt] = (Ts, thpts)
 
-        for yscale in ("log", "linear"):
-            fig, ax = plt.subplots(figsize=(7, 4.5))
-            for opt in opts:
-                Ts, thpts = data[opt]
-                if Ts:
-                    ax.plot(Ts, thpts, "o-", lw=2, markersize=7,
-                            color=colors[opt], label=f"opt {opt}")
-            ax.set_xscale("log", base=2)
-            if yscale == "log":
-                ax.set_yscale("log")
-            ax.set_xticks([1,2,4,8,16,32,64,86])
-            ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
-            ax.set_xlabel("#clients per host")
-            ax.set_ylabel("Throughput (Mops/s)")
-            yax = "log y" if yscale == "log" else "linear y"
-            ax.set_title(f"A/B/C comparison — {wl} — cache on ({yax})\n"
-                         "(A/B clamped to 1 worker/host; per-host PendingRing state)")
-            ax.legend(); ax.grid(True, alpha=0.3,
-                                 which="both" if yscale == "log" else "major")
-            fig.tight_layout()
-            suffix = "" if yscale == "log" else "_linear"
-            fig.savefig(os.path.join(args.out_dir,
-                        f"abc_compare_{wl}{suffix}.png"), dpi=150)
-            plt.close(fig)
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for opt in opts:
+            Ts, thpts = data[opt]
+            if Ts:
+                ax.plot(Ts, thpts, "o-", lw=2, markersize=7,
+                        color=colors[opt], label=f"opt {opt}")
+        ax.set_xscale("log", base=2)
+        # LOG-Y (commented; uncomment to re-enable):
+        #   ax.set_yscale("log")
+        ax.set_xticks([1,2,4,8,16,32,64,86])
+        ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
+        ax.set_xlabel("#clients per host")
+        ax.set_ylabel("Throughput (Mops/s)")
+        ax.set_title(f"A/B/C comparison — {wl} — cache on (linear y)\n"
+                     "(A/B clamped to 1 worker/host until Phase 1/4 lands)")
+        ax.legend(); ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(os.path.join(args.out_dir,
+                    f"abc_compare_{wl}.png"), dpi=150)
+        plt.close(fig)
 
-    # 2. A/B/C write p99 latency comparison per workload (cache=on)
+    # 2. A/B/C write-p99 latency comparison per workload (cache=on) — NEW per spec.
+    # For workloads with writes: plot write p99. For workloadc (pure reads):
+    # plot read p99 instead and mark so in the title.
     for wl in wls:
         fig, ax = plt.subplots(figsize=(7, 4.5))
-        has_data = False
+        has_writes = any(
+            runs.get((opt, wl, T, 1), {}).get("w_p99", 0) > 0
+            for opt in opts for T in Ts_all
+        )
+        which = "w_p99" if has_writes else "r_p99"
+        kind  = "write" if has_writes else "read"
         for opt in opts:
             Ts, lats = [], []
             for T in Ts_all:
                 k = (opt, wl, T, 1)
-                if k in runs and runs[k]["w_p99"] > 0:
-                    Ts.append(T); lats.append(runs[k]["w_p99"])
+                if k in runs and runs[k][which] > 0:
+                    Ts.append(T); lats.append(runs[k][which])
             if Ts:
-                has_data = True
                 ax.plot(Ts, lats, "s-", lw=2, markersize=7,
                         color=colors[opt], label=f"opt {opt}")
-        if not has_data:
-            plt.close(fig); continue
         ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
+        # LOG-Y (commented; uncomment to re-enable):
+        #   ax.set_yscale("log")
         ax.set_xticks([1,2,4,8,16,32,64,86])
         ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
         ax.set_xlabel("#clients per host")
-        ax.set_ylabel("write p99 latency (μs, log)")
-        ax.set_title(f"A/B/C write p99 — {wl} — cache on")
-        ax.legend(); ax.grid(True, alpha=0.3, which="both")
+        ax.set_ylabel(f"{kind} p99 latency (μs)")
+        ax.set_title(f"A/B/C {kind} p99 — {wl} — cache on (linear y)")
+        ax.legend(); ax.grid(True, alpha=0.3)
         fig.tight_layout()
-        fig.savefig(os.path.join(args.out_dir, f"abc_compare_{wl}_lat.png"),
-                    dpi=150)
+        fig.savefig(os.path.join(args.out_dir,
+                    f"abc_compare_{wl}_lat.png"), dpi=150)
         plt.close(fig)
+
+    # (former block 2 "abc_compare_<wl>_lat.png" merged into block 1 above,
+    # now linear y by default.)
 
     # 3. Cache speedup (thpt cache_on / thpt cache_off) per opt
     for opt in opts:

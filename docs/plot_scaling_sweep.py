@@ -60,22 +60,26 @@ def parse(log_path, want_cache="on"):
     return runs
 
 def plot_thpt(opt, wl, Ts, thpts, out_path):
+    # Default per scaling_ycsb_spec.md: linear y, Mops/s. Log-y branch kept
+    # commented for regen.
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.plot(Ts, [t / 1e3 for t in thpts], "o-", lw=2, markersize=7, color={"A":"#3182bd","B":"#e6550d","C":"#31a354"}[opt])
+    ys = [t / 1e6 for t in thpts]  # Mops/s
+    ax.plot(Ts, ys, "o-", lw=2, markersize=7,
+            color={"A":"#3182bd","B":"#e6550d","C":"#31a354"}[opt])
     ax.set_xscale("log", base=2)
     ax.set_xticks(Ts); ax.set_xticklabels([str(t) for t in Ts])
-    ax.set_yscale("log")
+    # LOG-Y (commented; uncomment to re-enable):
+    #   ax.set_yscale("log")
     ax.set_xlabel("#clients per host")
-    ax.set_ylabel("trans throughput (kops/s)")
+    ax.set_ylabel("Throughput (Mops/s)")
     ax.set_title(f"Option {opt} — {wl} — throughput vs #clients/host\n"
                  f"(g3+g4 cross-host, role-mode, cache on)")
-    ax.grid(True, alpha=0.3, which="both")
-    # Annotate top value
-    if thpts:
-        best = max(thpts)
-        best_t = Ts[thpts.index(best)]
-        ax.annotate(f"peak {best/1e3:.0f} k @ T={best_t}",
-                    xy=(best_t, best/1e3),
+    ax.grid(True, alpha=0.3)
+    if ys:
+        best = max(ys)
+        best_t = Ts[ys.index(best)]
+        ax.annotate(f"peak {best:.1f} Mops/s @ T={best_t}",
+                    xy=(best_t, best),
                     xytext=(5, 5), textcoords="offset points", fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -83,29 +87,29 @@ def plot_thpt(opt, wl, Ts, thpts, out_path):
 
 def plot_lat(opt, wl, Ts, series_avg, series_p50, series_p99, out_path,
              which):
-    """which in {'write','read'}: pick color; title."""
+    """which in {'write','read'}: pick color; title.
+    Default per scaling_ycsb_spec.md: linear y. Log-y branch kept commented."""
     fig, ax = plt.subplots(figsize=(8, 4.5))
     n_ts = len(Ts)
     x = np.arange(n_ts)
     w = 0.27
-    # Ensure zeros don't break log scale; if a data point is 0, hide it
-    def sanitize(vs):
-        return [max(v, 0.01) for v in vs]
-    ax.bar(x - w, sanitize(series_avg), w, label="avg", color="#6baed6")
-    ax.bar(x,     sanitize(series_p50), w, label="p50", color="#fd8d3c")
-    ax.bar(x + w, sanitize(series_p99), w, label="p99", color="#74c476")
-    ax.set_yscale("log")
+    ax.bar(x - w, series_avg, w, label="avg", color="#6baed6")
+    ax.bar(x,     series_p50, w, label="p50", color="#fd8d3c")
+    ax.bar(x + w, series_p99, w, label="p99", color="#74c476")
+    # LOG-Y (commented; uncomment to re-enable):
+    #   def sanitize(vs): return [max(v, 0.01) for v in vs]
+    #   ax.bar(x - w, sanitize(series_avg), ...)
+    #   ax.set_yscale("log")
     ax.set_xticks(x); ax.set_xticklabels([str(t) for t in Ts])
     ax.set_xlabel("#clients per host")
-    ax.set_ylabel(f"{which} latency per op (μs, log)")
+    ax.set_ylabel(f"{which} latency per op (μs)")
     ax.set_title(f"Option {opt} — {wl} — {which} latency vs #clients/host\n"
                  f"(bars: avg / p50 / p99)")
-    ax.grid(True, axis="y", which="both", alpha=0.3)
+    ax.grid(True, axis="y", alpha=0.3)
     ax.legend(loc="upper left", fontsize=9)
-    # Value labels
     for i, v in enumerate(series_p99):
         if v > 0:
-            ax.text(x[i] + w, max(v, 0.01), f"{v:.0f}", ha="center",
+            ax.text(x[i] + w, v, f"{v:.0f}", ha="center",
                     va="bottom", fontsize=7)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
