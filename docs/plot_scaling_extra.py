@@ -57,7 +57,7 @@ def main():
     wls = sorted({k[1] for k in runs})
     Ts_all = sorted({k[2] for k in runs})
 
-    # 1. A/B/C throughput comparison per workload (cache=on)
+    # 1. A/B/C throughput comparison per workload (cache=on) — Mops/s.
     for wl in wls:
         fig, ax = plt.subplots(figsize=(7, 4.5))
         for opt in opts:
@@ -65,7 +65,7 @@ def main():
             for T in Ts_all:
                 k = (opt, wl, T, 1)
                 if k in runs:
-                    Ts.append(T); thpts.append(runs[k]["thpt"] / 1e3)
+                    Ts.append(T); thpts.append(runs[k]["thpt"] / 1e6)
             if Ts:
                 ax.plot(Ts, thpts, "o-", lw=2, markersize=7,
                         color=colors[opt], label=f"opt {opt}")
@@ -74,7 +74,7 @@ def main():
         ax.set_xticks([1,2,4,8,16,32,64,86])
         ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
         ax.set_xlabel("#clients per host")
-        ax.set_ylabel("trans agg throughput (kops/s)")
+        ax.set_ylabel("Throughput (Mops/s)")
         ax.set_title(f"A/B/C comparison — {wl} — cache on\n"
                      "(A/B clamped to 1 worker/host; per-host PendingRing state)")
         ax.legend(); ax.grid(True, alpha=0.3, which="both")
