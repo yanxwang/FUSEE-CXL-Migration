@@ -81,10 +81,12 @@ def plot(path, runs):
 
     fig, ax = plt.subplots(figsize=(1.5 * n_groups + 3, 5))
 
+    # Primary palette = cache-on (solid, matching fusee_ycsb_tmpfs_vs_cxl_*).
+    # Secondary = cache-off (lighter + hatched) when both are shown.
     colors_off = {"A": "#9ecae1", "B": "#fdae6b", "C": "#a1d99b"}
     colors_on  = {"A": "#3182bd", "B": "#e6550d", "C": "#31a354"}
-    hatch_off = ""
-    hatch_on  = "///"
+    hatch_off = "//"
+    hatch_on  = ""
 
     x = list(range(n_groups))
     for bi, opt in enumerate(opts):
@@ -101,8 +103,19 @@ def plot(path, runs):
                    color=color, hatch=hatch, edgecolor="black", linewidth=0.3,
                    label=label)
 
+    # YCSB op-mix description per official workload.
+    ratio_desc = {
+        "workloada": "50% R / 50% U",
+        "workloadb": "95% R / 5% U",
+        "workloadc": "100% R",
+        "workloadd": "95% R / 5% I\n(latest)",
+        "workloade": "95% SCAN / 5% I",
+        "workloadf": "50% R / 50% RMW",
+    }
     ax.set_xticks(x)
-    ax.set_xticklabels(workloads, rotation=0)
+    ax.set_xticklabels(
+        [f"{wl}\n{ratio_desc.get(wl, '')}" for wl in workloads],
+        rotation=0)
     ax.set_ylabel("trans phase throughput (kops/s)")
     title_tag = os.path.basename(path)
     ax.set_title(f"YCSB trans throughput per workload\n{title_tag}")
