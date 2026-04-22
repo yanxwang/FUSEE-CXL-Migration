@@ -1,6 +1,8 @@
 #include "cxl_kv_ops_B.h"
 
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <limits>
@@ -33,7 +35,7 @@ static inline uint64_t now_ns() {
 
 int CxlKvStoreB::attach(void *region_base, size_t region_bytes,
                         uint32_t num_buckets, int host_id, int num_hosts,
-                        bool init_region) {
+                        bool init_region, bool read_only) {
   if (!region_base || num_buckets == 0) return -1;
   if (num_hosts > kMaxHosts) return -1;
   if (region_bytes < bytes_for(num_buckets)) return -1;
@@ -41,6 +43,7 @@ int CxlKvStoreB::attach(void *region_base, size_t region_bytes,
   num_buckets_ = num_buckets;
   host_id_ = host_id;
   num_hosts_ = num_hosts;
+  read_only_ = read_only;
 
   auto *base = reinterpret_cast<char *>(region_base);
   void *locks_base = base + kHeaderBytes;
@@ -68,7 +71,9 @@ int CxlKvStoreB::attach(void *region_base, size_t region_bytes,
   }
 
   stop_.store(false, std::memory_order_relaxed);
-  replicator_ = std::thread(&CxlKvStoreB::replicator_loop, this);
+  if (!read_only_) {
+    replicator_ = std::thread(&CxlKvStoreB::replicator_loop, this);
+  }
   return 0;
 }
 
@@ -130,6 +135,10 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
 }
 
 int CxlKvStoreB::insert(uint64_t key, uint64_t value) {
+  if (read_only_) {
+    fprintf(stderr, "CxlKvStoreB::insert called on read-only attach\n");
+    std::abort();
+  }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
   lock_table_.lock(idx, host_id_, num_hosts_);
@@ -166,6 +175,10 @@ int CxlKvStoreB::insert(uint64_t key, uint64_t value) {
 }
 
 int CxlKvStoreB::update(uint64_t key, uint64_t value) {
+  if (read_only_) {
+    fprintf(stderr, "CxlKvStoreB::update called on read-only attach\n");
+    std::abort();
+  }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
   lock_table_.lock(idx, host_id_, num_hosts_);
@@ -204,6 +217,10 @@ int CxlKvStoreB::update(uint64_t key, uint64_t value) {
 }
 
 int CxlKvStoreB::remove(uint64_t key) {
+  if (read_only_) {
+    fprintf(stderr, "CxlKvStoreB::remove called on read-only attach\n");
+    std::abort();
+  }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
   lock_table_.lock(idx, host_id_, num_hosts_);

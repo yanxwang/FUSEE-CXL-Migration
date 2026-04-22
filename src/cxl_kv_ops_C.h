@@ -27,8 +27,11 @@ class CxlKvStoreC {
   //
   // `region_base` must point to a CXL-shared mmap. `region_bytes` is the
   // usable size; if too small for `num_buckets`, returns -1.
+  // `read_only` is accepted for API symmetry with A/B (where it skips the
+  // replicator thread). C has no replicator, so the flag is ignored.
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
-             int host_id, int num_hosts, bool init_region);
+             int host_id, int num_hosts, bool init_region,
+             bool read_only = false);
 
   // Returns the byte footprint required for a store of `num_buckets`.
   static size_t bytes_for(uint32_t num_buckets);

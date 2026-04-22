@@ -33,7 +33,8 @@ size_t CxlKvStoreC::bytes_for(uint32_t num_buckets) {
 
 int CxlKvStoreC::attach(void *region_base, size_t region_bytes,
                         uint32_t num_buckets, int host_id, int num_hosts,
-                        bool init_region) {
+                        bool init_region, bool read_only) {
+  (void)read_only;  // C has no replicator; accepted only for API parity.
   if (!region_base || num_buckets == 0) return -1;
   size_t need = bytes_for(num_buckets);
   if (region_bytes < need) return -1;

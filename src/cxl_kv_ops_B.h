@@ -30,7 +30,8 @@ namespace fusee {
 class CxlKvStoreB {
  public:
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
-             int host_id, int num_hosts, bool init_region);
+             int host_id, int num_hosts, bool init_region,
+             bool read_only = false);
   void stop();
 
   static size_t bytes_for(uint32_t num_buckets);
@@ -71,7 +72,7 @@ class CxlKvStoreB {
   BucketLockTable    lock_table_;
   CxlKvBucket       *buckets_ = nullptr;
   PendingRingMatrix *rings_ = nullptr;
-  uint64_t local_tail_[kMaxHosts] = {0, 0, 0, 0};
+  uint64_t local_tail_[kMaxHosts] = {};
 
   std::thread replicator_;
   std::atomic<bool> stop_{false};
@@ -87,6 +88,7 @@ class CxlKvStoreB {
   mutable std::vector<std::atomic<uint64_t>> cache_epoch_;
 
   bool recovery_mode_ = false;
+  bool read_only_ = false;
 };
 
 } // namespace fusee

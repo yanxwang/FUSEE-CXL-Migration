@@ -188,21 +188,43 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Options A and B keep per-host replication state (PendingRing matrix is
-  // sized by kMaxHosts, indexed by cross-host id, and one replicator thread
-  // per process). Intra-host client scaling would require a per-client ring
-  // + non-shared replicator — out of scope for this sweep. Clamp at 1 for
-  // A/B so every tagged run still finishes cleanly; the resulting plots
-  // show A/B as flat across client counts, which is the honest answer.
+  // Options A and B keep per-host replication state (PendingRing matrix,
+  // one replicator per process). Intra-host client scaling is unsafe for
+  // WRITES (multiple clients push to same ring, multiple replicators race
+  // on head cursor), but the SEARCH path is lock-free and purely local,
+  // so pure-read workloads (workloadc) are safe. For the main sweep we
+  // clamp to 1 to avoid any corruption risk on mixed workloads; set
+  // FUSEE_UNSAFE_UNCLAMP=1 to override (e.g. for pure-read A/B scaling
+  // validation). Behavior unchanged for opt=C (never clamped).
   const int requested_clients = num_clients;
 #if CONSENSUS_OPT != FUSEE_OPT_C
-  if (num_clients > 1) {
-    fprintf(stderr,
-      "[h%d] opt %c: forcing num_clients=1 (requested %d). "
-      "Intra-host client scaling for A/B needs per-client PendingRing; "
-      "current code keeps per-host state.\n",
-      host_id, kConsensusOpt, num_clients);
-    num_clients = 1;
+  {
+    const char *unclamp = getenv("FUSEE_UNSAFE_UNCLAMP");
+    const char *ro = getenv("FUSEE_READ_ONLY");
+    bool unclamp_active = (unclamp && unclamp[0] == '1');
+    bool read_only      = (ro && ro[0] == '1');
+    // Phase 1: FUSEE_READ_ONLY=1 is the safe unclamp path — non-primary
+    // children attach read-only and will abort() if they try to write.
+    // FUSEE_UNSAFE_UNCLAMP=1 is the legacy/debug path with no guard rails.
+    bool override_clamp = unclamp_active || read_only;
+    if (num_clients > 1 && !override_clamp) {
+      fprintf(stderr,
+        "[h%d] opt %c: forcing num_clients=1 (requested %d). "
+        "Set FUSEE_READ_ONLY=1 (safe; pure reads) or FUSEE_UNSAFE_UNCLAMP=1 "
+        "(no guard rails) to override.\n",
+        host_id, kConsensusOpt, num_clients);
+      num_clients = 1;
+    } else if (num_clients > 1 && read_only) {
+      fprintf(stderr,
+        "[h%d] opt %c: FUSEE_READ_ONLY=1, running with %d clients/host, "
+        "non-primary clients are read-only.\n",
+        host_id, kConsensusOpt, num_clients);
+    } else if (num_clients > 1 && unclamp_active) {
+      fprintf(stderr,
+        "[h%d] opt %c: FUSEE_UNSAFE_UNCLAMP=1, running with %d clients/host "
+        "(DATA CORRUPTION if workload has writes)\n",
+        host_id, kConsensusOpt, num_clients);
+    }
   }
 #else
   (void)requested_clients;
@@ -263,6 +285,32 @@ int main(int argc, char **argv) {
   const int global_id = host_id * num_clients + client_id;
   const bool is_primary_client = (host_id == 0) && (client_id == 0);
 
+  // Phase 1 read-only path: if FUSEE_READ_ONLY=1 and opt=A/B, non-primary
+  // fork children attach read-only (skip replicator, trip-wire on any
+  // write). Primary still attaches write-capable because it runs the
+  // LOAD phase. Result: A/B pure-read workloads scale intra-host without
+  // the PendingRing per-host bottleneck.
+  const char *ro_env = getenv("FUSEE_READ_ONLY");
+  const bool read_only_mode = (ro_env && ro_env[0] == '1');
+
+  // When A/B are unclamped (pure-read validation), PendingRing matrix is
+  // sized by kMaxHosts=4 and attach refuses num_hosts > 4. Avoid that by
+  // attaching with (host_id, num_hosts) — same lock_id for all same-host
+  // clients. Safe for pure-read workloads because search path doesn't
+  // touch PendingRing and doesn't acquire the LFM. For Opt C we still
+  // pass (global_id, total_workers) so each client gets its own LFM slot.
+  const char *unclamp_env = getenv("FUSEE_UNSAFE_UNCLAMP");
+  const bool unclamp_active = (unclamp_env && unclamp_env[0] == '1') ||
+                              read_only_mode;
+  int attach_id = global_id;
+  int attach_n  = total_workers;
+#if CONSENSUS_OPT != FUSEE_OPT_C
+  if (unclamp_active) {
+    attach_id = host_id;
+    attach_n  = num_hosts;
+  }
+#endif
+
   // Cross-host init ordering: host 0 client 0 publishes init_done + cookie
   // AFTER its KV-store attach+init; other hosts wait on cookie.
   TC("after fork global_id=%d total_workers=%d", global_id, total_workers);
@@ -271,8 +319,9 @@ int main(int argc, char **argv) {
   if (is_primary_client) {
     // Primary client attaches with init_region=true and total_workers as the
     // LFM num_hosts so every client gets its own LFM slot.
-    if (store.attach(r.base, kv_bytes, num_buckets, global_id, total_workers,
-                     /*init_region=*/true) != 0) {
+    // Primary always attaches write-capable (it runs the LOAD phase).
+    if (store.attach(r.base, kv_bytes, num_buckets, attach_id, attach_n,
+                     /*init_region=*/true, /*read_only=*/false) != 0) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       cxl_region_destroy(&r); return 1;
     }
@@ -300,8 +349,14 @@ int main(int argc, char **argv) {
     while (CACHELINE_LOAD(&shared->init_done) == 0)
       __builtin_ia32_pause();
     TC("saw init_done");
-    if (store.attach(r.base, kv_bytes, num_buckets, global_id, total_workers,
-                     /*init_region=*/false) != 0) {
+    // Read-only mode: client_id==0 on each host still attaches write-capable
+    // so it can run its local replicator (host 0 c0 also does load). Fork
+    // children client_id>0 attach read-only — they skip the replicator and
+    // trip on any write attempt.
+    const bool this_client_read_only = (read_only_mode && client_id > 0);
+    if (store.attach(r.base, kv_bytes, num_buckets, attach_id, attach_n,
+                     /*init_region=*/false,
+                     /*read_only=*/this_client_read_only) != 0) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       cxl_region_destroy(&r);
       if (client_id > 0) _exit(1);
@@ -328,13 +383,16 @@ int main(int argc, char **argv) {
     return rc;
   };
 
-  // LOAD (host 0 clients only, partitioned by client_id).
+  // LOAD (only host 0's PRIMARY CLIENT does inserts). Originally host 0's
+  // clients partitioned the load phase round-robin, but with unclamp that
+  // produces concurrent inserts from multiple host-0 clients into the
+  // same PendingRing → race. Safer to keep load single-threaded on
+  // client 0; the load throughput is then a separate measurement anyway.
   uint64_t t_load_start = 0;
-  if (is_host_primary) {
-    if (is_primary_client) t_load_start = now_ns();
-    size_t N = load_ops_v.size();
-    for (size_t i = (size_t)client_id; i < N; i += (size_t)num_clients) {
-      uint64_t dt; do_op(load_ops_v[i], &dt);
+  if (is_primary_client) {
+    t_load_start = now_ns();
+    for (const Op &o : load_ops_v) {
+      uint64_t dt; do_op(o, &dt);
     }
   }
   YcsbWorker *my_row = &shared->hosts[host_id].workers[client_id];

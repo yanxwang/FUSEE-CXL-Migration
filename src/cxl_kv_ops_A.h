@@ -34,9 +34,15 @@ namespace fusee {
 class CxlKvStoreA {
  public:
   // Attach/init. Exactly one host per region must pass init_region=true.
-  // Starts the replicator thread as a side effect on every host.
+  // Starts the replicator thread as a side effect on every host, unless
+  // read_only is true — in which case no ring state is consumed, no
+  // replicator is spawned, and any write operation (insert/update/remove)
+  // will abort() at runtime. This lets pure-read clients scale intra-host
+  // without needing per-client rings (Phase 4). See
+  // docs/ABC_throughput_improvement_plan.md §Phase 1.
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
-             int host_id, int num_hosts, bool init_region);
+             int host_id, int num_hosts, bool init_region,
+             bool read_only = false);
 
   // Stops the replicator thread. Call before destroying the CXL region.
   void stop();
@@ -95,7 +101,7 @@ class CxlKvStoreA {
 
   // Per-dst producer tail mirror: single-producer cursor lives on src side so
   // we do not need atomic-fetch-add on CXL.
-  uint64_t local_tail_[kMaxHosts] = {0, 0, 0, 0};
+  uint64_t local_tail_[kMaxHosts] = {};
 
   // Replicator thread state.
   std::thread replicator_;
@@ -112,6 +118,10 @@ class CxlKvStoreA {
   // When true, dispatch_and_wait skips the ring enqueue + ACK wait. Flipped
   // on by recover_from_oplog around the redo pass only.
   bool recovery_mode_ = false;
+
+  // Phase 1: if true, this client did not spawn a replicator and must not
+  // call any mutating op. Trip-wire set in attach(read_only=true).
+  bool read_only_ = false;
 };
 
 } // namespace fusee
