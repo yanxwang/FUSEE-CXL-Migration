@@ -58,29 +58,42 @@ def main():
     Ts_all = sorted({k[2] for k in runs})
 
     # 1. A/B/C throughput comparison per workload (cache=on) — Mops/s.
+    # Two versions per workload: log-y (shows scaling shape) + linear-y
+    # (shows absolute C >> A/B gap).
     for wl in wls:
-        fig, ax = plt.subplots(figsize=(7, 4.5))
+        data = {}
         for opt in opts:
             Ts, thpts = [], []
             for T in Ts_all:
                 k = (opt, wl, T, 1)
                 if k in runs:
                     Ts.append(T); thpts.append(runs[k]["thpt"] / 1e6)
-            if Ts:
-                ax.plot(Ts, thpts, "o-", lw=2, markersize=7,
-                        color=colors[opt], label=f"opt {opt}")
-        ax.set_xscale("log", base=2)
-        ax.set_yscale("log")
-        ax.set_xticks([1,2,4,8,16,32,64,86])
-        ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
-        ax.set_xlabel("#clients per host")
-        ax.set_ylabel("Throughput (Mops/s)")
-        ax.set_title(f"A/B/C comparison — {wl} — cache on\n"
-                     "(A/B clamped to 1 worker/host; per-host PendingRing state)")
-        ax.legend(); ax.grid(True, alpha=0.3, which="both")
-        fig.tight_layout()
-        fig.savefig(os.path.join(args.out_dir, f"abc_compare_{wl}.png"), dpi=150)
-        plt.close(fig)
+            data[opt] = (Ts, thpts)
+
+        for yscale in ("log", "linear"):
+            fig, ax = plt.subplots(figsize=(7, 4.5))
+            for opt in opts:
+                Ts, thpts = data[opt]
+                if Ts:
+                    ax.plot(Ts, thpts, "o-", lw=2, markersize=7,
+                            color=colors[opt], label=f"opt {opt}")
+            ax.set_xscale("log", base=2)
+            if yscale == "log":
+                ax.set_yscale("log")
+            ax.set_xticks([1,2,4,8,16,32,64,86])
+            ax.set_xticklabels(["1","2","4","8","16","32","64","86"])
+            ax.set_xlabel("#clients per host")
+            ax.set_ylabel("Throughput (Mops/s)")
+            yax = "log y" if yscale == "log" else "linear y"
+            ax.set_title(f"A/B/C comparison — {wl} — cache on ({yax})\n"
+                         "(A/B clamped to 1 worker/host; per-host PendingRing state)")
+            ax.legend(); ax.grid(True, alpha=0.3,
+                                 which="both" if yscale == "log" else "major")
+            fig.tight_layout()
+            suffix = "" if yscale == "log" else "_linear"
+            fig.savefig(os.path.join(args.out_dir,
+                        f"abc_compare_{wl}{suffix}.png"), dpi=150)
+            plt.close(fig)
 
     # 2. A/B/C write p99 latency comparison per workload (cache=on)
     for wl in wls:
