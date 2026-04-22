@@ -134,27 +134,55 @@ int main(int argc, char **argv) {
       }
     }
   }
+  // In fork-mode: open + init region BEFORE forking so all children
+  // inherit a consistent mmap and a zeroed stats page. Otherwise on
+  // CXL devdax (which does NOT zero-fill on mmap), non-primary children
+  // read stale init_done / attached flags from a prior run's residual
+  // memory, skip barriers, and race the primary's memset. Observed on
+  // g3/g4 where fork-mode N=4 deadlocked 100% of the time; emr did not
+  // hit this only because its kernel happened to zero the region.
+  CXLRegion r{};
   if (!role_mode) {
+    if (cxl_region_init(&r, dev, needed) < 0) {
+      fprintf(stderr, "[parent] cxl_region_init failed\n");
+      return 1;
+    }
+    // Zero the stats page in the parent so no matter what prior state
+    // devdax had, all children see stats->init_done == 0 after fork.
+    auto *pstats = reinterpret_cast<SharedStats *>(
+        reinterpret_cast<char *>(r.base) + r.size - kStatsOffsetFromEnd);
+    std::memset(pstats, 0, sizeof(*pstats));
+    flush_region(pstats, sizeof(*pstats));
+    store_fence();
+
     for (int i = 1; i < num_hosts; i++) {
       pid_t p = fork();
       if (p < 0) { perror("fork"); return 1; }
       if (p == 0) { host_id = i; children.clear(); break; }
       children.push_back(p);
     }
-  }
-
-  CXLRegion r{};
-  if (cxl_region_init(&r, dev, needed) < 0) {
-    fprintf(stderr, "[host %d] cxl_region_init failed\n", host_id);
-    return 1;
+  } else {
+    // Role-mode: each machine opens its own mmap independently. Primary
+    // (host_id == 0) is responsible for memset + init; non-primaries
+    // wait on init_done as before.
+    if (cxl_region_init(&r, dev, needed) < 0) {
+      fprintf(stderr, "[host %d] cxl_region_init failed\n", host_id);
+      return 1;
+    }
   }
 
   auto *stats = reinterpret_cast<SharedStats *>(
       reinterpret_cast<char *>(r.base) + r.size - kStatsOffsetFromEnd);
 
+  const bool trace = (getenv("FUSEE_TRACE") && getenv("FUSEE_TRACE")[0] == '1');
+#define TRACE(fmt, ...) do { if (trace) fprintf(stderr, "[h%d t=%.3fs] " fmt "\n", \
+  host_id, (double)now_ns()/1e9, ##__VA_ARGS__); } while (0)
+
   bool is_primary = (host_id == 0);
-  if (is_primary) {
-    // Zero stats upfront.
+  TRACE("region mapped size=%zu", r.size);
+  if (is_primary && role_mode) {
+    // In role-mode only: primary still zeros stats (fork-mode already
+    // did this in the parent before forking).
     std::memset(stats, 0, sizeof(*stats));
     flush_region(stats, sizeof(*stats));
     store_fence();
@@ -172,15 +200,18 @@ int main(int argc, char **argv) {
       return 1;
     }
     CACHELINE_STORE(&stats->init_done, 1ULL);
+    TRACE("primary attach done + init_done=1");
   } else {
-    // Non-primaries spin on init_done before attaching.
+    TRACE("non-primary waiting init_done");
     while (CACHELINE_LOAD(&stats->init_done) == 0) __builtin_ia32_pause();
+    TRACE("non-primary saw init_done; attaching");
     if (store.attach(r.base, r.size - kStatsOffsetFromEnd, num_buckets,
                      host_id, num_hosts, false) != 0) {
       fprintf(stderr, "[host %d] attach failed\n", host_id);
       cxl_region_destroy(&r);
       _exit(1);
     }
+    TRACE("non-primary attach done");
   }
 
   // DRAM cache opt-in via FUSEE_CACHE=1 env var. Protocol semantics diverge:
@@ -195,9 +226,11 @@ int main(int argc, char **argv) {
   // "Attached" barrier: do not start inserting until every host has completed
   // attach() (so every replicator thread is running before anyone enqueues).
   CACHELINE_STORE(&stats->hosts[host_id].attached, 1ULL);
+  TRACE("set attached=1");
   for (int h = 0; h < num_hosts; h++) {
     while (CACHELINE_LOAD(&stats->hosts[h].attached) == 0) __builtin_ia32_pause();
   }
+  TRACE("all attached");
 
   // Populate: each host fills its own key range (disjoint).
   auto make_key = [&](int h, uint64_t i) -> uint64_t {
@@ -212,14 +245,17 @@ int main(int argc, char **argv) {
 
   // Signal ready, wait for primary's go.
   CACHELINE_STORE(&stats->hosts[host_id].ready, 1ULL);
+  TRACE("populate done (inserted=%zu); set ready=1", my_keys.size());
 
   if (is_primary) {
     for (int h = 0; h < num_hosts; h++) {
       while (CACHELINE_LOAD(&stats->hosts[h].ready) == 0) __builtin_ia32_pause();
     }
     CACHELINE_STORE(&stats->go, 1ULL);
+    TRACE("all ready; go=1");
   } else {
     while (CACHELINE_LOAD(&stats->go) == 0) __builtin_ia32_pause();
+    TRACE("saw go");
   }
 
   // Timed loop.
