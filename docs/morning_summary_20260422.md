@@ -46,6 +46,19 @@ plan. A/B curves are therefore **flat across T by design**, not broken.
 
 C has no per-host replication state and so scales genuinely.
 
+## Follow-up experiments executed (P1, P6 from the proposed list)
+
+- **P1 bucket-count sweep** (T=86, opt C, workloads a/f, buckets 16k-4M):
+  bucket count is NOT the bottleneck at high T. Throughput flat across
+  256× range in bucket count. w_p50 healthy 10 μs, w_p99 24-45 ms —
+  scheduler tail, not contention. Finding + raw log under
+  `extra/bucket_sweep_{finding.md,T86.log}`.
+- **P6 cross-host vs solo** (opt C, g4-alone, T=1..86, 5 workloads):
+  2-host vs 1-host gain is 1.5-2× at T≤8, drops to 1.35× on reads at
+  T=86, and goes BELOW 1× for write-heavy workloads at T>32 (cross-host
+  coordination overhead eats the gain). Table + plot under
+  `extra/cross_host_gain_{finding.md,png}`.
+
 ## The interesting findings (beyond the requested plots)
 
 1. **C on pure-read workloads (c, d) scales 14× over A/B** at T=86.
@@ -77,7 +90,8 @@ quick grep found no others in the CXL tree.
 ## Commit trail (today's work)
 
 ```
-2329ea1  [scaling] bucket-count sweep + finding
+4fc1041  [scaling] cross-host vs solo compare (P6)
+2329ea1  [scaling] bucket-count sweep + finding (P1)
 129419c  [scaling] extra plots + analysis
 f08b6ac  [scaling] 240-run sweep complete
 9323ac8  [bug fix] A/B enable_dram_cache race
