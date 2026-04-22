@@ -117,18 +117,25 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
     const int kRingWaitBudgetUs = 2000000;
     uint64_t start = now_ns();
     for (;;) {
-      if (CACHELINE_LOAD(&e->op_id) == 0) break;
+      flush_line((void *)&e->prod);
+      full_fence();
+      if (e->prod.op_id == 0) break;
       if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) return -3;
       __builtin_ia32_pause();
     }
 
-    CACHELINE_STORE(&e->bucket_idx, (uint64_t)b_idx);
-    CACHELINE_STORE(&e->slot_idx,   (uint64_t)s_idx);
-    CACHELINE_STORE(&e->new_value_lo, value_word);
-    CACHELINE_STORE(&e->new_value_hi, 0ULL);
-    CACHELINE_STORE(&e->processed_op_id, 0ULL);
+    STORE_CACHELINE(&e->cons.processed_op_id, 0ULL);
+
+    // Fill producer payload cacheline and publish in one flush.
+    e->prod.bucket_idx = (uint64_t)b_idx;
+    e->prod.slot_idx   = (uint64_t)s_idx;
+    e->prod.new_value  = value_word;
+    compiler_barrier();
+    e->prod.op_id      = op_id;
+    compiler_barrier();
+    flush_line((void *)&e->prod);
     store_fence();
-    CACHELINE_STORE(&e->op_id, op_id);
+
     CACHELINE_STORE(&ring->tail, (uint64_t)(t + 1));
   }
   return 0;
@@ -378,19 +385,23 @@ void CxlKvStoreB::replicator_loop() {
       while (head < tail) {
         uint32_t slot = head % kPendingRingEntries;
         PendingRingEntry *e = &ring->entries[slot];
-        uint64_t op_id = CACHELINE_LOAD(&e->op_id);
+        flush_line((void *)&e->prod);
+        full_fence();
+        uint64_t op_id = e->prod.op_id;
         if (op_id == 0) break;
-
-        // Read the bucket_idx so we can invalidate our DRAM cache.
-        uint64_t bucket_hit = CACHELINE_LOAD(&e->bucket_idx);
+        uint64_t bucket_hit = e->prod.bucket_idx;
         if (cache_enabled_ && bucket_hit < num_buckets_) {
           cache_epoch_[bucket_hit].store(
               std::numeric_limits<uint64_t>::max(),
               std::memory_order_release);
         }
 
-        // B: no writer waits on processed_op_id, so we clear op_id directly.
-        CACHELINE_STORE(&e->op_id, 0ULL);
+        // B: no writer waits on processed_op_id, so we clear op_id directly
+        // by writing 0 to the payload cacheline's op_id field.
+        e->prod.op_id = 0;
+        compiler_barrier();
+        flush_line((void *)&e->prod);
+        store_fence();
         head++;
         replicated_ops_.fetch_add(1, std::memory_order_relaxed);
         did_work = true;

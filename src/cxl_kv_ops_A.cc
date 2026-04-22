@@ -133,26 +133,35 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     uint32_t slot = t % kPendingRingEntries;
     PendingRingEntry *e = &ring->entries[slot];
 
-    // Wait for this ring slot to be free (op_id == 0).
+    // Wait for this ring slot to be free (op_id == 0). flush_line first
+    // so we don't spin on a stale local copy.
     const int kRingWaitBudgetUs = 2000000; // 2 s sanity ceiling
     uint64_t start = now_ns();
     for (;;) {
-      uint64_t cur = CACHELINE_LOAD(&e->op_id);
-      if (cur == 0) break;
+      flush_line((void *)&e->prod);
+      full_fence();
+      if (e->prod.op_id == 0) break;
       if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) {
         return -3; // ring full / replicator stuck
       }
       __builtin_ia32_pause();
     }
 
-    // Fill entry fields before publishing op_id last.
-    CACHELINE_STORE(&e->bucket_idx, (uint64_t)b_idx);
-    CACHELINE_STORE(&e->slot_idx,   (uint64_t)s_idx);
-    CACHELINE_STORE(&e->new_value_lo, value_word);
-    CACHELINE_STORE(&e->new_value_hi, 0ULL);
-    CACHELINE_STORE(&e->processed_op_id, 0ULL);
+    // Clear consumer ACK line (separate cacheline).
+    STORE_CACHELINE(&e->cons.processed_op_id, 0ULL);
+
+    // Fill producer payload. All four fields live on one cacheline;
+    // one flush+sfence at the end publishes them atomically (64 B store
+    // is atomic wrt the CXL memory server). op_id written LAST so any
+    // consumer that races with the store sees a coherent line.
+    e->prod.bucket_idx = (uint64_t)b_idx;
+    e->prod.slot_idx   = (uint64_t)s_idx;
+    e->prod.new_value  = value_word;
+    compiler_barrier();
+    e->prod.op_id      = op_id;
+    compiler_barrier();
+    flush_line((void *)&e->prod);
     store_fence();
-    CACHELINE_STORE(&e->op_id, op_id);
 
     // Publish the tail update so the consumer knows something new landed.
     CACHELINE_STORE(&ring->tail, (uint64_t)(t + 1));
@@ -172,7 +181,7 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     PendingRingEntry *e = my_entries[dst];
     uint64_t start = now_ns();
     for (;;) {
-      if (CACHELINE_LOAD(&e->processed_op_id) == op_id) break;
+      if (LOAD_CACHELINE(&e->cons.processed_op_id) == op_id) break;
       if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
         timed_out = true;
         ack_timeouts_[dst].fetch_add(1, std::memory_order_relaxed);
@@ -182,12 +191,15 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     }
   }
 
-  // Always clear op_id on every dst so the slot can be reused. If the
-  // replicator ends up processing a stale entry, it sets processed_op_id to
-  // an op_id the current writer no longer waits on — harmless.
+  // Always clear op_id on every dst so the slot can be reused. Payload
+  // cacheline has op_id as last u64; flush_line + sfence publishes the
+  // zero to the memory server.
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
-    CACHELINE_STORE(&my_entries[dst]->op_id, 0ULL);
+    my_entries[dst]->prod.op_id = 0;
+    compiler_barrier();
+    flush_line((void *)&my_entries[dst]->prod);
+    store_fence();
   }
 
   return timed_out ? -4 : 0;
@@ -447,25 +459,24 @@ void CxlKvStoreA::replicator_loop() {
       while (head < tail) {
         uint32_t slot = head % kPendingRingEntries;
         PendingRingEntry *e = &ring->entries[slot];
-        uint64_t op_id = CACHELINE_LOAD(&e->op_id);
+        // Load the producer payload cacheline atomically. One
+        // flush+fence pulls all 4 fields at once.
+        flush_line((void *)&e->prod);
+        full_fence();
+        uint64_t op_id = e->prod.op_id;
         if (op_id == 0) break; // not yet published
-
-        // Simulated "pull" — touch the CXL side of the source entry so the
-        // replicator pays a comparable cost to a real fetch.
-        (void)CACHELINE_LOAD(&e->new_value_lo);
+        uint64_t bucket_hit = e->prod.bucket_idx;
+        (void)e->prod.new_value;  // simulated pull: field already in register
 
         // A's "synchronous invalidation" promise: invalidate the DRAM cache
-        // for the bucket BEFORE publishing processed_op_id. After writer
-        // sees its ACK, it knows no host can serve this bucket from stale
-        // cache.
-        uint64_t bucket_hit = CACHELINE_LOAD(&e->bucket_idx);
+        // for the bucket BEFORE publishing processed_op_id.
         if (cache_enabled_ && bucket_hit < num_buckets_) {
           cache_epoch_[bucket_hit].store(
               std::numeric_limits<uint64_t>::max(),
               std::memory_order_release);
         }
 
-        CACHELINE_STORE(&e->processed_op_id, op_id);
+        STORE_CACHELINE(&e->cons.processed_op_id, op_id);
         head++;
         replicated_ops_.fetch_add(1, std::memory_order_relaxed);
         did_work = true;
