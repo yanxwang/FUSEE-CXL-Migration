@@ -1,37 +1,39 @@
-// Phase 5: minimal YCSB workload-file runner for the CXL-FUSEE KV store.
+// YCSB workload runner with fork-based client scaling.
 //
-// Reads a YCSB-style spec file (one op per line, formats supported:
-//   "OP KEY"            (YCSB_10M-style)
-//   "OP TABLE KEY"      (original FUSEE spec)
-//   where OP is one of INSERT / READ / UPDATE / DELETE and KEY is an
-//   arbitrary string), hashes the key down to u64, and dispatches to
-//   CxlKvStore. Single-process; multi-proc can be built on top later.
+// Client model: each "client" is a forked process with its own CxlKvStore
+// instance and unique LFM slot. This matches the FUSEE concept of "client
+// threads" (separate execution contexts operating on the shared hash table)
+// without the intra-process serialization a pthread_mutex would impose.
 //
-// Usage:
-//   ./cxl_ycsb_runner <dev_path> <load_file> <trans_file> [num_buckets] [max_ops]
+// Layouts
+// -------
+//   FUSEE_NUM_HOSTS=H        cross-host (machines) count, 1..4
+//   FUSEE_HOST_ID=h          0..H-1 for THIS invocation
+//   FUSEE_NUM_THREADS=N      clients per host (we still call the env
+//                            "THREADS" for compat; implementation is fork)
+//   FUSEE_RUN_COOKIE=...     unique u64, orchestrator-supplied, required
+//                            when H > 1
+//   FUSEE_CACHE=1            enable DRAM cache
 //
-// load_file is the INSERT-only phase (typically <workload>.spec_load);
-// trans_file is the mixed phase (<workload>.spec_trans).
-// max_ops (optional): cap each phase to this many ops. Useful for quick
-// smoke runs against the real YCSB workloads which can be 10 M+ lines.
+// Each client gets:
+//   global_id = h * N + client_index       (0 .. H*N-1, used as LFM id)
+//   total_workers = H * N
+// and executes trans_ops[k] where k % total_workers == global_id.
 //
-// Role mode for cross-machine runs (set both env vars):
-//   FUSEE_NUM_HOSTS=N     total number of hosts (invocations) in this run
-//   FUSEE_HOST_ID=i       0-based role id for THIS invocation
+// Only host 0's clients run the LOAD phase, partitioned similarly across
+// their N clients (i % N == client_index).
 //
-//   With role mode, host 0 runs the entire load phase alone to populate the
-//   store, then all hosts run their slice of the trans phase in parallel
-//   (host i executes trans ops at indices k where k % N == i). Host 0
-//   prints the aggregated YCSB summary (sum of per-host trans_thpt across
-//   hosts, matched against the max wall across hosts).
-//
-// Emits a single line summary:
-//   YCSB opt=X load_ops=N load_thpt=... trans_ops=M trans_thpt=... ...
+// Output (host 0 primary client prints a single line):
+//   YCSB opt=X cache=C num_hosts=H threads=N load_ops=... load_thpt=...
+//        trans_ops=... trans_wall_max=...s trans_agg_thpt=...
+//        w_avg_ns=... w_p50_ns=... w_p99_ns=...
+//        r_avg_ns=... r_p50_ns=... r_p99_ns=...
 
 #include "cxl_kv_store.h"
 #include "cxl_mm.h"
 #include "cxl_hashtable.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -40,58 +42,60 @@
 #include <ctime>
 #include <fstream>
 #include <string>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 extern "C" {
-#include "common.h"   // cacheline_u64, CACHELINE_LOAD / _STORE
+#include "common.h"
 }
 
-// Shared stats region for cross-host aggregation. Placed at the END of the
-// CXL region so it does not collide with the KV-store carve-out.
 namespace {
+
+constexpr int kMaxClientsPerHost = 128;
+constexpr int kMaxHostsLoc = 4;
+constexpr size_t kYcsbStatsOffsetFromEnd = 2UL * 1024 * 1024;  // 2 MB
+
+struct YcsbWorker {
+  cacheline_u64 started;
+  cacheline_u64 done;
+  cacheline_u64 ops;
+  cacheline_u64 wall_ns;
+  cacheline_u64 w_count;
+  cacheline_u64 w_sum_ns;
+  cacheline_u64 w_p50_ns;
+  cacheline_u64 w_p99_ns;
+  cacheline_u64 r_count;
+  cacheline_u64 r_sum_ns;
+  cacheline_u64 r_p50_ns;
+  cacheline_u64 r_p99_ns;
+};
+
 struct YcsbHostRow {
-  cacheline_u64 attached;
-  cacheline_u64 load_done;   // set by host 0 after load phase
-  cacheline_u64 trans_done;  // per-host: set after each host's trans slice
-  cacheline_u64 trans_ops;
-  cacheline_u64 trans_wall_ns;
+  cacheline_u64 load_done_all;
+  YcsbWorker workers[kMaxClientsPerHost];
 };
+
 struct YcsbShared {
-  cacheline_u64 run_cookie;  // primary writes; non-primary waits for env match
+  cacheline_u64 run_cookie;
   cacheline_u64 init_done;
-  YcsbHostRow hosts[4];      // kMaxHosts
+  cacheline_u64 trans_go;
+  YcsbHostRow hosts[kMaxHostsLoc];
 };
-constexpr size_t kYcsbStatsOffsetFromEnd = 8192;
-} // namespace
-
-using fusee::CxlKvStore;
-using fusee::CXLRegion;
-using fusee::cxl_region_destroy;
-using fusee::cxl_region_init;
-using fusee::fnv1a_u64;
-using fusee::kConsensusOpt;
-
-namespace {
 
 uint64_t now_ns() {
-  timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
 uint64_t hash_str(const std::string &s) {
-  // Chain FNV-1a over bytes, fold into a 64-bit result. Reserves 0.
   uint64_t h = 0xcbf29ce484222325ULL;
-  for (unsigned char c : s) {
-    h ^= c;
-    h *= 0x100000001b3ULL;
-  }
-  if (h == 0) h = 1; // cannot use kEmptyKey
+  for (unsigned char c : s) { h ^= c; h *= 0x100000001b3ULL; }
+  if (h == 0) h = 1;
   return h;
 }
 
 enum OpKind { OP_INSERT, OP_READ, OP_UPDATE, OP_DELETE, OP_SKIP };
-
 OpKind parse_op(const std::string &s) {
   if (s == "INSERT") return OP_INSERT;
   if (s == "READ") return OP_READ;
@@ -99,44 +103,27 @@ OpKind parse_op(const std::string &s) {
   if (s == "DELETE") return OP_DELETE;
   return OP_SKIP;
 }
+struct Op { OpKind kind; uint64_t key; };
 
-struct Op {
-  OpKind kind;
-  uint64_t key;
-};
-
-std::vector<Op> load_ops(const std::string &path) {
+std::vector<Op> load_ops_from_file(const std::string &path) {
   std::vector<Op> out;
   std::ifstream f(path);
-  if (!f) {
-    fprintf(stderr, "failed to open %s: %s\n", path.c_str(), strerror(errno));
-    return out;
-  }
+  if (!f) { fprintf(stderr, "open %s: %s\n", path.c_str(), strerror(errno)); return out; }
   std::string line;
   while (std::getline(f, line)) {
     if (line.empty()) continue;
-    // Tokens separated by whitespace; accept "OP KEY" or "OP TABLE KEY".
-    size_t p1 = line.find_first_of(" \t");
-    if (p1 == std::string::npos) continue;
-    size_t p2 = line.find_first_not_of(" \t", p1);
-    if (p2 == std::string::npos) continue;
+    size_t p1 = line.find_first_of(" \t"); if (p1 == std::string::npos) continue;
+    size_t p2 = line.find_first_not_of(" \t", p1); if (p2 == std::string::npos) continue;
     size_t p3 = line.find_first_of(" \t", p2);
-    std::string op_tok = line.substr(0, p1);
-    std::string key_tok;
-    if (p3 == std::string::npos) {
-      key_tok = line.substr(p2);
-    } else {
+    std::string op_tok = line.substr(0, p1), key_tok;
+    if (p3 == std::string::npos) key_tok = line.substr(p2);
+    else {
       size_t p4 = line.find_first_not_of(" \t", p3);
       if (p4 == std::string::npos) continue;
       key_tok = line.substr(p4);
-      // If there was a third token, assume first-after-op was "TABLE".
     }
-    // Strip trailing whitespace.
-    while (!key_tok.empty() &&
-           (key_tok.back() == ' ' || key_tok.back() == '\t' ||
-            key_tok.back() == '\n' || key_tok.back() == '\r')) {
-      key_tok.pop_back();
-    }
+    while (!key_tok.empty() && (key_tok.back()==' '||key_tok.back()=='\t'
+          ||key_tok.back()=='\n'||key_tok.back()=='\r')) key_tok.pop_back();
     OpKind k = parse_op(op_tok);
     if (k == OP_SKIP) continue;
     out.push_back({k, hash_str(key_tok)});
@@ -144,254 +131,324 @@ std::vector<Op> load_ops(const std::string &path) {
   return out;
 }
 
+uint64_t quantile_ns(std::vector<uint64_t> &v, double q) {
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  return v[(size_t)(q * (v.size() - 1))];
+}
+
 } // namespace
+
+using fusee::CxlKvStore;
+using fusee::CXLRegion;
+using fusee::cxl_region_destroy;
+using fusee::cxl_region_init;
+using fusee::kConsensusOpt;
 
 int main(int argc, char **argv) {
   if (argc < 4) {
     fprintf(stderr,
-            "usage: %s <dev_path> <load_file> <trans_file> [num_buckets] [max_ops]\n",
-            argv[0]);
+      "usage: %s <dev> <load_file> <trans_file> [num_buckets] [max_ops_cap]\n",
+      argv[0]);
     return 2;
   }
   const char *dev = argv[1];
   std::string load_path = argv[2];
   std::string trans_path = argv[3];
   uint32_t num_buckets =
-      (argc >= 5) ? (uint32_t)strtoul(argv[4], nullptr, 0) : 16384U;
+      (argc >= 5) ? (uint32_t)strtoul(argv[4], nullptr, 0) : 65536U;
   size_t max_ops =
       (argc >= 6) ? (size_t)strtoull(argv[5], nullptr, 0) : 0;
 
-  std::vector<Op> load_ops_v = load_ops(load_path);
-  std::vector<Op> trans_ops_v = load_ops(trans_path);
-  if (max_ops > 0) {
-    if (load_ops_v.size()  > max_ops) load_ops_v.resize(max_ops);
-    if (trans_ops_v.size() > max_ops) trans_ops_v.resize(max_ops);
-  }
-  if (load_ops_v.empty() && trans_ops_v.empty()) {
-    fprintf(stderr, "no valid ops parsed\n");
-    return 1;
-  }
-  printf("parsed %zu load ops, %zu trans ops\n",
-         load_ops_v.size(), trans_ops_v.size());
-
-  // Role mode detection. If FUSEE_NUM_HOSTS is unset, behave as the
-  // original single-process runner. Otherwise we are one of N cooperating
-  // processes (possibly on different machines) sharing this CXL region.
-  int num_hosts = 1;
-  int host_id = 0;
+  // Env.
+  int num_hosts = 1, host_id = 0, num_clients = 1;
+  uint64_t run_cookie = 0;
   {
     const char *nh = getenv("FUSEE_NUM_HOSTS");
     const char *hid = getenv("FUSEE_HOST_ID");
-    if (nh && nh[0] != '\0') num_hosts = atoi(nh);
-    if (hid && hid[0] != '\0') host_id = atoi(hid);
-    if (num_hosts < 1 || num_hosts > 4 || host_id < 0 || host_id >= num_hosts) {
-      fprintf(stderr, "bad FUSEE_NUM_HOSTS=%d FUSEE_HOST_ID=%d (need 1..4)\n",
+    const char *nc = getenv("FUSEE_NUM_THREADS"); // semantic: clients
+    const char *rc = getenv("FUSEE_RUN_COOKIE");
+    if (nh && nh[0]) num_hosts = atoi(nh);
+    if (hid && hid[0]) host_id = atoi(hid);
+    if (nc && nc[0]) num_clients = atoi(nc);
+    if (rc && rc[0]) run_cookie = strtoull(rc, nullptr, 0);
+    if (num_hosts < 1 || num_hosts > kMaxHostsLoc ||
+        host_id < 0 || host_id >= num_hosts) {
+      fprintf(stderr, "bad FUSEE_NUM_HOSTS=%d FUSEE_HOST_ID=%d\n",
               num_hosts, host_id);
       return 2;
     }
+    if (num_clients < 1 || num_clients > kMaxClientsPerHost) {
+      fprintf(stderr, "bad FUSEE_NUM_THREADS=%d\n", num_clients);
+      return 2;
+    }
+    if (num_hosts > 1 && run_cookie == 0) {
+      fprintf(stderr, "role-mode requires FUSEE_RUN_COOKIE\n");
+      return 2;
+    }
   }
-  bool role_mode = (num_hosts > 1);
-  bool is_primary = (host_id == 0);
+  const int total_workers = num_hosts * num_clients;
+  const bool role_mode = (num_hosts > 1);
 
-  const bool trace = (getenv("FUSEE_TRACE") && getenv("FUSEE_TRACE")[0] == '1');
-#define TRACE(fmt, ...) do { if (trace) fprintf(stderr, "[yh%d t=%.3fs] " fmt "\n", \
-  host_id, (double)now_ns()/1e9, ##__VA_ARGS__); fflush(stderr); } while (0)
-  TRACE("start num_hosts=%d role_mode=%d", num_hosts, role_mode);
+  std::vector<Op> load_ops_v = load_ops_from_file(load_path);
+  std::vector<Op> trans_ops_v = load_ops_from_file(trans_path);
+  if (max_ops > 0) {
+    if (load_ops_v.size() > max_ops) load_ops_v.resize(max_ops);
+    if (trans_ops_v.size() > max_ops) trans_ops_v.resize(max_ops);
+  }
+  if (load_ops_v.empty() && trans_ops_v.empty()) {
+    fprintf(stderr, "no valid ops parsed\n"); return 1;
+  }
 
+  // Region sizing.
   size_t store_bytes = CxlKvStore::bytes_for(num_buckets);
-  size_t needed_kv = store_bytes;
-  if (role_mode) needed_kv += kYcsbStatsOffsetFromEnd;
-  size_t needed = ((needed_kv + fusee::kCxlDevdaxAlign - 1) /
-                   fusee::kCxlDevdaxAlign) *
-                  fusee::kCxlDevdaxAlign;
+  size_t needed_total = store_bytes + kYcsbStatsOffsetFromEnd;
+  size_t needed = ((needed_total + fusee::kCxlDevdaxAlign - 1) /
+                   fusee::kCxlDevdaxAlign) * fusee::kCxlDevdaxAlign;
 
+  // ========================================================================
+  // Parent (per-host): open region, memset stats, fork num_clients-1
+  // children BEFORE any further setup. Children inherit the zeroed mmap.
+  // This is the same fix applied to cxl_kv_bench_mp (see
+  // docs/g34_bench/g34_livelock_root_cause.md).
+  // ========================================================================
   CXLRegion r{};
   if (cxl_region_init(&r, dev, needed) < 0) {
-    fprintf(stderr, "cxl_region_init failed\n");
-    return 1;
+    fprintf(stderr, "cxl_region_init failed\n"); return 1;
+  }
+  YcsbShared *shared = reinterpret_cast<YcsbShared *>(
+      reinterpret_cast<char *>(r.base) + r.size - kYcsbStatsOffsetFromEnd);
+  bool is_host_primary = (host_id == 0);
+  if (is_host_primary) {
+    std::memset(shared, 0, sizeof(*shared));
+    flush_region(shared, sizeof(*shared));
+    store_fence();
   }
 
-  // Shared stats region (only meaningful in role mode). CXL devdax mmap
-  // on g3/g4 does NOT zero-fill on fresh mmap, so a plain init_done flag
-  // is unsafe — non-primary may see a stale "1" from the previous run
-  // and skip its wait. We require the orchestrator to pass a unique
-  // FUSEE_RUN_COOKIE; primary writes it AFTER memset, non-primary waits
-  // for the cookie to match.
-  YcsbShared *shared = nullptr;
-  uint64_t run_cookie = 0;
-  if (role_mode) {
-    const char *cookie_env = getenv("FUSEE_RUN_COOKIE");
-    if (!cookie_env || cookie_env[0] == '\0') {
-      fprintf(stderr,
-        "role-mode requires FUSEE_RUN_COOKIE (unique per run) to avoid\n"
-        "stale-CXL-memory races. Orchestrator should pass it to both hosts.\n");
-      return 2;
-    }
-    run_cookie = strtoull(cookie_env, nullptr, 0);
-    if (run_cookie == 0) {
-      fprintf(stderr, "FUSEE_RUN_COOKIE must be non-zero\n");
-      return 2;
-    }
-    shared = reinterpret_cast<YcsbShared *>(
-        reinterpret_cast<char *>(r.base) + r.size - kYcsbStatsOffsetFromEnd);
-    TRACE("region mapped; shared at off=%zu", r.size - kYcsbStatsOffsetFromEnd);
-    if (is_primary) {
-      TRACE("primary memsetting shared (%zu bytes)", sizeof(*shared));
-      std::memset(shared, 0, sizeof(*shared));
-      flush_region(shared, sizeof(*shared));
-      store_fence();
-      TRACE("primary memset+fence done");
-    }
+  // Fork num_clients-1 children. Parent has client_id=0.
+  std::vector<pid_t> children;
+  int client_id = 0;
+  for (int i = 1; i < num_clients; i++) {
+    pid_t p = fork();
+    if (p < 0) { perror("fork"); return 1; }
+    if (p == 0) { client_id = i; children.clear(); break; }
+    children.push_back(p);
   }
 
-  // Primary attaches with init_region=true; others wait for init_done AND
-  // cookie match (cookie alone is sufficient, but init_done keeps the
-  // ordering obvious).
+  const int global_id = host_id * num_clients + client_id;
+  const bool is_primary_client = (host_id == 0) && (client_id == 0);
+
+  // Cross-host init ordering: host 0 client 0 publishes init_done + cookie
+  // AFTER its KV-store attach+init; other hosts wait on cookie.
   CxlKvStore store;
-  size_t kv_bytes = role_mode ? (r.size - kYcsbStatsOffsetFromEnd) : r.size;
-  if (is_primary) {
-    if (store.attach(r.base, kv_bytes, num_buckets, host_id, num_hosts,
+  size_t kv_bytes = r.size - kYcsbStatsOffsetFromEnd;
+  if (is_primary_client) {
+    // Primary client attaches with init_region=true and total_workers as the
+    // LFM num_hosts so every client gets its own LFM slot.
+    if (store.attach(r.base, kv_bytes, num_buckets, global_id, total_workers,
                      /*init_region=*/true) != 0) {
-      fprintf(stderr, "attach failed\n");
-      cxl_region_destroy(&r);
-      return 1;
+      fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
+      cxl_region_destroy(&r); return 1;
     }
     if (role_mode) {
       CACHELINE_STORE(&shared->init_done, 1ULL);
       CACHELINE_STORE(&shared->run_cookie, run_cookie);
-      TRACE("primary attach+init_done+cookie=%lu written", run_cookie);
     }
   } else {
-    TRACE("non-primary waiting for cookie=%lu", run_cookie);
-    while (CACHELINE_LOAD(&shared->run_cookie) != run_cookie)
+    // Non-primary clients wait for the primary client's init_done + cookie
+    // to match. (Applies to both same-host fork children AND cross-host.)
+    if (role_mode) {
+      while (CACHELINE_LOAD(&shared->run_cookie) != run_cookie)
+        __builtin_ia32_pause();
+    }
+    while (CACHELINE_LOAD(&shared->init_done) == 0)
       __builtin_ia32_pause();
-    TRACE("non-primary saw cookie");
-    while (CACHELINE_LOAD(&shared->init_done) == 0) __builtin_ia32_pause();
-    TRACE("non-primary saw init_done");
-    if (store.attach(r.base, kv_bytes, num_buckets, host_id, num_hosts,
+    if (store.attach(r.base, kv_bytes, num_buckets, global_id, total_workers,
                      /*init_region=*/false) != 0) {
-      fprintf(stderr, "[host %d] attach failed\n", host_id);
+      fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       cxl_region_destroy(&r);
+      if (client_id > 0) _exit(1);
       return 1;
     }
   }
-
-  const char *cache_env = getenv("FUSEE_CACHE");
-  bool cache_on = (cache_env && cache_env[0] == '1');
+  bool cache_on = getenv("FUSEE_CACHE") && getenv("FUSEE_CACHE")[0] == '1';
   if (cache_on) store.enable_dram_cache(true);
 
-  // "Attached" barrier in role mode so every host's replicator thread is
-  // running before anyone starts mutating the store.
-  if (role_mode) {
-    CACHELINE_STORE(&shared->hosts[host_id].attached, 1ULL);
-    TRACE("set attached[%d]=1", host_id);
-    for (int h = 0; h < num_hosts; h++) {
-      while (CACHELINE_LOAD(&shared->hosts[h].attached) == 0)
-        __builtin_ia32_pause();
-    }
-    TRACE("all attached");
-  }
-
-  auto run_phase = [&](const std::vector<Op> &ops, const char *label) {
-    uint64_t fails = 0;
+  // Helper: run one op, return latency in ns.
+  auto do_op = [&](const Op &o, uint64_t *dt_out) {
+    uint64_t v = o.key ^ 0xCAFEBABEULL;
+    uint64_t out = 0;
+    int rc = 0;
     uint64_t t0 = now_ns();
-    for (const auto &o : ops) {
-      uint64_t v = o.key ^ 0xCAFEBABEULL;
-      uint64_t out = 0;
-      int rc = 0;
-      switch (o.kind) {
-        case OP_INSERT: rc = store.insert(o.key, v); break;
-        case OP_UPDATE: rc = store.update(o.key, v); break;
-        case OP_DELETE: rc = store.remove(o.key); break;
-        case OP_READ:   rc = store.search(o.key, &out); break;
-        default: break;
-      }
-      if (rc < 0 && rc != -1 && rc != -2) fails++;
+    switch (o.kind) {
+      case OP_INSERT: rc = store.insert(o.key, v); break;
+      case OP_UPDATE: rc = store.update(o.key, v); break;
+      case OP_DELETE: rc = store.remove(o.key); break;
+      case OP_READ:   rc = store.search(o.key, &out); break;
+      default: break;
     }
-    uint64_t t1 = now_ns();
-    double wall = (t1 - t0) / 1e9;
-    double thpt = ops.empty() ? 0.0 : ops.size() / wall;
-    printf("PHASE host=%d label=%s ops=%zu wall=%.3fs thpt=%.0f fails=%lu\n",
-           host_id, label, ops.size(), wall, thpt, fails);
-    return std::pair<double, double>{wall, thpt};
+    if (dt_out) *dt_out = now_ns() - t0;
+    return rc;
   };
 
-  // LOAD phase:
-  //   role mode: host 0 does the whole load alone; others wait for load_done.
-  //   single:    as before.
-  std::pair<double, double> load_res{0.0, 0.0};
-  if (!role_mode) {
-    load_res = run_phase(load_ops_v, "load");
-  } else if (is_primary) {
-    load_res = run_phase(load_ops_v, "load");
-    CACHELINE_STORE(&shared->hosts[0].load_done, 1ULL);
-  } else {
-    while (CACHELINE_LOAD(&shared->hosts[0].load_done) == 0)
-      __builtin_ia32_pause();
-  }
-
-  // TRANS phase:
-  //   role mode: each host picks indices k where k % num_hosts == host_id.
-  //   single:    runs all trans ops.
-  std::vector<Op> my_trans;
-  if (role_mode) {
-    my_trans.reserve(trans_ops_v.size() / num_hosts + 1);
-    for (size_t k = host_id; k < trans_ops_v.size(); k += num_hosts) {
-      my_trans.push_back(trans_ops_v[k]);
+  // LOAD (host 0 clients only, partitioned by client_id).
+  uint64_t t_load_start = 0;
+  if (is_host_primary) {
+    if (is_primary_client) t_load_start = now_ns();
+    size_t N = load_ops_v.size();
+    for (size_t i = (size_t)client_id; i < N; i += (size_t)num_clients) {
+      uint64_t dt; do_op(load_ops_v[i], &dt);
     }
   }
-  auto trans_res = role_mode ? run_phase(my_trans, "trans")
-                             : run_phase(trans_ops_v, "trans");
+  YcsbWorker *my_row = &shared->hosts[host_id].workers[client_id];
 
-  if (role_mode) {
-    CACHELINE_STORE(&shared->hosts[host_id].trans_ops,
-                    (uint64_t)my_trans.size());
-    CACHELINE_STORE(&shared->hosts[host_id].trans_wall_ns,
-                    (uint64_t)(trans_res.first * 1e9));
-    CACHELINE_STORE(&shared->hosts[host_id].trans_done, 1ULL);
+  // Signal "started" (arrival at trans barrier).
+  CACHELINE_STORE(&my_row->started, 1ULL);
+
+  // Primary client waits for all 2N workers to reach barrier; publishes trans_go.
+  if (is_primary_client) {
+    for (int h = 0; h < num_hosts; h++) {
+      for (int c = 0; c < num_clients; c++) {
+        while (CACHELINE_LOAD(&shared->hosts[h].workers[c].started) == 0)
+          __builtin_ia32_pause();
+      }
+    }
+    CACHELINE_STORE(&shared->hosts[0].load_done_all, 1ULL);
+    CACHELINE_STORE(&shared->trans_go, 1ULL);
+  } else {
+    while (CACHELINE_LOAD(&shared->trans_go) == 0) __builtin_ia32_pause();
   }
 
-  if (role_mode) {
-    // Wait for all hosts to finish before stopping our replicator; mirrors
-    // the fix we applied in cxl_kv_bench_mp.
+  // TRANS: each client executes trans[i] where i % total_workers == global_id.
+  std::vector<uint64_t> wlat, rlat;
+  size_t NT = trans_ops_v.size();
+  wlat.reserve(NT / total_workers + 16);
+  rlat.reserve(NT / total_workers + 16);
+
+  uint64_t t_start = now_ns();
+  uint64_t my_ops = 0;
+  for (size_t i = (size_t)global_id; i < NT; i += (size_t)total_workers) {
+    uint64_t dt;
+    const Op &o = trans_ops_v[i];
+    do_op(o, &dt);
+    if (o.kind == OP_READ) rlat.push_back(dt);
+    else                   wlat.push_back(dt);
+    my_ops++;
+  }
+  uint64_t t_end = now_ns();
+
+  // Publish per-client stats.
+  uint64_t w_sum = 0; for (auto x : wlat) w_sum += x;
+  uint64_t r_sum = 0; for (auto x : rlat) r_sum += x;
+  CACHELINE_STORE(&my_row->ops, my_ops);
+  CACHELINE_STORE(&my_row->wall_ns, t_end - t_start);
+  CACHELINE_STORE(&my_row->w_count, (uint64_t)wlat.size());
+  CACHELINE_STORE(&my_row->w_sum_ns, w_sum);
+  CACHELINE_STORE(&my_row->w_p50_ns, quantile_ns(wlat, 0.50));
+  CACHELINE_STORE(&my_row->w_p99_ns, quantile_ns(wlat, 0.99));
+  CACHELINE_STORE(&my_row->r_count, (uint64_t)rlat.size());
+  CACHELINE_STORE(&my_row->r_sum_ns, r_sum);
+  CACHELINE_STORE(&my_row->r_p50_ns, quantile_ns(rlat, 0.50));
+  CACHELINE_STORE(&my_row->r_p99_ns, quantile_ns(rlat, 0.99));
+  CACHELINE_STORE(&my_row->done, 1ULL);
+
+  // Stop replicator threads (safe only after ALL peers finish, to avoid
+  // tearing down a ring while a peer writer is still enqueueing).
+  // Primary client does the cross-host "all done" wait; children exit cleanly.
+  if (!is_primary_client) {
+    // Also wait for all workers to be done before store.stop() (Option A
+    // replicator must not disappear while peers still push). Simple barrier:
+    // each worker waits for every worker's done flag.
     for (int h = 0; h < num_hosts; h++) {
-      while (CACHELINE_LOAD(&shared->hosts[h].trans_done) == 0)
+      for (int c = 0; c < num_clients; c++) {
+        while (CACHELINE_LOAD(&shared->hosts[h].workers[c].done) == 0)
+          __builtin_ia32_pause();
+      }
+    }
+    store.stop();
+    cxl_region_destroy(&r);
+    _exit(0);
+  }
+
+  // Primary client: wait for ALL 2N workers to be done.
+  for (int h = 0; h < num_hosts; h++) {
+    for (int c = 0; c < num_clients; c++) {
+      while (CACHELINE_LOAD(&shared->hosts[h].workers[c].done) == 0)
         __builtin_ia32_pause();
     }
   }
   store.stop();
 
-  if (role_mode && !is_primary) {
+  // Reap our fork children.
+  for (pid_t p : children) { int st; waitpid(p, &st, 0); }
+
+  // Host 1's primary client (host_id=1, client_id=0) is the "local primary"
+  // on its machine — it reaps its own children and then exits. Only host 0's
+  // global primary prints the YCSB line.
+  if (host_id != 0) {
     cxl_region_destroy(&r);
     return 0;
   }
 
-  if (!role_mode) {
-    printf("YCSB opt=%c cache=%d load_ops=%zu load_thpt=%.0f "
-           "trans_ops=%zu trans_thpt=%.0f\n",
-           kConsensusOpt, cache_on ? 1 : 0,
-           load_ops_v.size(), load_res.second,
-           trans_ops_v.size(), trans_res.second);
-  } else {
-    uint64_t agg_trans_ops = 0;
-    double   max_wall_s    = 0.0;
-    for (int h = 0; h < num_hosts; h++) {
-      uint64_t ops = CACHELINE_LOAD(&shared->hosts[h].trans_ops);
-      uint64_t wns = CACHELINE_LOAD(&shared->hosts[h].trans_wall_ns);
-      agg_trans_ops += ops;
-      double ws = wns / 1e9;
-      if (ws > max_wall_s) max_wall_s = ws;
+  // Aggregate across all total_workers.
+  uint64_t agg_ops = 0, max_wall_ns = 0;
+  uint64_t w_count = 0, w_sum_ns = 0, r_count = 0, r_sum_ns = 0;
+  std::vector<uint64_t> worker_w_p50, worker_w_p99, worker_r_p50, worker_r_p99;
+  worker_w_p50.reserve(total_workers); worker_w_p99.reserve(total_workers);
+  worker_r_p50.reserve(total_workers); worker_r_p99.reserve(total_workers);
+  for (int h = 0; h < num_hosts; h++) {
+    for (int c = 0; c < num_clients; c++) {
+      YcsbWorker *w = &shared->hosts[h].workers[c];
+      uint64_t ops_w = CACHELINE_LOAD(&w->ops);
+      uint64_t wall = CACHELINE_LOAD(&w->wall_ns);
+      agg_ops += ops_w;
+      if (wall > max_wall_ns) max_wall_ns = wall;
+      uint64_t wc = CACHELINE_LOAD(&w->w_count);
+      uint64_t wsum = CACHELINE_LOAD(&w->w_sum_ns);
+      uint64_t rc = CACHELINE_LOAD(&w->r_count);
+      uint64_t rsum = CACHELINE_LOAD(&w->r_sum_ns);
+      w_count += wc; w_sum_ns += wsum; r_count += rc; r_sum_ns += rsum;
+      if (wc > 0) {
+        worker_w_p50.push_back(CACHELINE_LOAD(&w->w_p50_ns));
+        worker_w_p99.push_back(CACHELINE_LOAD(&w->w_p99_ns));
+      }
+      if (rc > 0) {
+        worker_r_p50.push_back(CACHELINE_LOAD(&w->r_p50_ns));
+        worker_r_p99.push_back(CACHELINE_LOAD(&w->r_p99_ns));
+      }
     }
-    double agg_thpt = (max_wall_s > 0.0)
-                          ? (double)agg_trans_ops / max_wall_s
-                          : 0.0;
-    printf("YCSB opt=%c cache=%d num_hosts=%d "
-           "load_ops=%zu load_thpt=%.0f "
-           "trans_ops=%lu trans_wall_max=%.3fs trans_agg_thpt=%.0f\n",
-           kConsensusOpt, cache_on ? 1 : 0, num_hosts,
-           load_ops_v.size(), load_res.second,
-           agg_trans_ops, max_wall_s, agg_thpt);
   }
+  auto median_of = [&](std::vector<uint64_t> &v) -> uint64_t {
+    if (v.empty()) return 0;
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+  };
+  auto max_of = [&](const std::vector<uint64_t> &v) -> uint64_t {
+    uint64_t m = 0; for (auto x : v) if (x > m) m = x; return m;
+  };
+  uint64_t w_avg_ns = w_count ? w_sum_ns / w_count : 0;
+  uint64_t r_avg_ns = r_count ? r_sum_ns / r_count : 0;
+  uint64_t w_p50_ns = median_of(worker_w_p50);
+  uint64_t w_p99_ns = max_of(worker_w_p99);
+  uint64_t r_p50_ns = median_of(worker_r_p50);
+  uint64_t r_p99_ns = max_of(worker_r_p99);
+
+  double wall_max_s = max_wall_ns / 1e9;
+  double agg_thpt   = wall_max_s > 0 ? (double)agg_ops / wall_max_s : 0;
+  double load_wall_s = (now_ns() - t_load_start) / 1e9;
+  double load_thpt  = load_wall_s > 0
+                       ? (double)load_ops_v.size() / load_wall_s : 0;
+
+  printf("YCSB opt=%c cache=%d num_hosts=%d threads=%d "
+         "load_ops=%zu load_thpt=%.0f "
+         "trans_ops=%lu trans_wall_max=%.3fs trans_agg_thpt=%.0f "
+         "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
+         "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu\n",
+         kConsensusOpt, cache_on ? 1 : 0, num_hosts, num_clients,
+         load_ops_v.size(), load_thpt,
+         agg_ops, wall_max_s, agg_thpt,
+         w_avg_ns, w_p50_ns, w_p99_ns,
+         r_avg_ns, r_p50_ns, r_p99_ns);
 
   cxl_region_destroy(&r);
   return 0;
