@@ -22,6 +22,7 @@
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
 #include "cxl_pending_ring.h"
+#include "cxl_same_host_queue.h"
 
 #include <atomic>
 #include <stddef.h>
@@ -43,6 +44,18 @@ class CxlKvStoreA {
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
              int host_id, int num_hosts, bool init_region,
              bool read_only = false);
+
+  // Phase-4 follow-up: enable same-host DRAM bypass for writes. Writer will
+  // push invalidations to same-host peers via DRAM queues (O(1) work per
+  // same-host peer, cache-coherent, no CXL fabric hit) instead of CXL
+  // rings. Cross-host peers still use the CXL ring.
+  //   `mat` = process-shared anonymous mmap of DramInvalMatrix, allocated
+  //           and zeroed by the parent before fork.
+  //   `num_clients_per_host` = clients count in one physical host
+  //           (total_workers / physical_hosts).
+  // Must be called after attach() and before any op. Safe to omit
+  // (bypass off; all pushes go via CXL as before).
+  void enable_same_host_bypass(DramInvalMatrix *mat, int num_clients_per_host);
 
   // Stops the replicator thread. Call before destroying the CXL region.
   void stop();
@@ -122,6 +135,14 @@ class CxlKvStoreA {
   // Phase 1: if true, this client did not spawn a replicator and must not
   // call any mutating op. Trip-wire set in attach(read_only=true).
   bool read_only_ = false;
+
+  // Same-host DRAM bypass (2a).
+  DramInvalMatrix *dram_mat_ = nullptr;
+  int num_clients_per_host_ = 0;   // 0 = bypass disabled
+  int my_cid_in_host_ = 0;
+  int my_host_ = 0;
+  int physical_hosts_ = 1;
+  uint64_t dram_local_tail_[kSameHostMaxClients] = {};
 };
 
 } // namespace fusee

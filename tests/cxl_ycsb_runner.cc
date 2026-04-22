@@ -32,6 +32,7 @@
 #include "cxl_kv_store.h"
 #include "cxl_mm.h"
 #include "cxl_hashtable.h"
+#include "cxl_same_host_queue.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -42,6 +43,7 @@
 #include <ctime>
 #include <fstream>
 #include <string>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -256,6 +258,29 @@ int main(int argc, char **argv) {
     store_fence();
   }
 
+  // Same-host DRAM bypass (2a): allocate a MAP_SHARED anonymous region
+  // sized for the per-host DramInvalMatrix BEFORE fork so all children
+  // share the same virtual address. Toggle off via FUSEE_SAME_HOST_BYPASS=0.
+  fusee::DramInvalMatrix *dram_mat = nullptr;
+  size_t dram_mat_bytes = 0;
+  {
+    const char *bp_env = getenv("FUSEE_SAME_HOST_BYPASS");
+    bool bypass_enabled = !(bp_env && bp_env[0] == '0');
+    if (bypass_enabled && num_clients > 1) {
+      dram_mat_bytes = fusee::dram_inval_matrix_bytes();
+      void *mm = mmap(nullptr, dram_mat_bytes, PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      if (mm == MAP_FAILED) {
+        fprintf(stderr, "mmap DramInvalMatrix (%zu bytes) failed: %s\n",
+                dram_mat_bytes, strerror(errno));
+        return 1;
+      }
+      // Zero; children will see all-zero entries.
+      std::memset(mm, 0, dram_mat_bytes);
+      dram_mat = reinterpret_cast<fusee::DramInvalMatrix *>(mm);
+    }
+  }
+
   // Fork num_clients-1 children. Parent has client_id=0.
   std::vector<pid_t> children;
   int client_id = 0;
@@ -339,6 +364,17 @@ int main(int argc, char **argv) {
   }
   bool cache_on = getenv("FUSEE_CACHE") && getenv("FUSEE_CACHE")[0] == '1';
   if (cache_on) store.enable_dram_cache(true);
+
+  // Same-host bypass wire-up (2a). Only meaningful for A/B (C has no
+  // replicator, never pushes to rings). The C attach silently ignores
+  // unused API parts.
+#if CONSENSUS_OPT != FUSEE_OPT_C
+  if (dram_mat && num_clients > 1) {
+    store.enable_same_host_bypass(dram_mat, num_clients);
+  }
+#else
+  (void)dram_mat;
+#endif
 
   // Helper: run one op, return latency in ns.
   auto do_op = [&](const Op &o, uint64_t *dt_out) {

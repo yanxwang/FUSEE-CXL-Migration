@@ -80,6 +80,26 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
   return 0;
 }
 
+void CxlKvStoreA::enable_same_host_bypass(DramInvalMatrix *mat,
+                                          int num_clients_per_host) {
+  if (!mat || num_clients_per_host <= 1) {
+    dram_mat_ = nullptr;
+    num_clients_per_host_ = 0;
+    return;
+  }
+  if (num_clients_per_host > kSameHostMaxClients) {
+    fprintf(stderr, "enable_same_host_bypass: num_clients_per_host=%d > kSameHostMaxClients=%d\n",
+            num_clients_per_host, kSameHostMaxClients);
+    std::abort();
+  }
+  dram_mat_ = mat;
+  num_clients_per_host_ = num_clients_per_host;
+  my_host_ = host_id_ / num_clients_per_host;
+  my_cid_in_host_ = host_id_ % num_clients_per_host;
+  physical_hosts_ = num_hosts_ / num_clients_per_host;
+  for (int i = 0; i < kSameHostMaxClients; i++) dram_local_tail_[i] = 0;
+}
+
 void CxlKvStoreA::stop() {
   if (replicator_.joinable()) {
     stop_.store(true, std::memory_order_relaxed);
@@ -125,16 +145,43 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   const int my_group = host_id_ % a_groups;
 
   PendingRingEntry *my_entries[kMaxHosts] = {nullptr, nullptr, nullptr, nullptr};
+  // Track per-dst same-host queue tails we pushed into (for DRAM ACK wait).
+  uint64_t dram_my_t[kSameHostMaxClients];
+  bool     dram_pushed[kSameHostMaxClients];
+  for (int i = 0; i < kSameHostMaxClients; i++) {
+    dram_my_t[i] = 0; dram_pushed[i] = false;
+  }
 
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_) continue;
+
+    // Same-host bypass: peer lives on our physical host → push via DRAM.
+    if (dram_mat_ && num_clients_per_host_ > 1 &&
+        (dst / num_clients_per_host_) == my_host_) {
+      int dst_cid = dst % num_clients_per_host_;
+      uint64_t t = dram_local_tail_[dst_cid]++;
+      DramInvalQueue *q =
+          &dram_mat_->rings[my_cid_in_host_][dst_cid];
+      DramInvalEntry *e = &q->entries[t % kSameHostQueueDepth];
+      while (e->op_id.load(std::memory_order_acquire) != 0) {
+        __builtin_ia32_pause();
+      }
+      e->bucket_idx = (uint64_t)b_idx;
+      e->processed_op_id.store(0, std::memory_order_relaxed);
+      std::atomic_thread_fence(std::memory_order_release);
+      e->op_id.store(op_id, std::memory_order_release);
+      q->tail.store(t + 1, std::memory_order_release);
+      dram_my_t[dst_cid] = t;
+      dram_pushed[dst_cid] = true;
+      continue;
+    }
+
+    // Cross-host: CXL ring.
     PendingRing *ring = &rings_->rings[host_id_][dst];
     uint64_t t = local_tail_[dst]++;
     uint32_t slot = t % kPendingRingEntries;
     PendingRingEntry *e = &ring->entries[slot];
 
-    // Wait for this ring slot to be free (op_id == 0). flush_line first
-    // so we don't spin on a stale local copy.
     const int kRingWaitBudgetUs = 2000000; // 2 s sanity ceiling
     uint64_t start = now_ns();
     for (;;) {
@@ -147,13 +194,8 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
       __builtin_ia32_pause();
     }
 
-    // Clear consumer ACK line (separate cacheline).
     STORE_CACHELINE(&e->cons.processed_op_id, 0ULL);
 
-    // Fill producer payload. All four fields live on one cacheline;
-    // one flush+sfence at the end publishes them atomically (64 B store
-    // is atomic wrt the CXL memory server). op_id written LAST so any
-    // consumer that races with the store sees a coherent line.
     e->prod.bucket_idx = (uint64_t)b_idx;
     e->prod.slot_idx   = (uint64_t)s_idx;
     e->prod.new_value  = value_word;
@@ -163,7 +205,6 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     flush_line((void *)&e->prod);
     store_fence();
 
-    // Publish the tail update so the consumer knows something new landed.
     CACHELINE_STORE(&ring->tail, (uint64_t)(t + 1));
 
     my_entries[dst] = e;
@@ -175,9 +216,11 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   // N-1.
   const int kAckWaitBudgetUs = 200000; // 200 ms per dst
   bool timed_out = false;
+
+  // CXL peers' ACKs.
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
-    if ((dst % a_groups) != my_group) continue;   // cross-group = eager, no ACK wait
+    if ((dst % a_groups) != my_group) continue;
     PendingRingEntry *e = my_entries[dst];
     uint64_t start = now_ns();
     for (;;) {
@@ -191,9 +234,28 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     }
   }
 
-  // Always clear op_id on every dst so the slot can be reused. Payload
-  // cacheline has op_id as last u64; flush_line + sfence publishes the
-  // zero to the memory server.
+  // Same-host DRAM peers' ACKs.
+  if (dram_mat_ && num_clients_per_host_ > 1) {
+    for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
+      if (!dram_pushed[dst_cid]) continue;
+      // Group-sync: only wait for same-group same-host peers.
+      int peer_gid = my_host_ * num_clients_per_host_ + dst_cid;
+      if ((peer_gid % a_groups) != my_group) continue;
+      DramInvalQueue *q = &dram_mat_->rings[my_cid_in_host_][dst_cid];
+      DramInvalEntry *e = &q->entries[dram_my_t[dst_cid] % kSameHostQueueDepth];
+      uint64_t start = now_ns();
+      for (;;) {
+        if (e->processed_op_id.load(std::memory_order_acquire) == op_id) break;
+        if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
+          timed_out = true;
+          break;
+        }
+        __builtin_ia32_pause();
+      }
+    }
+  }
+
+  // Clear CXL ring slots we published (so the slot can be reused).
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
     my_entries[dst]->prod.op_id = 0;
@@ -201,6 +263,8 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     flush_line((void *)&my_entries[dst]->prod);
     store_fence();
   }
+  // DRAM slots: consumer clears op_id after processing; no writer-side
+  // release needed.
 
   return timed_out ? -4 : 0;
 }
@@ -451,31 +515,32 @@ void CxlKvStoreA::enable_dram_cache(bool on) {
 void CxlKvStoreA::replicator_loop() {
   while (!stop_.load(std::memory_order_relaxed)) {
     bool did_work = false;
+
+    // CXL rings: consume from cross-host peers only. With bypass off we
+    // consume from all peers (original Phase 4 behavior).
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
+      if (dram_mat_ && num_clients_per_host_ > 1 &&
+          (src / num_clients_per_host_) == my_host_) {
+        continue;  // same-host peer uses DRAM queue
+      }
       PendingRing *ring = &rings_->rings[src][host_id_];
       uint64_t tail = CACHELINE_LOAD(&ring->tail);
       uint64_t head = CACHELINE_LOAD(&ring->head);
       while (head < tail) {
         uint32_t slot = head % kPendingRingEntries;
         PendingRingEntry *e = &ring->entries[slot];
-        // Load the producer payload cacheline atomically. One
-        // flush+fence pulls all 4 fields at once.
         flush_line((void *)&e->prod);
         full_fence();
         uint64_t op_id = e->prod.op_id;
-        if (op_id == 0) break; // not yet published
+        if (op_id == 0) break;
         uint64_t bucket_hit = e->prod.bucket_idx;
-        (void)e->prod.new_value;  // simulated pull: field already in register
-
-        // A's "synchronous invalidation" promise: invalidate the DRAM cache
-        // for the bucket BEFORE publishing processed_op_id.
+        (void)e->prod.new_value;
         if (cache_enabled_ && bucket_hit < num_buckets_) {
           cache_epoch_[bucket_hit].store(
               std::numeric_limits<uint64_t>::max(),
               std::memory_order_release);
         }
-
         STORE_CACHELINE(&e->cons.processed_op_id, op_id);
         head++;
         replicated_ops_.fetch_add(1, std::memory_order_relaxed);
@@ -483,6 +548,35 @@ void CxlKvStoreA::replicator_loop() {
       }
       CACHELINE_STORE(&ring->head, head);
     }
+
+    // DRAM queues: consume from same-host peers only.
+    if (dram_mat_ && num_clients_per_host_ > 1) {
+      for (int src_cid = 0; src_cid < num_clients_per_host_; src_cid++) {
+        if (src_cid == my_cid_in_host_) continue;
+        DramInvalQueue *q = &dram_mat_->rings[src_cid][my_cid_in_host_];
+        uint64_t head = q->head.load(std::memory_order_relaxed);
+        uint64_t tail = q->tail.load(std::memory_order_acquire);
+        while (head < tail) {
+          DramInvalEntry *e = &q->entries[head % kSameHostQueueDepth];
+          uint64_t op_id = e->op_id.load(std::memory_order_acquire);
+          if (op_id == 0) break;
+          uint64_t bucket_hit = e->bucket_idx;
+          if (cache_enabled_ && bucket_hit < num_buckets_) {
+            cache_epoch_[bucket_hit].store(
+                std::numeric_limits<uint64_t>::max(),
+                std::memory_order_release);
+          }
+          e->processed_op_id.store(op_id, std::memory_order_release);
+          // Free slot so producer can reuse (DRAM equivalent of op_id=0 clear).
+          e->op_id.store(0, std::memory_order_release);
+          head++;
+          replicated_ops_.fetch_add(1, std::memory_order_relaxed);
+          did_work = true;
+        }
+        q->head.store(head, std::memory_order_release);
+      }
+    }
+
     if (!did_work) __builtin_ia32_pause();
   }
 }

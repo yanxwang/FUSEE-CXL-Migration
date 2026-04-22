@@ -18,6 +18,7 @@
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
 #include "cxl_pending_ring.h"
+#include "cxl_same_host_queue.h"
 
 #include <atomic>
 #include <stddef.h>
@@ -32,6 +33,11 @@ class CxlKvStoreB {
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
              int host_id, int num_hosts, bool init_region,
              bool read_only = false);
+
+  // See cxl_kv_ops_A.h for semantics. Same-host peers go through DRAM
+  // queues instead of CXL rings; cross-host still uses CXL.
+  void enable_same_host_bypass(DramInvalMatrix *mat, int num_clients_per_host);
+
   void stop();
 
   static size_t bytes_for(uint32_t num_buckets);
@@ -89,6 +95,14 @@ class CxlKvStoreB {
 
   bool recovery_mode_ = false;
   bool read_only_ = false;
+
+  // Same-host DRAM bypass (2a).
+  DramInvalMatrix *dram_mat_ = nullptr;
+  int num_clients_per_host_ = 0;   // 0 = bypass disabled
+  int my_cid_in_host_ = 0;
+  int my_host_ = 0;
+  int physical_hosts_ = 1;
+  uint64_t dram_local_tail_[kSameHostMaxClients] = {};
 };
 
 } // namespace fusee
