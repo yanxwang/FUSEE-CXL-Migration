@@ -111,6 +111,19 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   uint64_t op_id =
       ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
 
+  // Phase 5: hierarchical replication. FUSEE_A_GROUPS=K (default 1 = old
+  // all-sync behavior) splits the total_workers into K groups; writer
+  // still pushes to every peer (broadcast) but only waits for ACKs from
+  // same-group peers. Reads inter-group are eventually consistent. Read
+  // from env once per process at first use.
+  static const int a_groups = [&]() {
+    const char *e = getenv("FUSEE_A_GROUPS");
+    if (!e || e[0] == '\0') return 1;
+    int v = atoi(e);
+    return (v < 1) ? 1 : v;
+  }();
+  const int my_group = host_id_ % a_groups;
+
   PendingRingEntry *my_entries[kMaxHosts] = {nullptr, nullptr, nullptr, nullptr};
 
   for (int dst = 0; dst < num_hosts_; dst++) {
@@ -147,14 +160,15 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     my_entries[dst] = e;
   }
 
-  // Spin on processed_op_id == op_id on every dst we enqueued to. If any dst
-  // times out we still need to clear op_id on every slot we published (even
-  // ones that did ACK) so subsequent writes can make progress — otherwise a
-  // single slow replicator wedges the ring permanently.
+  // Spin on processed_op_id == op_id only for SAME-GROUP peers. Under
+  // FUSEE_A_GROUPS=1 (default), this is every peer (original all-sync
+  // semantics). With K>1, writer returns after N/K - 1 ACKs instead of
+  // N-1.
   const int kAckWaitBudgetUs = 200000; // 200 ms per dst
   bool timed_out = false;
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
+    if ((dst % a_groups) != my_group) continue;   // cross-group = eager, no ACK wait
     PendingRingEntry *e = my_entries[dst];
     uint64_t start = now_ns();
     for (;;) {
