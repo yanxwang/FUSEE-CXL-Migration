@@ -1,0 +1,26 @@
+# g3+g4 cross-host YCSB sweep (kernel 6.15.0, cookie-guarded role mode)
+# 2 hosts x 1 process per host, 65536 buckets, 200k ops cap
+--- workload=workloada opt=A cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=48111 trans_ops=200000 trans_wall_max=1.112s trans_agg_thpt=179785
+--- workload=workloada opt=A cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=50380 trans_ops=200000 trans_wall_max=1.040s trans_agg_thpt=192331
+--- workload=workloada opt=B cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=61824 trans_ops=200000 trans_wall_max=0.874s trans_agg_thpt=228825
+--- workload=workloada opt=B cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=62188 trans_ops=200000 trans_wall_max=0.771s trans_agg_thpt=259286
+--- workload=workloada opt=C cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=96623 trans_ops=200000 trans_wall_max=0.608s trans_agg_thpt=329180
+--- workload=workloada opt=C cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=96863 trans_ops=200000 trans_wall_max=0.585s trans_agg_thpt=341918
+--- workload=workloadc opt=A cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=49879 trans_ops=200000 trans_wall_max=0.281s trans_agg_thpt=712552
+--- workload=workloadc opt=A cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=48981 trans_ops=200000 trans_wall_max=0.055s trans_agg_thpt=3649987
+--- workload=workloadc opt=B cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=62077 trans_ops=200000 trans_wall_max=0.270s trans_agg_thpt=740203
+--- workload=workloadc opt=B cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=63330 trans_ops=200000 trans_wall_max=0.056s trans_agg_thpt=3602907
+--- workload=workloadc opt=C cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=99799 trans_ops=200000 trans_wall_max=0.282s trans_agg_thpt=709142
+--- workload=workloadc opt=C cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=97965 trans_ops=200000 trans_wall_max=0.112s trans_agg_thpt=1792240

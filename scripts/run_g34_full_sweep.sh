@@ -93,19 +93,25 @@ for wl in $WORKLOADS; do
       logdir="$OUT/$tag"
       mkdir -p "$logdir"
 
-      cmd0="$cache_env FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 $bin $DEV $load $trans $NUM_BUCKETS $MAX_OPS"
-      cmd1="$cache_env FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 $bin $DEV $load $trans $NUM_BUCKETS $MAX_OPS"
+      # Unique per-run cookie to defeat stale-CXL-memory races in the
+      # role-mode runner. Primary writes it after memset; non-primary
+      # spins until it matches.
+      run_cookie=$(( $(date +%s%N) ))
+      cmd0="$cache_env FUSEE_RUN_COOKIE=$run_cookie FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 $bin $DEV $load $trans $NUM_BUCKETS $MAX_OPS"
+      cmd1="$cache_env FUSEE_RUN_COOKIE=$run_cookie FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 $bin $DEV $load $trans $NUM_BUCKETS $MAX_OPS"
 
       echo "--- RUN $tag ---" | tee -a "$agg"
+      echo "cookie=$run_cookie"| tee -a "$agg"
       echo "cmd0: $cmd0"       | tee -a "$agg"
       echo "cmd1: $cmd1"       | tee -a "$agg"
 
-      # launch host 1 first (blocks on init_done via primary); then host 0.
-      timeout "$TIMEOUT_S" ssh "$HOST1" "$cmd1" > "$logdir/g4.log" 2>&1 &
-      pid1=$!
-      sleep 0.3
+      # launch host 0 (primary) FIRST so it memsets + writes cookie
+      # before host 1 starts reading; host 1 waits on cookie match.
       timeout "$TIMEOUT_S" ssh "$HOST0" "$cmd0" > "$logdir/g3.log" 2>&1 &
       pid0=$!
+      sleep 0.3
+      timeout "$TIMEOUT_S" ssh "$HOST1" "$cmd1" > "$logdir/g4.log" 2>&1 &
+      pid1=$!
 
       wait $pid0 $pid1 || true
 

@@ -57,6 +57,7 @@ struct YcsbHostRow {
   cacheline_u64 trans_wall_ns;
 };
 struct YcsbShared {
+  cacheline_u64 run_cookie;  // primary writes; non-primary waits for env match
   cacheline_u64 init_done;
   YcsbHostRow hosts[4];      // kMaxHosts
 };
@@ -192,6 +193,11 @@ int main(int argc, char **argv) {
   bool role_mode = (num_hosts > 1);
   bool is_primary = (host_id == 0);
 
+  const bool trace = (getenv("FUSEE_TRACE") && getenv("FUSEE_TRACE")[0] == '1');
+#define TRACE(fmt, ...) do { if (trace) fprintf(stderr, "[yh%d t=%.3fs] " fmt "\n", \
+  host_id, (double)now_ns()/1e9, ##__VA_ARGS__); fflush(stderr); } while (0)
+  TRACE("start num_hosts=%d role_mode=%d", num_hosts, role_mode);
+
   size_t store_bytes = CxlKvStore::bytes_for(num_buckets);
   size_t needed_kv = store_bytes;
   if (role_mode) needed_kv += kYcsbStatsOffsetFromEnd;
@@ -205,19 +211,42 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Shared stats region (only meaningful in role mode).
+  // Shared stats region (only meaningful in role mode). CXL devdax mmap
+  // on g3/g4 does NOT zero-fill on fresh mmap, so a plain init_done flag
+  // is unsafe — non-primary may see a stale "1" from the previous run
+  // and skip its wait. We require the orchestrator to pass a unique
+  // FUSEE_RUN_COOKIE; primary writes it AFTER memset, non-primary waits
+  // for the cookie to match.
   YcsbShared *shared = nullptr;
+  uint64_t run_cookie = 0;
   if (role_mode) {
+    const char *cookie_env = getenv("FUSEE_RUN_COOKIE");
+    if (!cookie_env || cookie_env[0] == '\0') {
+      fprintf(stderr,
+        "role-mode requires FUSEE_RUN_COOKIE (unique per run) to avoid\n"
+        "stale-CXL-memory races. Orchestrator should pass it to both hosts.\n");
+      return 2;
+    }
+    run_cookie = strtoull(cookie_env, nullptr, 0);
+    if (run_cookie == 0) {
+      fprintf(stderr, "FUSEE_RUN_COOKIE must be non-zero\n");
+      return 2;
+    }
     shared = reinterpret_cast<YcsbShared *>(
         reinterpret_cast<char *>(r.base) + r.size - kYcsbStatsOffsetFromEnd);
+    TRACE("region mapped; shared at off=%zu", r.size - kYcsbStatsOffsetFromEnd);
     if (is_primary) {
+      TRACE("primary memsetting shared (%zu bytes)", sizeof(*shared));
       std::memset(shared, 0, sizeof(*shared));
       flush_region(shared, sizeof(*shared));
       store_fence();
+      TRACE("primary memset+fence done");
     }
   }
 
-  // Primary attaches with init_region=true; others wait for init_done.
+  // Primary attaches with init_region=true; others wait for init_done AND
+  // cookie match (cookie alone is sufficient, but init_done keeps the
+  // ordering obvious).
   CxlKvStore store;
   size_t kv_bytes = role_mode ? (r.size - kYcsbStatsOffsetFromEnd) : r.size;
   if (is_primary) {
@@ -227,9 +256,18 @@ int main(int argc, char **argv) {
       cxl_region_destroy(&r);
       return 1;
     }
-    if (role_mode) CACHELINE_STORE(&shared->init_done, 1ULL);
+    if (role_mode) {
+      CACHELINE_STORE(&shared->init_done, 1ULL);
+      CACHELINE_STORE(&shared->run_cookie, run_cookie);
+      TRACE("primary attach+init_done+cookie=%lu written", run_cookie);
+    }
   } else {
+    TRACE("non-primary waiting for cookie=%lu", run_cookie);
+    while (CACHELINE_LOAD(&shared->run_cookie) != run_cookie)
+      __builtin_ia32_pause();
+    TRACE("non-primary saw cookie");
     while (CACHELINE_LOAD(&shared->init_done) == 0) __builtin_ia32_pause();
+    TRACE("non-primary saw init_done");
     if (store.attach(r.base, kv_bytes, num_buckets, host_id, num_hosts,
                      /*init_region=*/false) != 0) {
       fprintf(stderr, "[host %d] attach failed\n", host_id);
@@ -246,10 +284,12 @@ int main(int argc, char **argv) {
   // running before anyone starts mutating the store.
   if (role_mode) {
     CACHELINE_STORE(&shared->hosts[host_id].attached, 1ULL);
+    TRACE("set attached[%d]=1", host_id);
     for (int h = 0; h < num_hosts; h++) {
       while (CACHELINE_LOAD(&shared->hosts[h].attached) == 0)
         __builtin_ia32_pause();
     }
+    TRACE("all attached");
   }
 
   auto run_phase = [&](const std::vector<Op> &ops, const char *label) {
