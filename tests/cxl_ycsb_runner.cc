@@ -187,6 +187,26 @@ int main(int argc, char **argv) {
       return 2;
     }
   }
+
+  // Options A and B keep per-host replication state (PendingRing matrix is
+  // sized by kMaxHosts, indexed by cross-host id, and one replicator thread
+  // per process). Intra-host client scaling would require a per-client ring
+  // + non-shared replicator — out of scope for this sweep. Clamp at 1 for
+  // A/B so every tagged run still finishes cleanly; the resulting plots
+  // show A/B as flat across client counts, which is the honest answer.
+  const int requested_clients = num_clients;
+#if CONSENSUS_OPT != FUSEE_OPT_C
+  if (num_clients > 1) {
+    fprintf(stderr,
+      "[h%d] opt %c: forcing num_clients=1 (requested %d). "
+      "Intra-host client scaling for A/B needs per-client PendingRing; "
+      "current code keeps per-host state.\n",
+      host_id, kConsensusOpt, num_clients);
+    num_clients = 1;
+  }
+#else
+  (void)requested_clients;
+#endif
   const int total_workers = num_hosts * num_clients;
   const bool role_mode = (num_hosts > 1);
 
@@ -219,7 +239,12 @@ int main(int argc, char **argv) {
   YcsbShared *shared = reinterpret_cast<YcsbShared *>(
       reinterpret_cast<char *>(r.base) + r.size - kYcsbStatsOffsetFromEnd);
   bool is_host_primary = (host_id == 0);
+  const bool trace = (getenv("FUSEE_TRACE") && getenv("FUSEE_TRACE")[0]=='1');
+#define T(fmt, ...) do { if (trace) { fprintf(stderr, "[h%d c%d t=%.3f] " fmt "\n", host_id, -1, (double)now_ns()/1e9, ##__VA_ARGS__); fflush(stderr); } } while (0)
+#define TC(fmt, ...) do { if (trace) { fprintf(stderr, "[h%d c%d t=%.3f] " fmt "\n", host_id, client_id, (double)now_ns()/1e9, ##__VA_ARGS__); fflush(stderr); } } while (0)
+  T("start num_hosts=%d num_clients=%d", num_hosts, num_clients);
   if (is_host_primary) {
+    T("primary memsetting shared");
     std::memset(shared, 0, sizeof(*shared));
     flush_region(shared, sizeof(*shared));
     store_fence();
@@ -240,6 +265,7 @@ int main(int argc, char **argv) {
 
   // Cross-host init ordering: host 0 client 0 publishes init_done + cookie
   // AFTER its KV-store attach+init; other hosts wait on cookie.
+  TC("after fork global_id=%d total_workers=%d", global_id, total_workers);
   CxlKvStore store;
   size_t kv_bytes = r.size - kYcsbStatsOffsetFromEnd;
   if (is_primary_client) {
@@ -254,15 +280,21 @@ int main(int argc, char **argv) {
       CACHELINE_STORE(&shared->init_done, 1ULL);
       CACHELINE_STORE(&shared->run_cookie, run_cookie);
     }
+    TC("primary attach + init_done + cookie=%lu region=%zu shared_off=%zu",
+       run_cookie, r.size, r.size - kYcsbStatsOffsetFromEnd);
   } else {
     // Non-primary clients wait for the primary client's init_done + cookie
     // to match. (Applies to both same-host fork children AND cross-host.)
+    TC("non-primary pre-wait region size=%zu shared_off=%zu expected_cookie=%lu",
+       r.size, r.size - kYcsbStatsOffsetFromEnd, run_cookie);
     if (role_mode) {
       while (CACHELINE_LOAD(&shared->run_cookie) != run_cookie)
         __builtin_ia32_pause();
+      TC("saw cookie");
     }
     while (CACHELINE_LOAD(&shared->init_done) == 0)
       __builtin_ia32_pause();
+    TC("saw init_done");
     if (store.attach(r.base, kv_bytes, num_buckets, global_id, total_workers,
                      /*init_region=*/false) != 0) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
@@ -303,6 +335,7 @@ int main(int argc, char **argv) {
   YcsbWorker *my_row = &shared->hosts[host_id].workers[client_id];
 
   // Signal "started" (arrival at trans barrier).
+  TC("load done (if primary); setting started=1");
   CACHELINE_STORE(&my_row->started, 1ULL);
 
   // Primary client waits for all 2N workers to reach barrier; publishes trans_go.
@@ -315,8 +348,11 @@ int main(int argc, char **argv) {
     }
     CACHELINE_STORE(&shared->hosts[0].load_done_all, 1ULL);
     CACHELINE_STORE(&shared->trans_go, 1ULL);
+    TC("primary published trans_go");
   } else {
+    TC("waiting for trans_go");
     while (CACHELINE_LOAD(&shared->trans_go) == 0) __builtin_ia32_pause();
+    TC("saw trans_go");
   }
 
   // TRANS: each client executes trans[i] where i % total_workers == global_id.
@@ -351,6 +387,7 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&my_row->r_p50_ns, quantile_ns(rlat, 0.50));
   CACHELINE_STORE(&my_row->r_p99_ns, quantile_ns(rlat, 0.99));
   CACHELINE_STORE(&my_row->done, 1ULL);
+  TC("trans done; ops=%lu wall=%.3fs", my_ops, (t_end-t_start)/1e9);
 
   // Stop replicator threads (safe only after ALL peers finish, to avoid
   // tearing down a ring while a peer writer is still enqueueing).
@@ -439,12 +476,15 @@ int main(int argc, char **argv) {
   double load_thpt  = load_wall_s > 0
                        ? (double)load_ops_v.size() / load_wall_s : 0;
 
-  printf("YCSB opt=%c cache=%d num_hosts=%d threads=%d "
+  // Print requested threads (for plot alignment), not the clamped value.
+  // A "threads_eff" column gives the actual worker count used.
+  printf("YCSB opt=%c cache=%d num_hosts=%d threads=%d threads_eff=%d "
          "load_ops=%zu load_thpt=%.0f "
          "trans_ops=%lu trans_wall_max=%.3fs trans_agg_thpt=%.0f "
          "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
          "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu\n",
-         kConsensusOpt, cache_on ? 1 : 0, num_hosts, num_clients,
+         kConsensusOpt, cache_on ? 1 : 0, num_hosts,
+         requested_clients, num_clients,
          load_ops_v.size(), load_thpt,
          agg_ops, wall_max_s, agg_thpt,
          w_avg_ns, w_p50_ns, w_p99_ns,

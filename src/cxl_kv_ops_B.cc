@@ -332,13 +332,19 @@ uint64_t CxlKvStoreB::recover_from_oplog() {
 }
 
 void CxlKvStoreB::enable_dram_cache(bool on) {
-  cache_enabled_ = on;
+  // Race fix 2026-04-22 (same as CxlKvStoreA): allocate cache storage
+  // before flipping cache_enabled_.
   if (on) {
     cache_buckets_.assign(num_buckets_, CxlKvBucket{});
-    cache_epoch_ = std::vector<std::atomic<uint64_t>>(num_buckets_);
-    for (auto &a : cache_epoch_) a.store(std::numeric_limits<uint64_t>::max(),
-                                         std::memory_order_relaxed);
+    std::vector<std::atomic<uint64_t>> tmp(num_buckets_);
+    for (auto &a : tmp) a.store(std::numeric_limits<uint64_t>::max(),
+                                std::memory_order_relaxed);
+    cache_epoch_ = std::move(tmp);
+    std::atomic_thread_fence(std::memory_order_release);
+    cache_enabled_ = on;
   } else {
+    cache_enabled_ = on;
+    std::atomic_thread_fence(std::memory_order_release);
     cache_buckets_.clear();
     cache_epoch_.clear();
   }
