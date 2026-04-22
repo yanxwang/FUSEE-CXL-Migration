@@ -69,8 +69,9 @@ C has no per-host replication state and so scales genuinely.
    by the bucket-count follow-up: sweeping buckets from 16 k → 4 M at
    T=86 shows throughput flat at ~230 k kops/s for workload-a. w_p50
    stays ~10 μs healthy, but w_p99 is 24-45 ms — classic scheduler tail.
-   Real bottleneck: at 172 client procs × 2 hosts, any preempted
-   process stalls everyone waiting on its bucket lock.
+   Real bottleneck: at 172 client processes TOTAL
+   (= 86 per host × 2 hosts), any preempted process stalls everyone
+   waiting on its bucket lock.
 3. **Cache speedup for C is modest (~1.3×) on read-heavy workloads**
    whereas A/B get 1.5-4× from cache. Because C's read still loads one
    CXL cacheline (the epoch) per op even on cache hit; A/B can serve

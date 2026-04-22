@@ -25,10 +25,10 @@ contention is not the limit.
 **What IS the limit**: look at the latencies. w_p50 is ~10 μs at every
 bucket count — that's healthy C write latency. But w_p99 is 24-45 ms.
 That 4-order-of-magnitude p50→p99 gap points at **scheduler tail**, not
-bucket contention. At 172 client processes × 2 hosts and 86 cores per
-host, each process ≈ 1 core, but any preemption (context switch, IRQ,
-page fault) stops that client for 10+ ms, and every other client
-waiting on that client's bucket stalls.
+bucket contention. At 172 client processes TOTAL (= 86 per host × 2
+hosts) and 86 cores per host, each process ≈ 1 core. Any preemption
+(context switch, IRQ, page fault) on any one client stops it for
+10+ ms, and every other client waiting on that client's bucket stalls.
 
 This suggests the next productive follow-ups are:
 1. `chrt -f 10` or similar to give client processes SCHED_FIFO, reduce
