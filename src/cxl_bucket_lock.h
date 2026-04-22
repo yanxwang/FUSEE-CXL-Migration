@@ -5,9 +5,12 @@
 #include <stdint.h>
 
 // Pull in LFM mutex from cxl_shm_profiling. CMake wires the include path via
-// CXL_SHM_PROFILING_DIR.
+// CXL_SHM_PROFILING_DIR. Phase 2 adds ticket_lock as an optional swap-in
+// controlled by FUSEE_USE_TICKET_LOCK (build-time flag). Keeping both
+// headers included so diagnostic code and tests can reference either kind.
 extern "C" {
 #include "locks/lfm_lock.h"
+#include "locks/ticket_lock.h"
 }
 
 namespace fusee {
@@ -22,10 +25,19 @@ namespace fusee {
 //                     staging before the replicator consumes it.
 // Option A uses its own SPSC rings in a separate sub-region (see
 // docs/option_a_side_track.md); those do not live here.
+// Mutex type choice. -DFUSEE_USE_TICKET_LOCK=1 at build time swaps to
+// ticket_mutex_t for O(N) bounded worst-case wait (Phase 2). Default keeps
+// LFM for backward compatibility with small-N microbenches.
+#if defined(FUSEE_USE_TICKET_LOCK) && FUSEE_USE_TICKET_LOCK
+using bucket_mutex_t = ticket_mutex_t;
+#else
+using bucket_mutex_t = shm_mutex_t;
+#endif
+
 struct BucketLockEntry {
-  shm_mutex_t   mutex;
-  cacheline_u64 write_epoch;
-  cacheline_u64 staging_scratch;
+  bucket_mutex_t mutex;
+  cacheline_u64  write_epoch;
+  cacheline_u64  staging_scratch;
 };
 
 // Thin view over a contiguous array of BucketLockEntry planted in a CXL

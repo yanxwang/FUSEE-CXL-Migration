@@ -40,12 +40,20 @@ set(source_fusee_cxl
     cxl_kv_ops_A.cc
     cxl_kv_ops_B.cc
     cxl_oplog.cc
-    ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c)
+    ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
+    ${CXL_SHM_PROFILING_DIR}/locks/ticket_lock.c)
 
 add_library(fusee_cxl STATIC ${source_fusee_cxl})
 target_include_directories(fusee_cxl PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CXL_SHM_PROFILING_DIR})
 target_compile_options(fusee_cxl PRIVATE -O2 -g -mclflushopt)
+# Phase 2: opt-in ticket lock. Build with -DFUSEE_USE_TICKET_LOCK=ON to swap
+# LFM → ticket lock in BucketLockEntry. Default OFF (keep LFM) to make the
+# phase comparable to the baseline scaling sweep.
+option(FUSEE_USE_TICKET_LOCK "Use ticket_lock instead of LFM in BucketLockEntry" OFF)
+if(FUSEE_USE_TICKET_LOCK)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_USE_TICKET_LOCK=1)
+endif()
 target_link_libraries(fusee_cxl PUBLIC pthread)
 
