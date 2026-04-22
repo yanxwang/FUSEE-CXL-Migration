@@ -1,0 +1,1 @@
+YCSB opt=B cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=9129 trans_ops=2000000 trans_wall_max=6.352s trans_agg_thpt=314841 w_avg_ns=46544 w_p50_ns=43974 w_p99_ns=119222 r_avg_ns=3425 r_p50_ns=3219 r_p99_ns=5658
