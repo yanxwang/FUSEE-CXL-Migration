@@ -65,6 +65,13 @@ def plot(path, runs):
     opts = ["A", "B", "C"]
     caches_in_log = sorted({c for (_, _, c) in runs.keys()})
 
+    # Env filter: FUSEE_YCSB_CACHE_FILTER = "on" | "off" | "" (any)
+    cache_filter = os.environ.get("FUSEE_YCSB_CACHE_FILTER", "").lower()
+    if cache_filter == "on":
+        caches_in_log = [c for c in caches_in_log if c == 1]
+    elif cache_filter == "off":
+        caches_in_log = [c for c in caches_in_log if c == 0]
+
     have_off = 0 in caches_in_log
     have_on = 1 in caches_in_log
 
