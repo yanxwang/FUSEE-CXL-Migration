@@ -1,0 +1,27 @@
+### N=1 ###
+=== primitive latency (host=0 N=1 iters=10000 dev=/dev/dax0.0) ===
+P1/2 lock_acquire    n=10000 min=4144 p50=4190 p90=4269 p99=4528 max=40730 avg=4223 (ns)
+P3 flush_plus_fence  n=10000 min=407 p50=426 p90=428 p99=434 max=9634 avg=431 (ns)
+P4 store_plus_flush  n=10000 min=12 p50=14 p90=15 p99=17 max=3651 avg=20 (ns)
+P5 epoch_bump        n=10000 min=1415 p50=2057 p90=2079 p99=2109 max=18470 avg=2069 (ns)
+P6 unlock            n=10000 min=14 p50=16 p90=16 p99=18 max=6511 avg=23 (ns)
+P7 search_optimistic n=10000 min=1817 p50=2486 p90=2505 p99=2867 max=16092 avg=2504 (ns)
+
+### N=2 ###
+=== primitive latency (host=0 N=2 iters=10000 dev=/dev/dax0.0) ===
+P1/2 lock_acquire    n=10000 min=3972 p50=17026 p90=17471 p99=19773 max=76401 avg=16959 (ns)
+P3 flush_plus_fence  n=10000 min=336 p50=347 p90=353 p99=360 max=10855 avg=354 (ns)
+P4 store_plus_flush  n=10000 min=13 p50=14 p90=15 p99=17 max=15828 avg=21 (ns)
+P5 epoch_bump        n=10000 min=1961 p50=2001 p90=2038 p99=2230 max=12073 avg=2019 (ns)
+P6 unlock            n=10000 min=14 p50=16 p90=17 p99=18 max=3868 avg=22 (ns)
+P7 search_optimistic n=10000 min=1666 p50=2334 p90=2816 p99=2998 max=29451 avg=2458 (ns)
+
+### N=4 ###
+=== primitive latency (host=0 N=4 iters=10000 dev=/dev/dax0.0) ===
+P1/2 lock_acquire    n=10000 min=3971 p50=20643 p90=45256 p99=83937 max=781001 avg=26868 (ns)
+P3 flush_plus_fence  n=10000 min=331 p50=343 p90=348 p99=379 max=7841 avg=350 (ns)
+P4 store_plus_flush  n=10000 min=13 p50=14 p90=16 p99=17 max=12996 avg=22 (ns)
+P5 epoch_bump        n=10000 min=1409 p50=1990 p90=2001 p99=2291 max=122212 avg=2021 (ns)
+P6 unlock            n=10000 min=14 p50=16 p90=17 p99=18 max=11161 avg=24 (ns)
+P7 search_optimistic n=10000 min=1663 p50=2529 p90=3188 p99=3991 max=13029 avg=2658 (ns)
+
