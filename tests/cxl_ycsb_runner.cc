@@ -196,38 +196,22 @@ int main(int argc, char **argv) {
   // clamp to 1 to avoid any corruption risk on mixed workloads; set
   // FUSEE_UNSAFE_UNCLAMP=1 to override (e.g. for pure-read A/B scaling
   // validation). Behavior unchanged for opt=C (never clamped).
+  // Phase 4 (2026-04-22): PendingRingMatrix widened to
+  // rings[kMaxWorkers=200][kMaxWorkers=200] so A/B can have per-client
+  // rings. The old A/B clamp is no longer needed — every global_id is a
+  // valid ring src/dst. Keep FUSEE_READ_ONLY=1 for the Phase-1 read-only
+  // mode and FUSEE_UNSAFE_UNCLAMP for debugging; neither is required now.
   const int requested_clients = num_clients;
+  (void)requested_clients;
 #if CONSENSUS_OPT != FUSEE_OPT_C
   {
-    const char *unclamp = getenv("FUSEE_UNSAFE_UNCLAMP");
     const char *ro = getenv("FUSEE_READ_ONLY");
-    bool unclamp_active = (unclamp && unclamp[0] == '1');
-    bool read_only      = (ro && ro[0] == '1');
-    // Phase 1: FUSEE_READ_ONLY=1 is the safe unclamp path — non-primary
-    // children attach read-only and will abort() if they try to write.
-    // FUSEE_UNSAFE_UNCLAMP=1 is the legacy/debug path with no guard rails.
-    bool override_clamp = unclamp_active || read_only;
-    if (num_clients > 1 && !override_clamp) {
+    if (ro && ro[0] == '1' && num_clients > 1) {
       fprintf(stderr,
-        "[h%d] opt %c: forcing num_clients=1 (requested %d). "
-        "Set FUSEE_READ_ONLY=1 (safe; pure reads) or FUSEE_UNSAFE_UNCLAMP=1 "
-        "(no guard rails) to override.\n",
-        host_id, kConsensusOpt, num_clients);
-      num_clients = 1;
-    } else if (num_clients > 1 && read_only) {
-      fprintf(stderr,
-        "[h%d] opt %c: FUSEE_READ_ONLY=1, running with %d clients/host, "
-        "non-primary clients are read-only.\n",
-        host_id, kConsensusOpt, num_clients);
-    } else if (num_clients > 1 && unclamp_active) {
-      fprintf(stderr,
-        "[h%d] opt %c: FUSEE_UNSAFE_UNCLAMP=1, running with %d clients/host "
-        "(DATA CORRUPTION if workload has writes)\n",
-        host_id, kConsensusOpt, num_clients);
+        "[h%d] opt %c: FUSEE_READ_ONLY=1, %d clients/host, non-primary "
+        "clients attach read-only.\n", host_id, kConsensusOpt, num_clients);
     }
   }
-#else
-  (void)requested_clients;
 #endif
   const int total_workers = num_hosts * num_clients;
   const bool role_mode = (num_hosts > 1);
@@ -285,31 +269,21 @@ int main(int argc, char **argv) {
   const int global_id = host_id * num_clients + client_id;
   const bool is_primary_client = (host_id == 0) && (client_id == 0);
 
-  // Phase 1 read-only path: if FUSEE_READ_ONLY=1 and opt=A/B, non-primary
-  // fork children attach read-only (skip replicator, trip-wire on any
-  // write). Primary still attaches write-capable because it runs the
-  // LOAD phase. Result: A/B pure-read workloads scale intra-host without
-  // the PendingRing per-host bottleneck.
+  // Phase 1 read-only path (A/B pure-read workloads):
+  // FUSEE_READ_ONLY=1 → non-primary fork children attach read-only,
+  // skipping the replicator thread and trip-wiring on any write.
+  // Phase 4 made the clamp-around unnecessary for correctness because
+  // PendingRingMatrix is wide enough for every client to have its own
+  // src/dst pair; we keep READ_ONLY as an explicit opt-in for the
+  // pure-read sub-sweep that still wants to save the replicator cost.
   const char *ro_env = getenv("FUSEE_READ_ONLY");
   const bool read_only_mode = (ro_env && ro_env[0] == '1');
 
-  // When A/B are unclamped (pure-read validation), PendingRing matrix is
-  // sized by kMaxHosts=4 and attach refuses num_hosts > 4. Avoid that by
-  // attaching with (host_id, num_hosts) — same lock_id for all same-host
-  // clients. Safe for pure-read workloads because search path doesn't
-  // touch PendingRing and doesn't acquire the LFM. For Opt C we still
-  // pass (global_id, total_workers) so each client gets its own LFM slot.
-  const char *unclamp_env = getenv("FUSEE_UNSAFE_UNCLAMP");
-  const bool unclamp_active = (unclamp_env && unclamp_env[0] == '1') ||
-                              read_only_mode;
-  int attach_id = global_id;
-  int attach_n  = total_workers;
-#if CONSENSUS_OPT != FUSEE_OPT_C
-  if (unclamp_active) {
-    attach_id = host_id;
-    attach_n  = num_hosts;
-  }
-#endif
+  // All three protocols now attach with (global_id, total_workers):
+  // unique LFM slot per client AND (Phase 4) unique ring src/dst per
+  // client for A/B.
+  const int attach_id = global_id;
+  const int attach_n  = total_workers;
 
   // Cross-host init ordering: host 0 client 0 publishes init_done + cookie
   // AFTER its KV-store attach+init; other hosts wait on cookie.

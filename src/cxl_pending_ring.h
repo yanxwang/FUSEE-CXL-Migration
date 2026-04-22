@@ -15,8 +15,17 @@ extern "C" {
 
 namespace fusee {
 
-constexpr int kPendingRingEntries = 4096;
-constexpr int kMaxHosts = 4; // Matches cxl_shm_profiling MAX_HOST_NUM
+// Phase 4 (2026-04-22): ring capacity shrunk from 4096 → 256 because each
+// (src_gid, dst_gid) pair now has at most one outstanding op at a time
+// under normal steady-state operation (writer waits for ACK before next op).
+// kMaxWorkers sized for 2 hosts × 86 clients = 172 + margin; keep symmetric
+// with cxl_shm_profiling's MAX_HOST_NUM (200) so LFM id and ring index can
+// share the same numbering space.
+constexpr int kPendingRingEntries = 256;
+constexpr int kMaxWorkers = 200;
+// Legacy name kept for existing code paths that use cross-host id to index
+// the ring. New code should use kMaxWorkers.
+constexpr int kMaxHosts = kMaxWorkers;
 
 struct PendingRingEntry {
   cacheline_u64 op_id;            // 0 = free; writer publishes this last.
