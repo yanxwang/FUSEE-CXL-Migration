@@ -1,0 +1,61 @@
+# g3+g4 cross-host YCSB full sweep (kernel 6.15.0, 2 hosts x 1 proc, 65536 buckets, 200k ops)
+--- workload=workloada opt=A cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=49722 trans_ops=200000 trans_wall_max=1.099s trans_agg_thpt=182022
+--- workload=workloada opt=A cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=49550 trans_ops=200000 trans_wall_max=1.051s trans_agg_thpt=190216
+--- workload=workloada opt=B cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=62012 trans_ops=200000 trans_wall_max=0.775s trans_agg_thpt=257906
+--- workload=workloada opt=B cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=62773 trans_ops=200000 trans_wall_max=0.778s trans_agg_thpt=257006
+--- workload=workloada opt=C cache=[] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=92333 trans_ops=200000 trans_wall_max=0.655s trans_agg_thpt=305456
+--- workload=workloada opt=C cache=[FUSEE_CACHE=1] load=workloada.spec_load trans=workloada.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=99898 trans_ops=200000 trans_wall_max=0.566s trans_agg_thpt=353609
+--- workload=workloadb opt=A cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=50369 trans_ops=200000 trans_wall_max=0.350s trans_agg_thpt=571450
+--- workload=workloadb opt=A cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=50685 trans_ops=200000 trans_wall_max=0.162s trans_agg_thpt=1235010
+--- workload=workloadb opt=B cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=62295 trans_ops=200000 trans_wall_max=0.329s trans_agg_thpt=607163
+--- workload=workloadb opt=B cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=61528 trans_ops=200000 trans_wall_max=0.134s trans_agg_thpt=1492818
+--- workload=workloadb opt=C cache=[] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=96116 trans_ops=200000 trans_wall_max=0.302s trans_agg_thpt=662340
+--- workload=workloadb opt=C cache=[FUSEE_CACHE=1] load=workloadb.spec_load trans=workloadb.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=98663 trans_ops=200000 trans_wall_max=0.160s trans_agg_thpt=1248990
+--- workload=workloadc opt=A cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=49097 trans_ops=200000 trans_wall_max=0.276s trans_agg_thpt=723832
+--- workload=workloadc opt=A cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=50459 trans_ops=200000 trans_wall_max=0.055s trans_agg_thpt=3628595
+--- workload=workloadc opt=B cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=62350 trans_ops=200000 trans_wall_max=0.267s trans_agg_thpt=750113
+--- workload=workloadc opt=B cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=63846 trans_ops=200000 trans_wall_max=0.055s trans_agg_thpt=3662214
+--- workload=workloadc opt=C cache=[] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=100597 trans_ops=200000 trans_wall_max=0.259s trans_agg_thpt=772612
+--- workload=workloadc opt=C cache=[FUSEE_CACHE=1] load=workloadc.spec_load trans=workloadc.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=100900 trans_ops=200000 trans_wall_max=0.112s trans_agg_thpt=1785878
+--- workload=workloadd opt=A cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=47983 trans_ops=200000 trans_wall_max=0.362s trans_agg_thpt=552970
+--- workload=workloadd opt=A cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=49461 trans_ops=200000 trans_wall_max=0.161s trans_agg_thpt=1242316
+--- workload=workloadd opt=B cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=61970 trans_ops=200000 trans_wall_max=0.324s trans_agg_thpt=616692
+--- workload=workloadd opt=B cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=62605 trans_ops=200000 trans_wall_max=0.129s trans_agg_thpt=1548376
+--- workload=workloadd opt=C cache=[] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=93540 trans_ops=200000 trans_wall_max=0.301s trans_agg_thpt=665193
+--- workload=workloadd opt=C cache=[FUSEE_CACHE=1] load=workloadd.spec_load trans=workloadd.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=98745 trans_ops=200000 trans_wall_max=0.154s trans_agg_thpt=1295652
+--- workload=workloadf opt=A cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=A cache=0 num_hosts=2 load_ops=100000 load_thpt=50674 trans_ops=200000 trans_wall_max=0.813s trans_agg_thpt=245924
+--- workload=workloadf opt=A cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=A cache=1 num_hosts=2 load_ops=100000 load_thpt=49264 trans_ops=200000 trans_wall_max=0.748s trans_agg_thpt=267402
+--- workload=workloadf opt=B cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=B cache=0 num_hosts=2 load_ops=100000 load_thpt=62310 trans_ops=200000 trans_wall_max=0.623s trans_agg_thpt=321088
+--- workload=workloadf opt=B cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=B cache=1 num_hosts=2 load_ops=100000 load_thpt=61472 trans_ops=200000 trans_wall_max=0.553s trans_agg_thpt=361974
+--- workload=workloadf opt=C cache=[] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=C cache=0 num_hosts=2 load_ops=100000 load_thpt=93371 trans_ops=200000 trans_wall_max=0.459s trans_agg_thpt=435467
+--- workload=workloadf opt=C cache=[FUSEE_CACHE=1] load=workloadf.spec_load trans=workloadf.spec_trans ---
+YCSB opt=C cache=1 num_hosts=2 load_ops=100000 load_thpt=99609 trans_ops=200000 trans_wall_max=0.398s trans_agg_thpt=502917
