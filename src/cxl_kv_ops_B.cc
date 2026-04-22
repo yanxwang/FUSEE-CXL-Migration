@@ -105,12 +105,15 @@ void CxlKvStoreB::stop() {
 }
 
 static inline void publish_slot(CxlKvSlot *slot, uint64_t key, uint64_t value) {
+  // 2b: value must land on CXL before key becomes observable, so the sfence
+  // between value-flush and key-write stays. The trailing sfence after the
+  // key flush is dropped: the next caller step (dispatch spin-for-slot-free)
+  // uses full_fence(), which drains any pending clflushopt.
   slot->value = value;
   flush_line(&slot->value);
   store_fence();
   slot->key = key;
   flush_line(&slot->key);
-  store_fence();
 }
 
 static inline void bump_epoch(BucketLockEntry *e) {
@@ -163,8 +166,14 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
       __builtin_ia32_pause();
     }
 
-    STORE_CACHELINE(&e->cons.processed_op_id, 0ULL);
-
+    // 2b: no processed_op_id reset — op_ids are globally unique (host-ns
+    // prefix), so a stale processed_op_id from a prior use cannot match
+    // the current op_id. B never reads processed_op_id anyway.
+    //
+    // No per-peer sfence below. Payload + tail flushes are drained by the
+    // trailing bump_epoch's CACHELINE_STORE (which does flush+sfence) back
+    // in the caller; peers that poll tail before our flush lands simply see
+    // op_id==0 and retry — safe by the SPSC op_id==0 "slot free" invariant.
     e->prod.bucket_idx = (uint64_t)b_idx;
     e->prod.slot_idx   = (uint64_t)s_idx;
     e->prod.new_value  = value_word;
@@ -172,9 +181,8 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
     e->prod.op_id      = op_id;
     compiler_barrier();
     flush_line((void *)&e->prod);
-    store_fence();
-
-    CACHELINE_STORE(&ring->tail, (uint64_t)(t + 1));
+    ring->tail.value = (uint64_t)(t + 1);
+    flush_line((void *)&ring->tail.value);
   }
   return 0;
 }
@@ -248,7 +256,9 @@ int CxlKvStoreB::update(uint64_t key, uint64_t value) {
 
   b->slots[match].value = value;
   flush_line(&b->slots[match].value);
-  store_fence();
+  // 2b: drop intermediate sfence. dispatch_nowait enters a full_fence'd
+  // slot-free spin, which drains the value's clflushopt before the peer
+  // payload writes. The final bump_epoch sfence orders everything globally.
 
   int rc = dispatch_nowait(idx, (uint32_t)match, value);
   bump_epoch(lock_table_.entry(idx));
@@ -290,7 +300,7 @@ int CxlKvStoreB::remove(uint64_t key) {
 
   b->slots[match].key = kEmptyKey;
   flush_line(&b->slots[match].key);
-  store_fence();
+  // 2b: drop intermediate sfence (same reasoning as update).
   int rc = dispatch_nowait(idx, (uint32_t)match, 0ULL);
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);

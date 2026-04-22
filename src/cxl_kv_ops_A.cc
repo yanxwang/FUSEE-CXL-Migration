@@ -108,12 +108,14 @@ void CxlKvStoreA::stop() {
 }
 
 static inline void publish_slot(CxlKvSlot *slot, uint64_t key, uint64_t value) {
+  // 2b: value must land on CXL before key becomes observable, so the sfence
+  // between value-flush and key-write stays. Trailing sfence after key
+  // dropped: next step (dispatch spin-for-slot-free) does full_fence().
   slot->value = value;
   flush_line(&slot->value);
   store_fence();
   slot->key = key;
   flush_line(&slot->key);
-  store_fence();
 }
 
 static inline void bump_epoch(BucketLockEntry *e) {
@@ -194,8 +196,10 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
       __builtin_ia32_pause();
     }
 
-    STORE_CACHELINE(&e->cons.processed_op_id, 0ULL);
-
+    // 2b: no processed_op_id reset — op_ids are globally unique (host-ns
+    // prefix), so a stale processed_op_id cannot match our current op_id.
+    // No per-peer sfence on the payload/tail below; the single sfence
+    // after the dispatch loop drains before the ACK wait begins.
     e->prod.bucket_idx = (uint64_t)b_idx;
     e->prod.slot_idx   = (uint64_t)s_idx;
     e->prod.new_value  = value_word;
@@ -203,12 +207,15 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     e->prod.op_id      = op_id;
     compiler_barrier();
     flush_line((void *)&e->prod);
-    store_fence();
-
-    CACHELINE_STORE(&ring->tail, (uint64_t)(t + 1));
+    ring->tail.value = (uint64_t)(t + 1);
+    flush_line((void *)&ring->tail.value);
 
     my_entries[dst] = e;
   }
+  // 2b: one sfence after the dispatch loop drains all per-peer clflushopts
+  // before we spin on ACK. Peers that poll tail first simply see op_id==0
+  // and retry; this sfence bounds the window.
+  store_fence();
 
   // Spin on processed_op_id == op_id only for SAME-GROUP peers. Under
   // FUSEE_A_GROUPS=1 (default), this is every peer (original all-sync
@@ -256,13 +263,18 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   }
 
   // Clear CXL ring slots we published (so the slot can be reused).
+  // 2b: one sfence covers all per-peer slot clears. bump_epoch's
+  // CACHELINE_STORE in the caller provides a second global sfence for
+  // readers — both are adequate to order these clears.
+  bool any_cleared = false;
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_ || !my_entries[dst]) continue;
     my_entries[dst]->prod.op_id = 0;
     compiler_barrier();
     flush_line((void *)&my_entries[dst]->prod);
-    store_fence();
+    any_cleared = true;
   }
+  if (any_cleared) store_fence();
   // DRAM slots: consumer clears op_id after processing; no writer-side
   // release needed.
 
@@ -347,7 +359,8 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
 
   b->slots[match].value = value;
   flush_line(&b->slots[match].value);
-  store_fence();
+  // 2b: drop intermediate sfence. dispatch_and_wait starts with a
+  // full_fence'd slot-free spin and ends with one sfence before the ACK wait.
 
   int rc = dispatch_and_wait(idx, (uint32_t)match, value);
   bump_epoch(lock_table_.entry(idx));
@@ -389,7 +402,7 @@ int CxlKvStoreA::remove(uint64_t key) {
 
   b->slots[match].key = kEmptyKey;
   flush_line(&b->slots[match].key);
-  store_fence();
+  // 2b: drop intermediate sfence (same as update).
 
   int rc = dispatch_and_wait(idx, (uint32_t)match, 0ULL);
   bump_epoch(lock_table_.entry(idx));
