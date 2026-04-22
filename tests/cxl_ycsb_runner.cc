@@ -276,8 +276,13 @@ int main(int argc, char **argv) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       cxl_region_destroy(&r); return 1;
     }
-    if (role_mode) {
+    // init_done must be set even in single-host mode if num_clients > 1,
+    // because same-host fork children also wait on it. Cookie is only
+    // needed for cross-host runs (to defeat stale CXL memory).
+    if (num_clients > 1 || role_mode) {
       CACHELINE_STORE(&shared->init_done, 1ULL);
+    }
+    if (role_mode) {
       CACHELINE_STORE(&shared->run_cookie, run_cookie);
     }
     TC("primary attach + init_done + cookie=%lu region=%zu shared_off=%zu",
