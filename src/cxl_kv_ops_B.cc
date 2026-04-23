@@ -70,6 +70,20 @@ int CxlKvStoreB::attach(void *region_base, size_t region_bytes,
     store_fence();
   }
 
+  // 2e: initialize batch buffers. K=1 by default (no batching); readers
+  // of FUSEE_B_BATCH_K parse a single integer, clamped to [1, kBBatchMax].
+  {
+    const char *k_env = getenv("FUSEE_B_BATCH_K");
+    int k = (k_env && k_env[0]) ? atoi(k_env) : 1;
+    if (k < 1) k = 1;
+    if (k > kBBatchMax) k = kBBatchMax;
+    batch_k_ = k;
+    const char *to_env = getenv("FUSEE_B_BATCH_TIMEOUT_US");
+    uint64_t to_us = (to_env && to_env[0]) ? strtoull(to_env, nullptr, 0) : 10;
+    batch_timeout_ns_ = to_us * 1000ULL;
+    cxl_batches_.assign(num_hosts_, BBatchBuf{});
+  }
+
   stop_.store(false, std::memory_order_relaxed);
   if (!read_only_) {
     replicator_ = std::thread(&CxlKvStoreB::replicator_loop, this);
@@ -98,6 +112,9 @@ void CxlKvStoreB::enable_same_host_bypass(DramInvalMatrix *mat,
 }
 
 void CxlKvStoreB::stop() {
+  // 2e: flush any buffered batches so peers see them before we tear down
+  // the replicator. Safe to call even with K=1.
+  flush_all_cxl_batches();
   if (replicator_.joinable()) {
     stop_.store(true, std::memory_order_relaxed);
     replicator_.join();
@@ -105,15 +122,16 @@ void CxlKvStoreB::stop() {
 }
 
 static inline void publish_slot(CxlKvSlot *slot, uint64_t key, uint64_t value) {
-  // 2b: value must land on CXL before key becomes observable, so the sfence
-  // between value-flush and key-write stays. The trailing sfence after the
-  // key flush is dropped: the next caller step (dispatch spin-for-slot-free)
-  // uses full_fence(), which drains any pending clflushopt.
+  // 2g: slot is 16 B and fits entirely in one 64 B cacheline (bucket layout
+  // places every slot on a single cacheline — see cxl_hashtable.h). Writing
+  // both fields then issuing ONE clflushopt publishes the pair atomically
+  // on the CXL side — no sfence between stores needed, because x86 TSO
+  // orders the value→key store pair on our CPU and the clflushopt of this
+  // cacheline is ordered with those prior stores (Intel SDM). The single
+  // sfence at bump_epoch drains this flush before readers bump their seqlock.
   slot->value = value;
-  flush_line(&slot->value);
-  store_fence();
   slot->key = key;
-  flush_line(&slot->key);
+  flush_line(slot);
 }
 
 static inline void bump_epoch(BucketLockEntry *e) {
@@ -129,10 +147,12 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
   }
   uint64_t op_id =
       ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
+  const bool batching = (batch_k_ > 1);
+  const uint64_t now = batching ? now_ns() : 0;
   for (int dst = 0; dst < num_hosts_; dst++) {
     if (dst == host_id_) continue;
 
-    // Same-host peer → DRAM queue bypass.
+    // Same-host peer → DRAM queue bypass (immediate; batching skipped).
     if (dram_mat_ && num_clients_per_host_ > 1 &&
         (dst / num_clients_per_host_) == my_host_) {
       int dst_cid = dst % num_clients_per_host_;
@@ -150,41 +170,89 @@ int CxlKvStoreB::dispatch_nowait(uint32_t b_idx, uint32_t s_idx,
       continue;
     }
 
-    PendingRing *ring = &rings_->rings[host_id_][dst];
-    uint64_t t = local_tail_[dst]++;
-    uint32_t slot = t % kPendingRingEntries;
-    PendingRingEntry *e = &ring->entries[slot];
+    // 2e: cross-host CXL path. Fast path for K=1: no buffer, no now_ns().
+    if (!batching) {
+      PendingRing *ring = &rings_->rings[host_id_][dst];
+      uint64_t t = local_tail_[dst]++;
+      uint32_t slot = t % kPendingRingEntries;
+      PendingRingEntry *e = &ring->entries[slot];
+      const int kRingWaitBudgetUs = 2000000;
+      uint64_t start = now_ns();
+      for (;;) {
+        flush_line((void *)&e->prod);
+        full_fence();
+        if (e->prod.op_id == 0) break;
+        if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) return -3;
+        __builtin_ia32_pause();
+      }
+      e->prod.bucket_idx = (uint64_t)b_idx;
+      e->prod.slot_idx   = (uint64_t)s_idx;
+      e->prod.new_value  = value_word;
+      compiler_barrier();
+      e->prod.op_id      = op_id;
+      compiler_barrier();
+      flush_line((void *)&e->prod);
+      ring->tail.value = (uint64_t)(t + 1);
+      flush_line((void *)&ring->tail.value);
+      continue;
+    }
 
-    // Wait for slot to be free (replicator clears op_id after processing).
-    const int kRingWaitBudgetUs = 2000000;
+    // Batched path (K > 1). Append; flush on full or deadline.
+    BBatchBuf *bb = &cxl_batches_[dst];
+    if (bb->count == 0) bb->first_ns = now;
+    bb->items[bb->count++] = BBatchEntry{b_idx, s_idx, value_word, op_id};
+    bool must_flush = (bb->count >= (uint64_t)batch_k_) ||
+                      (now - bb->first_ns > batch_timeout_ns_);
+    if (must_flush) {
+      int rc = flush_cxl_batch(dst);
+      if (rc != 0) return rc;
+    }
+  }
+  return 0;
+}
+
+int CxlKvStoreB::flush_cxl_batch(int dst) {
+  BBatchBuf *bb = &cxl_batches_[dst];
+  if (bb->count == 0) return 0;
+  PendingRing *ring = &rings_->rings[host_id_][dst];
+  uint64_t t = local_tail_[dst];
+  const int kRingWaitBudgetUs = 2000000;
+  for (uint64_t i = 0; i < bb->count; i++) {
+    uint32_t slot = (t + i) % kPendingRingEntries;
+    PendingRingEntry *e = &ring->entries[slot];
     uint64_t start = now_ns();
     for (;;) {
       flush_line((void *)&e->prod);
       full_fence();
       if (e->prod.op_id == 0) break;
-      if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) return -3;
+      if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) {
+        bb->count = 0;
+        return -3;
+      }
       __builtin_ia32_pause();
     }
-
-    // 2b: no processed_op_id reset — op_ids are globally unique (host-ns
-    // prefix), so a stale processed_op_id from a prior use cannot match
-    // the current op_id. B never reads processed_op_id anyway.
-    //
-    // No per-peer sfence below. Payload + tail flushes are drained by the
-    // trailing bump_epoch's CACHELINE_STORE (which does flush+sfence) back
-    // in the caller; peers that poll tail before our flush lands simply see
-    // op_id==0 and retry — safe by the SPSC op_id==0 "slot free" invariant.
-    e->prod.bucket_idx = (uint64_t)b_idx;
-    e->prod.slot_idx   = (uint64_t)s_idx;
-    e->prod.new_value  = value_word;
+    e->prod.bucket_idx = (uint64_t)bb->items[i].bucket_idx;
+    e->prod.slot_idx   = (uint64_t)bb->items[i].slot_idx;
+    e->prod.new_value  = bb->items[i].new_value;
     compiler_barrier();
-    e->prod.op_id      = op_id;
+    e->prod.op_id      = bb->items[i].op_id;
     compiler_barrier();
     flush_line((void *)&e->prod);
-    ring->tail.value = (uint64_t)(t + 1);
-    flush_line((void *)&ring->tail.value);
   }
+  local_tail_[dst] = t + bb->count;
+  ring->tail.value = t + bb->count;
+  flush_line((void *)&ring->tail.value);
+  bb->count = 0;
   return 0;
+}
+
+void CxlKvStoreB::flush_all_cxl_batches() {
+  for (int dst = 0; dst < num_hosts_; dst++) {
+    if (dst == host_id_) continue;
+    if ((size_t)dst < cxl_batches_.size() && cxl_batches_[dst].count > 0) {
+      flush_cxl_batch(dst);
+    }
+  }
 }
 
 int CxlKvStoreB::insert(uint64_t key, uint64_t value) {

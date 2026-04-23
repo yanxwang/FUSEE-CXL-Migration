@@ -108,14 +108,13 @@ void CxlKvStoreA::stop() {
 }
 
 static inline void publish_slot(CxlKvSlot *slot, uint64_t key, uint64_t value) {
-  // 2b: value must land on CXL before key becomes observable, so the sfence
-  // between value-flush and key-write stays. Trailing sfence after key
-  // dropped: next step (dispatch spin-for-slot-free) does full_fence().
+  // 2g: slot is 16 B in a 64 B cacheline — one clflushopt publishes the pair
+  // atomically. x86 TSO orders the two stores; clflushopt is ordered with
+  // prior stores to the same line. The single sfence after the dispatch
+  // loop (for A) and bump_epoch (for both) is enough.
   slot->value = value;
-  flush_line(&slot->value);
-  store_fence();
   slot->key = key;
-  flush_line(&slot->key);
+  flush_line(slot);
 }
 
 static inline void bump_epoch(BucketLockEntry *e) {

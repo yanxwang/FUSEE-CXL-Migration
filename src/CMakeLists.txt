@@ -55,5 +55,10 @@ option(FUSEE_USE_TICKET_LOCK "Use ticket_lock instead of LFM in BucketLockEntry"
 if(FUSEE_USE_TICKET_LOCK)
     target_compile_definitions(fusee_cxl PUBLIC FUSEE_USE_TICKET_LOCK=1)
 endif()
+# 2f: ring-depth sweep knob. -DFUSEE_RING_ENTRIES=N at CMake config time
+# sizes the per-(src,dst) PendingRing. Default 256 (see cxl_pending_ring.h).
+if(DEFINED FUSEE_RING_ENTRIES)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_RING_ENTRIES=${FUSEE_RING_ENTRIES})
+endif()
 target_link_libraries(fusee_cxl PUBLIC pthread)
 

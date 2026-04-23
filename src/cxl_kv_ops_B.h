@@ -28,6 +28,25 @@
 
 namespace fusee {
 
+// 2e: batch push for B. Writer appends per-dst up to K entries before
+// pushing the batch to the CXL ring. Toggled by FUSEE_B_BATCH_K (default
+// 1 = no batching) and FUSEE_B_BATCH_TIMEOUT_US (default 10). Only the
+// cross-host path is batched; same-host DRAM remains immediate.
+constexpr int kBBatchMax = 256;
+
+struct BBatchEntry {
+  uint32_t bucket_idx;
+  uint32_t slot_idx;
+  uint64_t new_value;
+  uint64_t op_id;
+};
+
+struct BBatchBuf {
+  uint64_t    count = 0;
+  uint64_t    first_ns = 0;
+  BBatchEntry items[kBBatchMax];
+};
+
 class CxlKvStoreB {
  public:
   int attach(void *region_base, size_t region_bytes, uint32_t num_buckets,
@@ -70,6 +89,9 @@ class CxlKvStoreB {
     return static_cast<uint32_t>(fnv1a_u64(key) % num_buckets_);
   }
   int dispatch_nowait(uint32_t b_idx, uint32_t s_idx, uint64_t value_word);
+  // 2e: flush the batch buffer for a specific dst or all of them.
+  int flush_cxl_batch(int dst);
+  void flush_all_cxl_batches();
   void replicator_loop();
 
   uint32_t num_buckets_ = 0;
@@ -103,6 +125,12 @@ class CxlKvStoreB {
   int my_host_ = 0;
   int physical_hosts_ = 1;
   uint64_t dram_local_tail_[kSameHostMaxClients] = {};
+
+  // 2e: per-(host_id_, dst) batch buffer. Allocated lazily on attach to
+  // keep ops path cache-friendly even when batching is disabled.
+  int       batch_k_ = 1;            // 1 = no batching
+  uint64_t  batch_timeout_ns_ = 10000;
+  std::vector<BBatchBuf> cxl_batches_;
 };
 
 } // namespace fusee
