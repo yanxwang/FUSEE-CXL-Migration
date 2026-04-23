@@ -48,6 +48,14 @@ for cache in $CACHE_MODES; do
   for wl in $WORKLOADS; do
     for T in $THREADS; do
       for opt in $OPTS; do
+        # A crushes under its ACK-wait at high thread counts. Skip A at
+        # T >= A_SKIP_AT (default 64) to match the P1P4P5 baseline's scope
+        # and avoid 10-minute timeouts that provide no useful data. Set
+        # A_SKIP_AT=999 to re-enable A at every T.
+        : "${A_SKIP_AT:=64}"
+        if [ "$opt" = "A" ] && [ "$T" -ge "$A_SKIP_AT" ]; then
+          continue
+        fi
         tag="${wl}_opt${opt}_t${T}_cache${cache}"
         run_dir="$OUT/$tag"
         mkdir -p "$run_dir"
