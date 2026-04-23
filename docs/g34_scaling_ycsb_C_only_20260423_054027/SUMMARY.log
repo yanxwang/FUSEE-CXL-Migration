@@ -1,0 +1,167 @@
+# g3+g4 scaling sweep: threads x workloads x opts x cache
+# host0=g3 host1=g4 dev=/dev/dax0.0
+# threads=1 2 4 8 16 32 64 86 workloads=workloada workloadb workloadc workloadd workloadf opts=C cache=on off
+# num_buckets=65536 max_ops=200000 timeout=300
+# started=2026-04-23T05:40:27-05:00
+--- workloada_optC_t1_cacheon cookie=1776940827114683146 ---
+YCSB opt=C cache=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=51989 trans_ops=200000 trans_wall_max=0.641s trans_agg_thpt=312092 w_avg_ns=10293 w_p50_ns=10274 w_p99_ns=13478 r_avg_ns=2251 r_p50_ns=1522 r_p99_ns=6174  # workloada_optC_t1_cacheon
+--- workloada_optC_t2_cacheon cookie=1776940840298007439 ---
+YCSB opt=C cache=1 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=68117 trans_ops=200000 trans_wall_max=0.353s trans_agg_thpt=566549 w_avg_ns=10475 w_p50_ns=10289 w_p99_ns=15103 r_avg_ns=3204 r_p50_ns=3869 r_p99_ns=6480  # workloada_optC_t2_cacheon
+--- workloada_optC_t4_cacheon cookie=1776940853082076724 ---
+YCSB opt=C cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=67797 trans_ops=200000 trans_wall_max=0.190s trans_agg_thpt=1054201 w_avg_ns=10761 w_p50_ns=10557 w_p99_ns=15954 r_avg_ns=3915 r_p50_ns=4420 r_p99_ns=7423  # workloada_optC_t4_cacheon
+--- workloada_optC_t8_cacheon cookie=1776940865913863597 ---
+YCSB opt=C cache=1 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=80851 trans_ops=200000 trans_wall_max=0.103s trans_agg_thpt=1934219 w_avg_ns=11309 w_p50_ns=10877 w_p99_ns=20593 r_avg_ns=4509 r_p50_ns=4765 r_p99_ns=9711  # workloada_optC_t8_cacheon
+--- workloada_optC_t16_cacheon cookie=1776940878460644256 ---
+YCSB opt=C cache=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=67651 trans_ops=200000 trans_wall_max=0.067s trans_agg_thpt=2996771 w_avg_ns=14089 w_p50_ns=12877 w_p99_ns=54736 r_avg_ns=5852 r_p50_ns=5874 r_p99_ns=17193  # workloada_optC_t16_cacheon
+--- workloada_optC_t32_cacheon cookie=1776940891102480693 ---
+YCSB opt=C cache=1 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=83489 trans_ops=200000 trans_wall_max=0.063s trans_agg_thpt=3151028 w_avg_ns=17818 w_p50_ns=13189 w_p99_ns=121819 r_avg_ns=7393 r_p50_ns=6022 r_p99_ns=83203  # workloada_optC_t32_cacheon
+--- workloada_optC_t64_cacheon cookie=1776940903585884480 ---
+YCSB opt=C cache=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=81498 trans_ops=200000 trans_wall_max=0.072s trans_agg_thpt=2769134 w_avg_ns=29875 w_p50_ns=13744 w_p99_ns=376583 r_avg_ns=28397 r_p50_ns=6769 r_p99_ns=523141  # workloada_optC_t64_cacheon
+--- workloada_optC_t86_cacheon cookie=1776940916324627175 ---
+YCSB opt=C cache=1 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=94592 trans_ops=200000 trans_wall_max=0.061s trans_agg_thpt=3272064 w_avg_ns=27523 w_p50_ns=10320 w_p99_ns=554138 r_avg_ns=28661 r_p50_ns=5022 r_p99_ns=1101840  # workloada_optC_t86_cacheon
+--- workloadb_optC_t1_cacheon cookie=1776940943670785452 ---
+YCSB opt=C cache=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=70579 trans_ops=200000 trans_wall_max=0.172s trans_agg_thpt=1161660 w_avg_ns=8731 w_p50_ns=8742 w_p99_ns=11626 r_avg_ns=1067 r_p50_ns=721 r_p99_ns=4749  # workloadb_optC_t1_cacheon
+--- workloadb_optC_t2_cacheon cookie=1776940956163932051 ---
+YCSB opt=C cache=1 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=85159 trans_ops=200000 trans_wall_max=0.108s trans_agg_thpt=1857393 w_avg_ns=8942 w_p50_ns=8929 w_p99_ns=12724 r_avg_ns=1503 r_p50_ns=742 r_p99_ns=4989  # workloadb_optC_t2_cacheon
+--- workloadb_optC_t4_cacheon cookie=1776940968330518897 ---
+YCSB opt=C cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=80714 trans_ops=200000 trans_wall_max=0.069s trans_agg_thpt=2884194 w_avg_ns=9461 w_p50_ns=9219 w_p99_ns=13686 r_avg_ns=2107 r_p50_ns=1279 r_p99_ns=5954  # workloadb_optC_t4_cacheon
+--- workloadb_optC_t8_cacheon cookie=1776940980712284182 ---
+YCSB opt=C cache=1 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=78762 trans_ops=200000 trans_wall_max=0.044s trans_agg_thpt=4510460 w_avg_ns=10173 w_p50_ns=9952 w_p99_ns=15668 r_avg_ns=2866 r_p50_ns=3390 r_p99_ns=6516  # workloadb_optC_t8_cacheon
+--- workloadb_optC_t16_cacheon cookie=1776940993032676340 ---
+YCSB opt=C cache=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=68365 trans_ops=200000 trans_wall_max=0.033s trans_agg_thpt=6065296 w_avg_ns=12741 w_p50_ns=12550 w_p99_ns=22139 r_avg_ns=4519 r_p50_ns=5379 r_p99_ns=10025  # workloadb_optC_t16_cacheon
+--- workloadb_optC_t32_cacheon cookie=1776941005709004416 ---
+YCSB opt=C cache=1 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=86854 trans_ops=200000 trans_wall_max=0.019s trans_agg_thpt=10538044 w_avg_ns=11384 w_p50_ns=11110 w_p99_ns=35421 r_avg_ns=4924 r_p50_ns=4996 r_p99_ns=32256  # workloadb_optC_t32_cacheon
+--- workloadb_optC_t64_cacheon cookie=1776941018180454248 ---
+YCSB opt=C cache=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=83195 trans_ops=200000 trans_wall_max=0.027s trans_agg_thpt=7341637 w_avg_ns=15560 w_p50_ns=12394 w_p99_ns=171581 r_avg_ns=15577 r_p50_ns=5712 r_p99_ns=493491  # workloadb_optC_t64_cacheon
+--- workloadb_optC_t86_cacheon cookie=1776941030854146674 ---
+YCSB opt=C cache=1 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=97550 trans_ops=200000 trans_wall_max=0.024s trans_agg_thpt=8405527 w_avg_ns=14043 w_p50_ns=10075 w_p99_ns=210085 r_avg_ns=17033 r_p50_ns=4678 r_p99_ns=846375  # workloadb_optC_t86_cacheon
+--- workloadc_optC_t1_cacheon cookie=1776941058354941764 ---
+YCSB opt=C cache=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=71201 trans_ops=200000 trans_wall_max=0.134s trans_agg_thpt=1493855 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=1040 r_p50_ns=766 r_p99_ns=5107  # workloadc_optC_t1_cacheon
+--- workloadc_optC_t2_cacheon cookie=1776941070772422069 ---
+YCSB opt=C cache=1 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=84394 trans_ops=200000 trans_wall_max=0.079s trans_agg_thpt=2536637 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=1318 r_p50_ns=759 r_p99_ns=4870  # workloadc_optC_t2_cacheon
+--- workloadc_optC_t4_cacheon cookie=1776941083052283720 ---
+YCSB opt=C cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=85949 trans_ops=200000 trans_wall_max=0.046s trans_agg_thpt=4330103 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=1665 r_p50_ns=772 r_p99_ns=5125  # workloadc_optC_t4_cacheon
+--- workloadc_optC_t8_cacheon cookie=1776941095464751924 ---
+YCSB opt=C cache=1 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=75860 trans_ops=200000 trans_wall_max=0.029s trans_agg_thpt=6837248 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2097 r_p50_ns=834 r_p99_ns=6141  # workloadc_optC_t8_cacheon
+--- workloadc_optC_t16_cacheon cookie=1776941108023751332 ---
+YCSB opt=C cache=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=69186 trans_ops=200000 trans_wall_max=0.022s trans_agg_thpt=9222641 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3084 r_p50_ns=1165 r_p99_ns=7582  # workloadc_optC_t16_cacheon
+--- workloadc_optC_t32_cacheon cookie=1776941120562625106 ---
+YCSB opt=C cache=1 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=87988 trans_ops=200000 trans_wall_max=0.011s trans_agg_thpt=17426602 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3113 r_p50_ns=3417 r_p99_ns=8760  # workloadc_optC_t32_cacheon
+--- workloadc_optC_t64_cacheon cookie=1776941132782406646 ---
+YCSB opt=C cache=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=81390 trans_ops=200000 trans_wall_max=0.006s trans_agg_thpt=33513165 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3215 r_p50_ns=4380 r_p99_ns=10733  # workloadc_optC_t64_cacheon
+--- workloadc_optC_t86_cacheon cookie=1776941145230841459 ---
+YCSB opt=C cache=1 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=99124 trans_ops=200000 trans_wall_max=0.004s trans_agg_thpt=45990608 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3313 r_p50_ns=4419 r_p99_ns=12175  # workloadc_optC_t86_cacheon
+--- workloadd_optC_t1_cacheon cookie=1776941172725956138 ---
+YCSB opt=C cache=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=68373 trans_ops=200000 trans_wall_max=0.183s trans_agg_thpt=1092716 w_avg_ns=10672 w_p50_ns=10642 w_p99_ns=14446 r_avg_ns=1060 r_p50_ns=763 r_p99_ns=4895  # workloadd_optC_t1_cacheon
+--- workloadd_optC_t2_cacheon cookie=1776941185377055132 ---
+YCSB opt=C cache=1 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=84348 trans_ops=200000 trans_wall_max=0.106s trans_agg_thpt=1884112 w_avg_ns=10851 w_p50_ns=10792 w_p99_ns=14920 r_avg_ns=1353 r_p50_ns=769 r_p99_ns=4973  # workloadd_optC_t2_cacheon
+--- workloadd_optC_t4_cacheon cookie=1776941197717046471 ---
+YCSB opt=C cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=82104 trans_ops=200000 trans_wall_max=0.065s trans_agg_thpt=3073912 w_avg_ns=11876 w_p50_ns=11949 w_p99_ns=16587 r_avg_ns=1828 r_p50_ns=826 r_p99_ns=5956  # workloadd_optC_t4_cacheon
+--- workloadd_optC_t8_cacheon cookie=1776941210023883877 ---
+YCSB opt=C cache=1 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=74362 trans_ops=200000 trans_wall_max=0.040s trans_agg_thpt=4958899 w_avg_ns=13080 w_p50_ns=13389 w_p99_ns=17746 r_avg_ns=2377 r_p50_ns=922 r_p99_ns=6362  # workloadd_optC_t8_cacheon
+--- workloadd_optC_t16_cacheon cookie=1776941222774921141 ---
+YCSB opt=C cache=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=66888 trans_ops=200000 trans_wall_max=0.027s trans_agg_thpt=7539443 w_avg_ns=15485 w_p50_ns=15493 w_p99_ns=20696 r_avg_ns=3300 r_p50_ns=1672 r_p99_ns=7905  # workloadd_optC_t16_cacheon
+--- workloadd_optC_t32_cacheon cookie=1776941235553087488 ---
+YCSB opt=C cache=1 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=89483 trans_ops=200000 trans_wall_max=0.013s trans_agg_thpt=15091067 w_avg_ns=13517 w_p50_ns=13960 w_p99_ns=19628 r_avg_ns=3158 r_p50_ns=3672 r_p99_ns=8059  # workloadd_optC_t32_cacheon
+--- workloadd_optC_t64_cacheon cookie=1776941247780610346 ---
+YCSB opt=C cache=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=85770 trans_ops=200000 trans_wall_max=0.007s trans_agg_thpt=30510851 w_avg_ns=12170 w_p50_ns=11709 w_p99_ns=25210 r_avg_ns=3266 r_p50_ns=4389 r_p99_ns=11877  # workloadd_optC_t64_cacheon
+--- workloadd_optC_t86_cacheon cookie=1776941260196692576 ---
+YCSB opt=C cache=1 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=100255 trans_ops=200000 trans_wall_max=0.005s trans_agg_thpt=41003091 w_avg_ns=11941 w_p50_ns=11650 w_p99_ns=22469 r_avg_ns=3345 r_p50_ns=4426 r_p99_ns=11398  # workloadd_optC_t86_cacheon
+--- workloadf_optC_t1_cacheon cookie=1776941287286349615 ---
+YCSB opt=C cache=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=57835 trans_ops=200000 trans_wall_max=0.502s trans_agg_thpt=398105 w_avg_ns=10276 w_p50_ns=10432 w_p99_ns=13620 r_avg_ns=1874 r_p50_ns=1437 r_p99_ns=5905  # workloadf_optC_t1_cacheon
+--- workloadf_optC_t2_cacheon cookie=1776941300645174372 ---
+YCSB opt=C cache=1 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=72511 trans_ops=200000 trans_wall_max=0.288s trans_agg_thpt=693947 w_avg_ns=10359 w_p50_ns=10512 w_p99_ns=15197 r_avg_ns=2843 r_p50_ns=3746 r_p99_ns=6307  # workloadf_optC_t2_cacheon
+--- workloadf_optC_t4_cacheon cookie=1776941313771942241 ---
+YCSB opt=C cache=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=81320 trans_ops=200000 trans_wall_max=0.139s trans_agg_thpt=1437679 w_avg_ns=9616 w_p50_ns=9415 w_p99_ns=14657 r_avg_ns=3180 r_p50_ns=3630 r_p99_ns=6258  # workloadf_optC_t4_cacheon
+--- workloadf_optC_t8_cacheon cookie=1776941326740506430 ---
+YCSB opt=C cache=1 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=76341 trans_ops=200000 trans_wall_max=0.085s trans_agg_thpt=2353034 w_avg_ns=11116 w_p50_ns=10832 w_p99_ns=19295 r_avg_ns=4273 r_p50_ns=4587 r_p99_ns=9219  # workloadf_optC_t8_cacheon
+--- workloadf_optC_t16_cacheon cookie=1776941339749602296 ---
+YCSB opt=C cache=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=67897 trans_ops=200000 trans_wall_max=0.055s trans_agg_thpt=3618109 w_avg_ns=13435 w_p50_ns=12726 w_p99_ns=38096 r_avg_ns=5702 r_p50_ns=5705 r_p99_ns=17821  # workloadf_optC_t16_cacheon
+--- workloadf_optC_t32_cacheon cookie=1776941353011105918 ---
+YCSB opt=C cache=1 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=88225 trans_ops=200000 trans_wall_max=0.046s trans_agg_thpt=4337957 w_avg_ns=15848 w_p50_ns=12996 w_p99_ns=88978 r_avg_ns=10493 r_p50_ns=5763 r_p99_ns=246914  # workloadf_optC_t32_cacheon
+--- workloadf_optC_t64_cacheon cookie=1776941365851137988 ---
+YCSB opt=C cache=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=79026 trans_ops=200000 trans_wall_max=0.073s trans_agg_thpt=2722445 w_avg_ns=35646 w_p50_ns=14144 w_p99_ns=462467 r_avg_ns=34336 r_p50_ns=8178 r_p99_ns=661285  # workloadf_optC_t64_cacheon
+--- workloadf_optC_t86_cacheon cookie=1776941379063860355 ---
+YCSB opt=C cache=1 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=92816 trans_ops=200000 trans_wall_max=0.068s trans_agg_thpt=2961298 w_avg_ns=34842 w_p50_ns=10227 w_p99_ns=774197 r_avg_ns=30425 r_p50_ns=4940 r_p99_ns=1338264  # workloadf_optC_t86_cacheon
+--- workloada_optC_t1_cacheoff cookie=1776941407296318406 ---
+YCSB opt=C cache=0 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=50287 trans_ops=200000 trans_wall_max=0.729s trans_agg_thpt=274442 w_avg_ns=10320 w_p50_ns=10449 w_p99_ns=13651 r_avg_ns=3830 r_p50_ns=3902 r_p99_ns=6385  # workloada_optC_t1_cacheoff
+--- workloada_optC_t2_cacheoff cookie=1776941420418902064 ---
+YCSB opt=C cache=0 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=65554 trans_ops=200000 trans_wall_max=0.366s trans_agg_thpt=546771 w_avg_ns=10322 w_p50_ns=10394 w_p99_ns=15150 r_avg_ns=3854 r_p50_ns=3773 r_p99_ns=6548  # workloada_optC_t2_cacheoff
+--- workloada_optC_t4_cacheoff cookie=1776941433148911707 ---
+YCSB opt=C cache=0 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=69873 trans_ops=200000 trans_wall_max=0.190s trans_agg_thpt=1050040 w_avg_ns=10583 w_p50_ns=10431 w_p99_ns=17271 r_avg_ns=4064 r_p50_ns=3894 r_p99_ns=7883  # workloada_optC_t4_cacheoff
+--- workloada_optC_t8_cacheoff cookie=1776941445786284182 ---
+YCSB opt=C cache=0 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=85071 trans_ops=200000 trans_wall_max=0.100s trans_agg_thpt=1992306 w_avg_ns=10954 w_p50_ns=10678 w_p99_ns=22482 r_avg_ns=4303 r_p50_ns=4104 r_p99_ns=8752  # workloada_optC_t8_cacheoff
+--- workloada_optC_t16_cacheoff cookie=1776941458152805661 ---
+YCSB opt=C cache=0 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=65041 trans_ops=200000 trans_wall_max=0.070s trans_agg_thpt=2839606 w_avg_ns=13907 w_p50_ns=12515 w_p99_ns=54800 r_avg_ns=5549 r_p50_ns=5311 r_p99_ns=16885  # workloada_optC_t16_cacheoff
+--- workloada_optC_t32_cacheoff cookie=1776941471102992615 ---
+YCSB opt=C cache=0 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=88344 trans_ops=200000 trans_wall_max=0.040s trans_agg_thpt=5057287 w_avg_ns=16182 w_p50_ns=12438 w_p99_ns=116786 r_avg_ns=6237 r_p50_ns=5480 r_p99_ns=48866  # workloada_optC_t32_cacheoff
+--- workloada_optC_t64_cacheoff cookie=1776941483660987379 ---
+YCSB opt=C cache=0 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=86647 trans_ops=200000 trans_wall_max=0.062s trans_agg_thpt=3239050 w_avg_ns=23637 w_p50_ns=12760 w_p99_ns=385760 r_avg_ns=17446 r_p50_ns=5908 r_p99_ns=298274  # workloada_optC_t64_cacheoff
+--- workloada_optC_t86_cacheoff cookie=1776941496291558402 ---
+YCSB opt=C cache=0 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=96534 trans_ops=200000 trans_wall_max=0.041s trans_agg_thpt=4896242 w_avg_ns=19976 w_p50_ns=9759 w_p99_ns=293553 r_avg_ns=20326 r_p50_ns=4619 r_p99_ns=467218  # workloada_optC_t86_cacheoff
+--- workloadb_optC_t1_cacheoff cookie=1776941523531892976 ---
+YCSB opt=C cache=0 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=62544 trans_ops=200000 trans_wall_max=0.324s trans_agg_thpt=616715 w_avg_ns=8811 w_p50_ns=8767 w_p99_ns=11298 r_avg_ns=2888 r_p50_ns=2854 r_p99_ns=4837  # workloadb_optC_t1_cacheoff
+--- workloadb_optC_t2_cacheoff cookie=1776941536406224796 ---
+YCSB opt=C cache=0 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=77101 trans_ops=200000 trans_wall_max=0.173s trans_agg_thpt=1153605 w_avg_ns=8878 w_p50_ns=8846 w_p99_ns=12375 r_avg_ns=3024 r_p50_ns=2946 r_p99_ns=5233  # workloadb_optC_t2_cacheoff
+--- workloadb_optC_t4_cacheoff cookie=1776941548971288866 ---
+YCSB opt=C cache=0 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=85160 trans_ops=200000 trans_wall_max=0.091s trans_agg_thpt=2193649 w_avg_ns=9051 w_p50_ns=8879 w_p99_ns=13135 r_avg_ns=3170 r_p50_ns=2942 r_p99_ns=5646  # workloadb_optC_t4_cacheoff
+--- workloadb_optC_t8_cacheoff cookie=1776941561335363260 ---
+YCSB opt=C cache=0 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=76795 trans_ops=200000 trans_wall_max=0.052s trans_agg_thpt=3850130 w_avg_ns=9675 w_p50_ns=9421 w_p99_ns=14904 r_avg_ns=3583 r_p50_ns=3211 r_p99_ns=6735  # workloadb_optC_t8_cacheoff
+--- workloadb_optC_t16_cacheoff cookie=1776941573795057316 ---
+YCSB opt=C cache=0 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=67446 trans_ops=200000 trans_wall_max=0.036s trans_agg_thpt=5506642 w_avg_ns=12326 w_p50_ns=12208 w_p99_ns=21009 r_avg_ns=5090 r_p50_ns=4896 r_p99_ns=10140  # workloadb_optC_t16_cacheoff
+--- workloadb_optC_t32_cacheoff cookie=1776941586519226143 ---
+YCSB opt=C cache=0 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=90981 trans_ops=200000 trans_wall_max=0.018s trans_agg_thpt=10986538 w_avg_ns=11035 w_p50_ns=11342 w_p99_ns=26666 r_avg_ns=4571 r_p50_ns=4894 r_p99_ns=15349  # workloadb_optC_t32_cacheoff
+--- workloadb_optC_t64_cacheoff cookie=1776941598808218021 ---
+YCSB opt=C cache=0 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=85987 trans_ops=200000 trans_wall_max=0.026s trans_agg_thpt=7585836 w_avg_ns=14146 w_p50_ns=10968 w_p99_ns=147849 r_avg_ns=12163 r_p50_ns=4882 r_p99_ns=496857  # workloadb_optC_t64_cacheoff
+--- workloadb_optC_t86_cacheoff cookie=1776941611448040309 ---
+YCSB opt=C cache=0 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=98269 trans_ops=200000 trans_wall_max=0.018s trans_agg_thpt=10973076 w_avg_ns=12970 w_p50_ns=9784 w_p99_ns=146842 r_avg_ns=13311 r_p50_ns=4490 r_p99_ns=500051  # workloadb_optC_t86_cacheoff
+--- workloadc_optC_t1_cacheoff cookie=1776941638813624426 ---
+YCSB opt=C cache=0 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=64395 trans_ops=200000 trans_wall_max=0.299s trans_agg_thpt=669201 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2812 r_p50_ns=2819 r_p99_ns=4929  # workloadc_optC_t1_cacheoff
+--- workloadc_optC_t2_cacheoff cookie=1776941651446299350 ---
+YCSB opt=C cache=0 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=81198 trans_ops=200000 trans_wall_max=0.157s trans_agg_thpt=1277027 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2952 r_p50_ns=2808 r_p99_ns=5142  # workloadc_optC_t2_cacheoff
+--- workloadc_optC_t4_cacheoff cookie=1776941663710211088 ---
+YCSB opt=C cache=0 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=85323 trans_ops=200000 trans_wall_max=0.083s trans_agg_thpt=2415326 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3090 r_p50_ns=2832 r_p99_ns=5322  # workloadc_optC_t4_cacheoff
+--- workloadc_optC_t8_cacheoff cookie=1776941676031223362 ---
+YCSB opt=C cache=0 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=76954 trans_ops=200000 trans_wall_max=0.045s trans_agg_thpt=4399546 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3437 r_p50_ns=2999 r_p99_ns=6659  # workloadc_optC_t8_cacheoff
+--- workloadc_optC_t16_cacheoff cookie=1776941688556862220 ---
+YCSB opt=C cache=0 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=68838 trans_ops=200000 trans_wall_max=0.033s trans_agg_thpt=5970664 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=5015 r_p50_ns=4822 r_p99_ns=7712  # workloadc_optC_t16_cacheoff
+--- workloadc_optC_t32_cacheoff cookie=1776941701073661451 ---
+YCSB opt=C cache=0 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=90162 trans_ops=200000 trans_wall_max=0.016s trans_agg_thpt=12517321 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=4374 r_p50_ns=4684 r_p99_ns=9741  # workloadc_optC_t32_cacheoff
+--- workloadc_optC_t64_cacheoff cookie=1776941713237923450 ---
+YCSB opt=C cache=0 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=89454 trans_ops=200000 trans_wall_max=0.008s trans_agg_thpt=26116282 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=4347 r_p50_ns=4406 r_p99_ns=15645  # workloadc_optC_t64_cacheoff
+--- workloadc_optC_t86_cacheoff cookie=1776941725642486704 ---
+YCSB opt=C cache=0 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=99996 trans_ops=200000 trans_wall_max=0.006s trans_agg_thpt=33597194 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=4654 r_p50_ns=4477 r_p99_ns=20303  # workloadc_optC_t86_cacheoff
+--- workloadd_optC_t1_cacheoff cookie=1776941752674482989 ---
+YCSB opt=C cache=0 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=62813 trans_ops=200000 trans_wall_max=0.333s trans_agg_thpt=600271 w_avg_ns=10560 w_p50_ns=10620 w_p99_ns=13980 r_avg_ns=2855 r_p50_ns=2802 r_p99_ns=4850  # workloadd_optC_t1_cacheoff
+--- workloadd_optC_t2_cacheoff cookie=1776941765368158320 ---
+YCSB opt=C cache=0 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=77390 trans_ops=200000 trans_wall_max=0.177s trans_agg_thpt=1132816 w_avg_ns=10934 w_p50_ns=10887 w_p99_ns=14626 r_avg_ns=2964 r_p50_ns=2865 r_p99_ns=5110  # workloadd_optC_t2_cacheoff
+--- workloadd_optC_t4_cacheoff cookie=1776941777973172910 ---
+YCSB opt=C cache=0 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=79335 trans_ops=200000 trans_wall_max=0.095s trans_agg_thpt=2097627 w_avg_ns=11430 w_p50_ns=11638 w_p99_ns=15789 r_avg_ns=3190 r_p50_ns=2957 r_p99_ns=5918  # workloadd_optC_t4_cacheoff
+--- workloadd_optC_t8_cacheoff cookie=1776941790518552171 ---
+YCSB opt=C cache=0 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=74992 trans_ops=200000 trans_wall_max=0.054s trans_agg_thpt=3698709 w_avg_ns=12382 w_p50_ns=12387 w_p99_ns=17472 r_avg_ns=3666 r_p50_ns=3388 r_p99_ns=6217  # workloadd_optC_t8_cacheoff
+--- workloadd_optC_t16_cacheoff cookie=1776941803193439748 ---
+YCSB opt=C cache=0 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=68240 trans_ops=200000 trans_wall_max=0.037s trans_agg_thpt=5472904 w_avg_ns=15369 w_p50_ns=15360 w_p99_ns=20216 r_avg_ns=5021 r_p50_ns=4828 r_p99_ns=7740  # workloadd_optC_t16_cacheoff
+--- workloadd_optC_t32_cacheoff cookie=1776941815806804033 ---
+YCSB opt=C cache=0 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=91696 trans_ops=200000 trans_wall_max=0.016s trans_agg_thpt=12511242 w_avg_ns=12320 w_p50_ns=12874 w_p99_ns=19081 r_avg_ns=3949 r_p50_ns=4316 r_p99_ns=8694  # workloadd_optC_t32_cacheoff
+--- workloadd_optC_t64_cacheoff cookie=1776941828078383916 ---
+YCSB opt=C cache=0 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=89212 trans_ops=200000 trans_wall_max=0.008s trans_agg_thpt=25251256 w_avg_ns=12070 w_p50_ns=11682 w_p99_ns=32994 r_avg_ns=4212 r_p50_ns=4426 r_p99_ns=15703  # workloadd_optC_t64_cacheoff
+--- workloadd_optC_t86_cacheoff cookie=1776941840606579442 ---
+YCSB opt=C cache=0 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=101316 trans_ops=200000 trans_wall_max=0.006s trans_agg_thpt=32769034 w_avg_ns=12021 w_p50_ns=11642 w_p99_ns=36238 r_avg_ns=4512 r_p50_ns=4491 r_p99_ns=16904  # workloadd_optC_t86_cacheoff
+--- workloadf_optC_t1_cacheoff cookie=1776941868014853844 ---
+YCSB opt=C cache=0 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=54065 trans_ops=200000 trans_wall_max=0.587s trans_agg_thpt=340449 w_avg_ns=9779 w_p50_ns=10344 w_p99_ns=12062 r_avg_ns=3340 r_p50_ns=3593 r_p99_ns=5264  # workloadf_optC_t1_cacheoff
+--- workloadf_optC_t2_cacheoff cookie=1776941881714487141 ---
+YCSB opt=C cache=0 num_hosts=2 threads=2 threads_eff=2 load_ops=100000 load_thpt=73643 trans_ops=200000 trans_wall_max=0.266s trans_agg_thpt=753085 w_avg_ns=9140 w_p50_ns=9202 w_p99_ns=13311 r_avg_ns=3117 r_p50_ns=2992 r_p99_ns=5472  # workloadf_optC_t2_cacheoff
+--- workloadf_optC_t4_cacheoff cookie=1776941894811652176 ---
+YCSB opt=C cache=0 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=79931 trans_ops=200000 trans_wall_max=0.162s trans_agg_thpt=1236148 w_avg_ns=9935 w_p50_ns=10328 w_p99_ns=16764 r_avg_ns=3657 r_p50_ns=3757 r_p99_ns=7658  # workloadf_optC_t4_cacheoff
+--- workloadf_optC_t8_cacheoff cookie=1776941907782393369 ---
+YCSB opt=C cache=0 num_hosts=2 threads=8 threads_eff=8 load_ops=100000 load_thpt=75714 trans_ops=200000 trans_wall_max=0.085s trans_agg_thpt=2364691 w_avg_ns=10918 w_p50_ns=10619 w_p99_ns=20009 r_avg_ns=4248 r_p50_ns=3953 r_p99_ns=8695  # workloadf_optC_t8_cacheoff
+--- workloadf_optC_t16_cacheoff cookie=1776941920889807315 ---
+YCSB opt=C cache=0 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=67546 trans_ops=200000 trans_wall_max=0.054s trans_agg_thpt=3704160 w_avg_ns=13378 w_p50_ns=12480 w_p99_ns=40450 r_avg_ns=5512 r_p50_ns=5265 r_p99_ns=16208  # workloadf_optC_t16_cacheoff
+--- workloadf_optC_t32_cacheoff cookie=1776941934172765035 ---
+YCSB opt=C cache=0 num_hosts=2 threads=32 threads_eff=32 load_ops=100000 load_thpt=87060 trans_ops=200000 trans_wall_max=0.058s trans_agg_thpt=3432501 w_avg_ns=16364 w_p50_ns=12398 w_p99_ns=98476 r_avg_ns=6307 r_p50_ns=5383 r_p99_ns=61222  # workloadf_optC_t32_cacheoff
+--- workloadf_optC_t64_cacheoff cookie=1776941947114881500 ---
+YCSB opt=C cache=0 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=86350 trans_ops=200000 trans_wall_max=0.056s trans_agg_thpt=3597397 w_avg_ns=26085 w_p50_ns=10954 w_p99_ns=414072 r_avg_ns=23237 r_p50_ns=4981 r_p99_ns=706489  # workloadf_optC_t64_cacheoff
+--- workloadf_optC_t86_cacheoff cookie=1776941960384514237 ---
+YCSB opt=C cache=0 num_hosts=2 threads=86 threads_eff=86 load_ops=100000 load_thpt=95712 trans_ops=200000 trans_wall_max=0.043s trans_agg_thpt=4608300 w_avg_ns=24340 w_p50_ns=9743 w_p99_ns=416432 r_avg_ns=20841 r_p50_ns=4555 r_p99_ns=548461  # workloadf_optC_t86_cacheoff
+# finished=2026-04-23T05:59:48-05:00
+# ok=80 fail=0

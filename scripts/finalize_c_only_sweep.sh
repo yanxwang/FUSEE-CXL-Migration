@@ -42,12 +42,17 @@ python3 "$HOME/FUSEE/docs/plot_scaling_sweep.py" \
 python3 "$HOME/FUSEE/docs/plot_scaling_sweep.py" \
     "$dst/SUMMARY.log" "$dst/cache_off" --cache=off 2>&1 | tail -3 || true
 
-# Extra overlay: this iter vs baseline (p2_v4).
+# Extra overlay: this iter vs baseline (p2_v4) vs iter1 per-slot LFM if present.
 baseline_log="$HOME/FUSEE/logs/g34_scaling_sweep_p2_v4_20260422_205644/SUMMARY.log"
-if [ -f "$baseline_log" ]; then
-  python3 "$HOME/FUSEE/docs/plot_c_compare.py" "$dst/extra" \
-      "baseline (LFM per-bucket)" "$baseline_log" \
-      "$label" "$dst/SUMMARY.log" 2>&1 | tail -3 || true
+iter1_log="$HOME/FUSEE/docs/g34_scaling_ycsb_C_only_20260423_051200/SUMMARY.log"
+cmpargs=()
+[ -f "$baseline_log" ] && cmpargs+=("baseline (LFM per-bucket)" "$baseline_log")
+if [ -f "$iter1_log" ] && [ "$dst/SUMMARY.log" != "$iter1_log" ]; then
+  cmpargs+=("iter1 per-slot LFM" "$iter1_log")
+fi
+cmpargs+=("$label" "$dst/SUMMARY.log")
+if [ ${#cmpargs[@]} -ge 4 ]; then
+  python3 "$HOME/FUSEE/docs/plot_c_compare.py" "$dst/extra" "${cmpargs[@]}" 2>&1 | tail -3 || true
 fi
 
 cat > "$dst/iteration_note.md" <<EOF

@@ -131,6 +131,13 @@ Decomp proof: lock p99 at T=64 on workload A dropped 12.8 ms → 440 µs (29 ×)
 
 **Step 2.1 (ticket-lock per bucket):** built after the local patch but `T=8` workload A did not finish the harness budget — `ticket_mutex_t`'s pre/post-fetch_add clflushopts storm the one hot cacheline across hosts, degrading > 350 × vs LFM. Kept as opt-in flag, not the default.
 
+**Iter 2 (fresh decomp on per-slot LFM → `bump_epoch` outside crit section + writer-side DRAM cache refresh):**
+
+- Code: `bump_epoch` moved after `unlock_slot()` in all three C write paths, now returns the post-increment epoch; writers replace `cache_epoch_[idx] = UINT64_MAX` with a local cache refresh (`cache_buckets_[idx].slots[s] = new`; `cache_epoch_[idx] = new_epoch`). Keeps iter-1's atomic `__atomic_add_fetch` (correctness requirement under per-slot granularity).
+- Decomp (`docs/latency_decomp_C_iter2_20260423_053919.md`): lock stage shrinks 6-27 % across T=8..32; epoch stage grows 68-82 % because the correctness-mandatory atomic RMW pays an explicit CXL roundtrip where the old non-atomic pattern did not.
+- Sweep (`docs/g34_scaling_ycsb_C_only_20260423_054027/`, per-slot LFM + iter-2 refinements, 80 runs, cache on peaks): A 3.41 → 3.27 (-4 %), B 9.98 → 10.54 (+6 %), D 38.30 → 41.00 (+7 %), F 3.53 → 4.34 (+23 %). Workloads that have reads (F) benefit from the cache refresh; workload A is still dominated by writes on the one Zipfian-hot slot.
+- 20 Mops/s bar still not met on A / B / F (6.1× / 1.9× / 4.6× short). The ceiling is structural: ~3-4 µs per-op atomic cross-host epoch bump is the critical-section floor for any design that maintains strict LRC. Breaking it needs LRC relaxation (defer bump every K writes), per-host sharded writes, or same-key micro-batching — all non-drop-in; each needs a dedicated design doc before iter 3.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

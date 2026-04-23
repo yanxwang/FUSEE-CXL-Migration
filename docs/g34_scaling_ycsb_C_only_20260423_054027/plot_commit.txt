@@ -1,0 +1,30 @@
+git_sha=d427d11fb220b31bcc776ff851b54e86b58abe43
+branch=feat/cxl-migration
+status= D docs/c1_c2_colleague_message.md
+ D docs/consensus_comparison.pptx
+ D docs/cxl_abc_results_summary.pptx
+ D docs/cxl_lfm_consensus_steps.pptx
+ D docs/cxl_lfm_step1.png
+ D docs/cxl_lfm_step2.png
+ D docs/cxl_lfm_step3.png
+ D docs/cxl_lfm_step4.png
+ D docs/cxl_lfm_step5.png
+ D docs/cxl_lfm_step6.png
+ D docs/cxl_lfm_step7.png
+ D docs/cxl_staging_oplog.pptx
+ M docs/fusee_mp_bench_v3_cache_on.png
+ M docs/g34_scaling_ycsb/extra/abc_compare_workloada.png
+ M docs/g34_scaling_ycsb/extra/abc_compare_workloadb.png
+ M docs/g34_scaling_ycsb/extra/abc_compare_workloadc.png
+ M docs/g34_scaling_ycsb/extra/abc_compare_workloadd.png
+ M docs/g34_scaling_ycsb/extra/abc_compare_workloadf.png
+ D docs/hashtable_architecture.pptx
+ D docs/lfm_substeps.pptx
+ts=20260423_054027
+host=soldier
+opts=C
+workloads=workloada workloadb workloadc workloadd workloadf
+threads=1 2 4 8 16 32 64 86
+cache_modes=on off
+num_buckets=65536
+max_ops=200000
