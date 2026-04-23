@@ -73,6 +73,14 @@ for cache in $CACHE_MODES; do
         else
           echo "# FAIL $tag (see $run_dir/)" | tee -a "$agg"
           fail=$((fail + 1))
+          # ssh timeout leaves the remote runner running — it holds the CXL
+          # region and blocks subsequent tests. Kill on both hosts before
+          # moving on. This pkill targets only the runner binary, not any
+          # other processes.
+          ssh "$HOST0" "pkill -9 -f 'cxl_ycsb_runner_' 2>/dev/null" &
+          ssh "$HOST1" "pkill -9 -f 'cxl_ycsb_runner_' 2>/dev/null" &
+          wait
+          sleep 1
         fi
       done
     done
