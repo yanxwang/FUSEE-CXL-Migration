@@ -29,6 +29,14 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
     target_compile_options(${t} PRIVATE -mclflushopt)
 endforeach()
 
+# Per-stage C write-path latency decomposition runner. Links the
+# decomp-instrumented sibling library so the insert/update stage timestamps
+# in cxl_kv_ops_C.cc are live. Uses CONSENSUS_OPT=3 (protocol C).
+add_executable(cxl_latency_decomp_C cxl_latency_decomp_C.cc)
+target_link_libraries(cxl_latency_decomp_C fusee_cxl_decomp)
+target_compile_options(cxl_latency_decomp_C
+    PRIVATE -mclflushopt -O2 -DCONSENSUS_OPT=3)
+
 # Unified micro-bench + YCSB runner: one binary per (protocol × variant).
 foreach(opt A B C)
     if(${opt} STREQUAL "A")
