@@ -106,6 +106,31 @@ Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — t
 **Dax0.0 ready**: ✅ reconfigured to devdax mode on 2026-04-20 02:00 CDT
 **Build status**: original FUSEE still has RDMA deps in libddckv; Phase 1 tests link cxl_mm.cc directly, bypassing libddckv. Full libddckv refactor in Phase 4.
 
+## 2026-04-23 — iter 1 of C write-path optimization (per `docs/task_plan_20260423_c_writepath.md`)
+
+Bar: C protocol must hit ≥ 20 Mops/s `trans_agg_thpt` on workloads A, B, F on g3+g4 (`docs/design_goals.md`). Baseline (from `logs/g34_scaling_sweep_p2_v4_20260422_205644`, cache=on): A = 1.08, B = 6.55, F = 1.44 Mops/s — 2 – 18× below target.
+
+**Landed:**
+
+- **Stage-level latency decomposition for C write path** — `src/cxl_latency_decomp_probe.{h,cc}`, `tests/cxl_latency_decomp_C.cc` (fork-based, per-client histograms, primary merges). Compile-gated by `FUSEE_LATENCY_DECOMP=1` on a sibling library `fusee_cxl_decomp` so production `cxl_ycsb_runner_C` pays zero runtime cost.
+- **FUSEE-local patched ticket_lock** — `src/ticket_lock_fusee_patched.c`. Upstream `$CXL_SHM_PROFILING_DIR/locks/ticket_lock.c` was missing the pre-`fetch_add` clflushopt required for cross-host correctness; patch kept inside the FUSEE tree via CMake so the shared repo is untouched.
+- **Per-slot LFM lock for protocol C** — `src/cxl_bucket_lock.{h,cc}` adds `SlotLockTable` (7 × `bucket_mutex_t` per bucket). `src/cxl_kv_ops_C.cc`, under `FUSEE_PER_SLOT_LOCK=ON`, runs unlocked-scan → lock one slot → re-verify → publish. INSERT carries an under-lock dup scan of the other 6 slots. `bump_epoch` promoted to atomic `__atomic_fetch_add + clflushopt + sfence` (per-slot granularity means concurrent writers on different slots race on the shared per-bucket counter).
+- **Decomp + sweep infra** — `scripts/run_latency_decomp_C.sh`, `scripts/finalize_c_only_sweep.sh`, `docs/plot_c_compare.py`; `scripts/run_g34_scaling_sweep.sh` reused with `OPTS=C`.
+
+**Numbers (cache=on peaks, vs baseline):**
+
+- workloada: 1.08 → **3.41** (3.16 ×; T=86) — **5.9 × below 20 Mops/s**
+- workloadb: 6.55 → **9.98** (1.52 ×; T=32) — **2.0 × below**
+- workloadc: 51.22 → 46.01 (ref only; 10 % regression from SlotLockTable's 17 GiB init cost)
+- workloadd: 45.86 → 38.30 (ref only; 16 % regression, same cause plus under-lock dup scan)
+- workloadf: 1.44 → **3.53** (2.45 ×; T=16) — **5.7 × below**
+
+Decomp proof: lock p99 at T=64 on workload A dropped 12.8 ms → 440 µs (29 ×); lock_avg 572 µs → 26 µs (22 ×). Per-slot granularity is doing its job — the remaining gap is the critical-section itself (`epoch` bump ≈ 2 µs/op cross-host) funneling ~172 workers through one hot slot.
+
+**Target check:** iter 1 does **not** cross the 20 Mops/s bar on A, B, F. Per plan the loop should feed fresh decomp back into step 1 for an iter-2 choice that does not mechanically repeat per-slot. Candidates (data-driven from the per-slot decomp, not pre-committed): move `bump_epoch` outside the critical section, writer-side self-host DRAM cache refresh, per-client slot-index hint cache. Details in `docs/g34_scaling_ycsb_C_only_20260423_051200/iteration_note.md`.
+
+**Step 2.1 (ticket-lock per bucket):** built after the local patch but `T=8` workload A did not finish the harness budget — `ticket_mutex_t`'s pre/post-fetch_add clflushopts storm the one hot cacheline across hosts, degrading > 350 × vs LFM. Kept as opt-in flag, not the default.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch
