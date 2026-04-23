@@ -59,7 +59,11 @@ class CxlKvStoreC {
   uint32_t num_buckets_ = 0;
   int      host_id_ = -1;
   int      num_hosts_ = 0;
+#if defined(FUSEE_PER_SLOT_LOCK) && FUSEE_PER_SLOT_LOCK
+  SlotLockTable lock_table_;
+#else
   BucketLockTable lock_table_;
+#endif
   CxlKvBucket    *buckets_ = nullptr;
   OpLog          *oplog_ = nullptr;  // optional; set via enable_oplog()
 

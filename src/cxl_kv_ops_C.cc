@@ -8,6 +8,23 @@ extern "C" {
 #include "common.h"  // cacheline_u64, CACHELINE_LOAD/STORE, flush_line, fences
 }
 
+#include "cxl_latency_decomp_probe.h"
+
+#if defined(FUSEE_LATENCY_DECOMP) && FUSEE_LATENCY_DECOMP
+#include <time.h>
+namespace {
+inline uint64_t decomp_now_ns() {
+  timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+} // namespace
+#define DECOMP_DECL(name) uint64_t name = decomp_now_ns()
+#define DECOMP_REC(stage, a, b) ::fusee::decomp_record(::fusee::stage, (b) - (a))
+#else
+#define DECOMP_DECL(name) ((void)0)
+#define DECOMP_REC(stage, a, b) ((void)0)
+#endif
+
 namespace fusee {
 
 // Region layout (static offsets, derived from `num_buckets`):
@@ -24,8 +41,14 @@ static inline size_t align_up(size_t n, size_t a) {
   return (n + a - 1) & ~(a - 1);
 }
 
+#if defined(FUSEE_PER_SLOT_LOCK) && FUSEE_PER_SLOT_LOCK
+using CBucketLockTable = SlotLockTable;
+#else
+using CBucketLockTable = BucketLockTable;
+#endif
+
 size_t CxlKvStoreC::bytes_for(uint32_t num_buckets) {
-  size_t locks = BucketLockTable::bytes_for(num_buckets);
+  size_t locks = CBucketLockTable::bytes_for(num_buckets);
   size_t after_locks = align_up(kHeaderBytes + locks, 64);
   size_t buckets = sizeof(CxlKvBucket) * num_buckets;
   return after_locks + buckets;
@@ -47,7 +70,7 @@ int CxlKvStoreC::attach(void *region_base, size_t region_bytes,
   void *locks_base = base + kHeaderBytes;
   lock_table_.attach(locks_base, num_buckets, init_region);
 
-  size_t locks = BucketLockTable::bytes_for(num_buckets);
+  size_t locks = CBucketLockTable::bytes_for(num_buckets);
   size_t after_locks = align_up(kHeaderBytes + locks, 64);
   buckets_ = reinterpret_cast<CxlKvBucket *>(base + after_locks);
 
@@ -82,16 +105,223 @@ static inline void publish_slot(CxlKvSlot *slot, uint64_t key, uint64_t value) {
   store_fence();
 }
 
-static inline void bump_epoch(BucketLockEntry *e) {
-  // write_epoch is a cacheline_u64; CACHELINE_STORE fences internally.
-  uint64_t cur = CACHELINE_LOAD(&e->write_epoch);
-  CACHELINE_STORE(&e->write_epoch, cur + 1);
+template <class Entry>
+static inline void bump_epoch(Entry *e) {
+  // write_epoch is a cacheline_u64; both BucketLockEntry and SlotLockEntry
+  // expose it at the same name. Per-bucket lock serialised the increment;
+  // per-slot lock does NOT (concurrent writers on different slots of the
+  // same bucket race here). Use atomic fetch-add so the count never drops
+  // updates, and surround with the clflushopt+sfence pattern expected by
+  // readers on peer hosts.
+  uint64_t *p = (uint64_t *)&e->write_epoch.value;
+  __atomic_fetch_add(p, 1ULL, __ATOMIC_ACQ_REL);
+  flush_line(p);
+  store_fence();
 }
+
+#if defined(FUSEE_PER_SLOT_LOCK) && FUSEE_PER_SLOT_LOCK
+// ----- Per-slot lock write path (Phase-2b) -----
+//
+// UPDATE/DELETE: unlocked scan for matching key, lock the slot we found,
+// re-verify key still matches under the slot lock, mutate, bump epoch,
+// unlock. If the key moved during the race, scan the bucket once more
+// under no lock (bounded retries) before giving up.
+//
+// INSERT: unlocked scan for duplicate + empty-slot candidate. Lock the
+// candidate slot, verify it is still empty under lock, AND re-scan the
+// other 6 slots for duplicate (another insert may have raced us into a
+// different slot). If the candidate was taken by a racer, release and
+// retry with another empty slot, bounded by kInsertRetries. If a dup
+// emerged, release and return -2.
+
+constexpr int kInsertRetries = 8;
 
 int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
+  CxlKvBucket *b = &buckets_[idx];
+
+  for (int attempt = 0; attempt < kInsertRetries; attempt++) {
+    DECOMP_DECL(__dt0);
+    // Unlocked scan to find a candidate empty slot and dup key.
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      flush_line(&b->slots[s].key);
+    }
+    full_fence();
+    int empty_slot_i = -1;
+    bool dup = false;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      uint64_t k = b->slots[s].key;
+      if (k == key) { dup = true; break; }
+      if (empty_slot_i < 0 && k == kEmptyKey) empty_slot_i = s;
+    }
+    if (dup) return -2;
+    if (empty_slot_i < 0) return -1;  // full
+
+    lock_table_.lock_slot(idx, empty_slot_i);
+    DECOMP_DECL(__dt1);
+
+    // Under slot lock, re-verify. Must also scan other slots for dup since
+    // a racing insert could have landed in any of them.
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      flush_line(&b->slots[s].key);
+    }
+    full_fence();
+    bool dup_now = false;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      if (s == empty_slot_i) continue;
+      if (b->slots[s].key == key) { dup_now = true; break; }
+    }
+    bool still_empty = (b->slots[empty_slot_i].key == kEmptyKey);
+    DECOMP_DECL(__dt2);
+    if (dup_now) {
+      lock_table_.unlock_slot(idx, empty_slot_i);
+      return -2;
+    }
+    if (!still_empty) {
+      // Another insert took this slot; release and retry with another empty.
+      lock_table_.unlock_slot(idx, empty_slot_i);
+      continue;
+    }
+
+    CxlKvSlot *empty = &b->slots[empty_slot_i];
+    uint64_t log_idx = 0;
+    bool logged = false;
+    if (oplog_) {
+      log_idx = oplog_->begin(OpLogKind::Insert, key, idx, (uint64_t)empty_slot_i,
+                              /*old_value=*/0, /*new_value=*/value);
+      logged = true;
+    }
+
+    publish_slot(empty, key, value);
+    DECOMP_DECL(__dt3);
+    bump_epoch(lock_table_.entry(idx));
+    DECOMP_DECL(__dt4);
+
+    if (logged) oplog_->commit(log_idx);
+    if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
+    lock_table_.unlock_slot(idx, empty_slot_i);
+    DECOMP_DECL(__dt5);
+    DECOMP_REC(kDecompStageLock,    __dt0, __dt1);
+    DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+    DECOMP_REC(kDecompStagePublish, __dt2, __dt3);
+    DECOMP_REC(kDecompStageEpoch,   __dt3, __dt4);
+    DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+    DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
+    return 0;
+  }
+  return -1;  // too many retries — treat as full/contested
+}
+
+int CxlKvStoreC::update(uint64_t key, uint64_t value) {
+  if (key == kEmptyKey) return -1;
+  uint32_t idx = bucket_idx(key);
+  CxlKvBucket *b = &buckets_[idx];
+
+  for (int attempt = 0; attempt < kInsertRetries; attempt++) {
+    DECOMP_DECL(__dt0);
+    // Unlocked scan to find slot holding our key.
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      flush_line(&b->slots[s].key);
+    }
+    full_fence();
+    int target = -1;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      if (b->slots[s].key == key) { target = s; break; }
+    }
+    if (target < 0) return -1;  // not found
+
+    lock_table_.lock_slot(idx, target);
+    DECOMP_DECL(__dt1);
+
+    // Re-verify key under slot lock.
+    flush_line(&b->slots[target].key);
+    full_fence();
+    if (b->slots[target].key != key) {
+      lock_table_.unlock_slot(idx, target);
+      continue;  // racing delete+insert moved the key; try again
+    }
+    DECOMP_DECL(__dt2);
+
+    uint64_t log_idx = 0;
+    bool logged = false;
+    if (oplog_) {
+      log_idx = oplog_->begin(OpLogKind::Update, key, idx, (uint64_t)target,
+                              b->slots[target].value, value);
+      logged = true;
+    }
+    b->slots[target].value = value;
+    flush_line(&b->slots[target].value);
+    store_fence();
+    DECOMP_DECL(__dt3);
+    bump_epoch(lock_table_.entry(idx));
+    DECOMP_DECL(__dt4);
+    if (logged) oplog_->commit(log_idx);
+    if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
+    lock_table_.unlock_slot(idx, target);
+    DECOMP_DECL(__dt5);
+    DECOMP_REC(kDecompStageLock,    __dt0, __dt1);
+    DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+    DECOMP_REC(kDecompStagePublish, __dt2, __dt3);
+    DECOMP_REC(kDecompStageEpoch,   __dt3, __dt4);
+    DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+    DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
+    return 0;
+  }
+  return -1;
+}
+
+int CxlKvStoreC::remove(uint64_t key) {
+  if (key == kEmptyKey) return -1;
+  uint32_t idx = bucket_idx(key);
+  CxlKvBucket *b = &buckets_[idx];
+
+  for (int attempt = 0; attempt < kInsertRetries; attempt++) {
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      flush_line(&b->slots[s].key);
+    }
+    full_fence();
+    int target = -1;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      if (b->slots[s].key == key) { target = s; break; }
+    }
+    if (target < 0) return -1;
+
+    lock_table_.lock_slot(idx, target);
+    flush_line(&b->slots[target].key);
+    full_fence();
+    if (b->slots[target].key != key) {
+      lock_table_.unlock_slot(idx, target);
+      continue;
+    }
+
+    uint64_t log_idx = 0;
+    bool logged = false;
+    if (oplog_) {
+      log_idx = oplog_->begin(OpLogKind::Delete, key, idx, (uint64_t)target,
+                              b->slots[target].value, 0);
+      logged = true;
+    }
+    b->slots[target].key = kEmptyKey;
+    flush_line(&b->slots[target].key);
+    store_fence();
+    bump_epoch(lock_table_.entry(idx));
+    if (logged) oplog_->commit(log_idx);
+    if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
+    lock_table_.unlock_slot(idx, target);
+    return 0;
+  }
+  return -1;
+}
+
+#else  // FUSEE_PER_SLOT_LOCK
+
+int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
+  if (key == kEmptyKey) return -1;
+  uint32_t idx = bucket_idx(key);
+  DECOMP_DECL(__dt0);
   lock_table_.lock(idx, host_id_, num_hosts_);
+  DECOMP_DECL(__dt1);
 
   CxlKvBucket *b = &buckets_[idx];
   CxlKvSlot *empty = nullptr;
@@ -112,6 +342,7 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
     lock_table_.unlock(idx, host_id_);
     return -1; // full
   }
+  DECOMP_DECL(__dt2);
 
   uint64_t log_idx = 0;
   bool logged = false;
@@ -122,18 +353,29 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
   }
 
   publish_slot(empty, key, value);
+  DECOMP_DECL(__dt3);
   bump_epoch(lock_table_.entry(idx));
+  DECOMP_DECL(__dt4);
 
   if (logged) oplog_->commit(log_idx);
   if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
   lock_table_.unlock(idx, host_id_);
+  DECOMP_DECL(__dt5);
+  DECOMP_REC(kDecompStageLock,    __dt0, __dt1);
+  DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+  DECOMP_REC(kDecompStagePublish, __dt2, __dt3);
+  DECOMP_REC(kDecompStageEpoch,   __dt3, __dt4);
+  DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+  DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
   return 0;
 }
 
 int CxlKvStoreC::update(uint64_t key, uint64_t value) {
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
+  DECOMP_DECL(__dt0);
   lock_table_.lock(idx, host_id_, num_hosts_);
+  DECOMP_DECL(__dt1);
 
   CxlKvBucket *b = &buckets_[idx];
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -142,6 +384,7 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
   full_fence();
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (b->slots[s].key == key) {
+      DECOMP_DECL(__dt2);
       uint64_t log_idx = 0;
       bool logged = false;
       if (oplog_) {
@@ -152,10 +395,19 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
       b->slots[s].value = value;
       flush_line(&b->slots[s].value);
       store_fence();
+      DECOMP_DECL(__dt3);
       bump_epoch(lock_table_.entry(idx));
+      DECOMP_DECL(__dt4);
       if (logged) oplog_->commit(log_idx);
       if (cache_enabled_) cache_epoch_[idx] = std::numeric_limits<uint64_t>::max();
       lock_table_.unlock(idx, host_id_);
+      DECOMP_DECL(__dt5);
+      DECOMP_REC(kDecompStageLock,    __dt0, __dt1);
+      DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+      DECOMP_REC(kDecompStagePublish, __dt2, __dt3);
+      DECOMP_REC(kDecompStageEpoch,   __dt3, __dt4);
+      DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+      DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
       return 0;
     }
   }
@@ -196,10 +448,12 @@ int CxlKvStoreC::remove(uint64_t key) {
   return -1;
 }
 
+#endif  // FUSEE_PER_SLOT_LOCK
+
 int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
-  BucketLockEntry *le = const_cast<BucketLockTable &>(lock_table_).entry(idx);
+  auto *le = const_cast<CBucketLockTable &>(lock_table_).entry(idx);
   CxlKvBucket *b = &buckets_[idx];
 
   // Fast path: DRAM cache hit. Read the CXL epoch once; if it matches the

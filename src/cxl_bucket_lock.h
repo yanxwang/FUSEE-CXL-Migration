@@ -40,6 +40,21 @@ struct BucketLockEntry {
   cacheline_u64  staging_scratch;
 };
 
+// Phase-2b: per-slot lock variant. The same per-bucket write_epoch is kept
+// for reader seqlock compatibility, but the writer side serializes only
+// against other writers that target the SAME slot. The slot mutex type is
+// the same `bucket_mutex_t` typedef used for the per-bucket case (LFM by
+// default, ticket_mutex with -DFUSEE_USE_TICKET_LOCK=ON), so the only
+// difference between the per-bucket and per-slot paths is granularity,
+// not lock algorithm — useful for apples-to-apples comparison.
+constexpr int kSlotMutexesPerBucket = 7;
+
+struct SlotLockEntry {
+  bucket_mutex_t slot_mutexes[kSlotMutexesPerBucket];
+  cacheline_u64  write_epoch;
+  cacheline_u64  staging_scratch;
+};
+
 // Thin view over a contiguous array of BucketLockEntry planted in a CXL
 // region. The table does not own the underlying memory -- callers pass in a
 // mmap'd base (typically a CXLRegion produced by cxl_mm).
@@ -67,6 +82,31 @@ class BucketLockTable {
 
  private:
   BucketLockEntry *entries_ = nullptr;
+  uint32_t num_buckets_ = 0;
+};
+
+// Phase-2b: per-slot lock table. Used by protocol C write paths when
+// -DFUSEE_PER_SLOT_LOCK=ON. Supplies a dedicated ticket_mutex_t per
+// (bucket, slot) pair plus a per-bucket write_epoch for reader seqlock
+// compatibility. Readers still only need entry(idx)->write_epoch.
+class SlotLockTable {
+ public:
+  SlotLockTable() = default;
+
+  void attach(void *base, uint32_t num_buckets, bool init_mutexes);
+  static size_t bytes_for(uint32_t num_buckets);
+
+  // Acquire / release one slot's mutex. host_id/num_hosts unused (ticket
+  // locks are self-ordering), kept for API parity with BucketLockTable.
+  void lock_slot(uint32_t bucket_idx, int slot_idx);
+  void unlock_slot(uint32_t bucket_idx, int slot_idx);
+
+  SlotLockEntry *entry(uint32_t bucket_idx) const;
+  uint32_t num_buckets() const { return num_buckets_; }
+  bool     is_valid() const { return entries_ != nullptr; }
+
+ private:
+  SlotLockEntry *entries_ = nullptr;
   uint32_t num_buckets_ = 0;
 };
 
