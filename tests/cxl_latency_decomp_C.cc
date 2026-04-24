@@ -434,6 +434,10 @@ int main(int argc, char **argv) {
     "stage_epoch_avg=%lu stage_epoch_p50=%lu stage_epoch_p99=%lu "
     "stage_unlock_avg=%lu stage_unlock_p50=%lu stage_unlock_p99=%lu "
     "stage_total_avg=%lu stage_total_p50=%lu stage_total_p99=%lu "
+    "lfm_localstore_avg=%lu lfm_localstore_p50=%lu lfm_localstore_p99=%lu "
+    "lfm_peerscan_avg=%lu lfm_peerscan_p50=%lu lfm_peerscan_p99=%lu "
+    "lfm_contwait_avg=%lu lfm_contwait_p50=%lu lfm_contwait_p99=%lu "
+    "lfm_entercs_avg=%lu lfm_entercs_p50=%lu lfm_entercs_p99=%lu "
     "trans_wall_max=%.3fs trans_agg_thpt=%.0f\n",
     num_clients, num_hosts, cache_on ? 1 : 0, agg_writes,
     agg_avg[fusee::kDecompStageLock],    agg_p50[fusee::kDecompStageLock],    agg_p99[fusee::kDecompStageLock],
@@ -442,6 +446,10 @@ int main(int argc, char **argv) {
     agg_avg[fusee::kDecompStageEpoch],   agg_p50[fusee::kDecompStageEpoch],   agg_p99[fusee::kDecompStageEpoch],
     agg_avg[fusee::kDecompStageUnlock],  agg_p50[fusee::kDecompStageUnlock],  agg_p99[fusee::kDecompStageUnlock],
     agg_avg[fusee::kDecompStageTotal],   agg_p50[fusee::kDecompStageTotal],   agg_p99[fusee::kDecompStageTotal],
+    agg_avg[fusee::kDecompLfmLocalStore], agg_p50[fusee::kDecompLfmLocalStore], agg_p99[fusee::kDecompLfmLocalStore],
+    agg_avg[fusee::kDecompLfmPeerScan],   agg_p50[fusee::kDecompLfmPeerScan],   agg_p99[fusee::kDecompLfmPeerScan],
+    agg_avg[fusee::kDecompLfmContWait],   agg_p50[fusee::kDecompLfmContWait],   agg_p99[fusee::kDecompLfmContWait],
+    agg_avg[fusee::kDecompLfmEnterCS],    agg_p50[fusee::kDecompLfmEnterCS],    agg_p99[fusee::kDecompLfmEnterCS],
     wall_max_s, agg_thpt);
   (void)kConsensusOpt;
 

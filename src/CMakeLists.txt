@@ -81,7 +81,18 @@ target_link_libraries(fusee_cxl PUBLIC pthread)
 # sources, compiled with FUSEE_LATENCY_DECOMP=1 so the insert/update stage
 # timestamps in cxl_kv_ops_C.cc are live. Production binaries link
 # fusee_cxl (no instrumentation → zero runtime cost).
-add_library(fusee_cxl_decomp STATIC ${source_fusee_cxl})
+# Phase-1 anatomy: if FUSEE_LFM_INSTRUMENT=ON, also swap the upstream
+# lfm_lock.c for src/lfm_lock_fusee_instrumented.c which publishes
+# 4 per-LFM-stage samples into the DecompProbe on every acquire.
+option(FUSEE_LFM_INSTRUMENT "Link instrumented LFM into fusee_cxl_decomp" OFF)
+set(source_fusee_cxl_decomp ${source_fusee_cxl})
+if(FUSEE_LFM_INSTRUMENT)
+    list(REMOVE_ITEM source_fusee_cxl_decomp
+        "${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c")
+    list(APPEND source_fusee_cxl_decomp
+        "${CMAKE_CURRENT_SOURCE_DIR}/lfm_lock_fusee_instrumented.c")
+endif()
+add_library(fusee_cxl_decomp STATIC ${source_fusee_cxl_decomp})
 target_include_directories(fusee_cxl_decomp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CXL_SHM_PROFILING_DIR})
@@ -95,6 +106,9 @@ if(FUSEE_PER_SLOT_LOCK)
 endif()
 if(FUSEE_BATCH_MERGE_SAME_KEY)
     target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_BATCH_MERGE_SAME_KEY=1)
+endif()
+if(FUSEE_LFM_INSTRUMENT)
+    target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_LFM_INSTRUMENT=1)
 endif()
 if(DEFINED FUSEE_RING_ENTRIES)
     target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_RING_ENTRIES=${FUSEE_RING_ENTRIES})

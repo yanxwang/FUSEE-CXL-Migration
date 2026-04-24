@@ -27,7 +27,13 @@ enum DecompStage {
   kDecompStageEpoch    = 3,  // t4 - t3 : bump_epoch
   kDecompStageUnlock   = 4,  // t5 - t4 : unlock (incl. cache invalidate before it)
   kDecompStageTotal    = 5,  // t5 - t0 : end-to-end op
-  kDecompStageCount    = 6,
+  // Phase-1 LFM anatomy (filled only when the instrumented LFM is linked,
+  // see src/lfm_lock_fusee_instrumented.c and CMake FUSEE_LFM_INSTRUMENT).
+  kDecompLfmLocalStore = 6,  // b[id]=1 + fence done
+  kDecompLfmPeerScan   = 7,  // peer-scan over b[j] j!=id done (fast path)
+  kDecompLfmContWait   = 8,  // contention wait (retry loop / b-drain)
+  kDecompLfmEnterCS    = 9,  // x/y negotiation done, entering CS
+  kDecompStageCount    = 10,
 };
 
 struct DecompProbe {
@@ -48,5 +54,8 @@ inline void decomp_record(DecompStage, uint64_t) {}
 #endif
 
 } // namespace fusee
+
+// For the C-linkage decomp_record_lfm_stage() entry used by the
+// instrumented LFM source (plain C), see cxl_latency_decomp_probe_c.h.
 
 #endif // FUSEE_CXL_LATENCY_DECOMP_PROBE_H_

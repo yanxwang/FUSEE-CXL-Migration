@@ -1,5 +1,11 @@
 #include "cxl_latency_decomp_probe.h"
 
+#if defined(FUSEE_LATENCY_DECOMP) && FUSEE_LATENCY_DECOMP
+extern "C" void decomp_record_lfm_stage(int stage_id, uint64_t ns) {
+  fusee::decomp_record(static_cast<fusee::DecompStage>(stage_id), ns);
+}
+#endif
+
 namespace fusee {
 
 DecompProbe *decomp_probe() {
