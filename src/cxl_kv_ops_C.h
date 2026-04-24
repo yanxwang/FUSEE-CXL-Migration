@@ -9,12 +9,15 @@
 // Phase 3 scope: fixed u64/u64 KV, single subtable (no directory splits).
 // Extended layouts land in later phases.
 
+#include "cxl_batch_ring.h"
 #include "cxl_bucket_lock.h"
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
 
+#include <atomic>
 #include <cstdint>
 #include <stdint.h>
+#include <thread>
 #include <vector>
 
 namespace fusee {
@@ -47,8 +50,10 @@ class CxlKvStoreC {
 
   uint32_t num_buckets() const { return num_buckets_; }
 
-  // API parity with CxlKvStoreA / CxlKvStoreB. C has no replicator thread.
-  void     stop() {}
+  // API parity with CxlKvStoreA / CxlKvStoreB. C has no replicator thread
+  // on the write path, but the Phase-3 batching flusher lives here: stop()
+  // signals it, drains residual ring, and joins.
+  void     stop() { stop_flusher(); }
   uint64_t replicated_ops() const { return 0; }
 
  private:
@@ -94,6 +99,42 @@ class CxlKvStoreC {
   // of entries acted on (0 if no log is attached). Idempotent: re-applying
   // an already-applied op is treated as success.
   uint64_t recover_from_oplog();
+
+ public:
+  // -------- Phase-3 UPDATE micro-batching (opt-in, off by default) --------
+  //
+  // Attach a host-local MAP_SHARED|MAP_ANONYMOUS ring for this store. Ring
+  // body is NOT on CXL (peer host never reads it). `init_region` true on
+  // exactly one process per host (the primary client before fork); others
+  // spin until primary publishes init_done.
+  //
+  // After enable_batching(), UPDATE fast-path routes through the ring:
+  // atomic fetch_add cursor -> write entry -> unlock (no slot lock taken).
+  // Flusher thread (started by primary via start_flusher()) drains the ring
+  // in cursor order into materialised slots + one bump_epoch per drain.
+  int enable_batching(void *shm_base, std::size_t shm_bytes, uint32_t K,
+                      uint32_t T_flush_us, bool init_region);
+
+  // Primary-only: start / stop the flusher thread. On stop(), the
+  // flusher drains any residual ring entries before joining.
+  void start_flusher();
+  void stop_flusher();
+
+  bool batching_enabled() const { return batch_enabled_; }
+  MicroBatchRing *batch_ring() { return &batch_ring_; }
+  uint64_t ring_full_waits() const { return ring_full_waits_; }
+
+ private:
+  void flusher_loop();
+  void drain_bucket(uint32_t bucket_idx);
+
+  bool batch_enabled_ = false;
+  MicroBatchRing batch_ring_;
+  std::thread flusher_thread_;
+  std::atomic<bool> flusher_started_{false};
+  // Per-client ring-full wait counter (thread-local-ish, accumulated across
+  // calls in this process).
+  uint64_t ring_full_waits_ = 0;
 };
 
 } // namespace fusee

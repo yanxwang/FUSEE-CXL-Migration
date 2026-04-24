@@ -258,6 +258,33 @@ int main(int argc, char **argv) {
     store_fence();
   }
 
+  // Phase-3 micro-batching: per-host DRAM ring (MAP_SHARED|MAP_ANONYMOUS
+  // pre-fork so all children inherit the address). Active only when
+  // FUSEE_BATCH_K > 0 and we are on protocol C.
+#if CONSENSUS_OPT == FUSEE_OPT_C
+  void *batch_shm = nullptr;
+  size_t batch_shm_bytes = 0;
+  uint32_t batch_K = 0;
+  uint32_t batch_T_us = 100;  // default 100 µs per plan §3.7 starting point
+  {
+    const char *bk_env = getenv("FUSEE_BATCH_K");
+    if (bk_env && bk_env[0]) batch_K = (uint32_t)atoi(bk_env);
+    const char *bt_env = getenv("FUSEE_BATCH_T_US");
+    if (bt_env && bt_env[0]) batch_T_us = (uint32_t)atoi(bt_env);
+    if (batch_K > 0) {
+      batch_shm_bytes = fusee::MicroBatchRing::bytes_for(num_buckets, batch_K);
+      void *mm = mmap(nullptr, batch_shm_bytes, PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      if (mm == MAP_FAILED) {
+        fprintf(stderr, "mmap MicroBatchRing (%zu bytes, K=%u) failed: %s\n",
+                batch_shm_bytes, batch_K, strerror(errno));
+        return 1;
+      }
+      batch_shm = mm;
+    }
+  }
+#endif
+
   // Same-host DRAM bypass (2a): allocate a MAP_SHARED anonymous region
   // sized for the per-host DramInvalMatrix BEFORE fork so all children
   // share the same virtual address. Toggle off via FUSEE_SAME_HOST_BYPASS=0.
@@ -364,6 +391,23 @@ int main(int argc, char **argv) {
   }
   bool cache_on = getenv("FUSEE_CACHE") && getenv("FUSEE_CACHE")[0] == '1';
   if (cache_on) store.enable_dram_cache(true);
+
+#if CONSENSUS_OPT == FUSEE_OPT_C
+  // Enable batching on every client (writers all use the same ring); start
+  // the flusher on the host's primary client only. init_region=true on the
+  // local host's primary, false elsewhere.
+  if (batch_shm && batch_K > 0) {
+    bool is_host_primary_client = (client_id == 0);
+    if (store.enable_batching(batch_shm, batch_shm_bytes, batch_K, batch_T_us,
+                              /*init_region=*/is_host_primary_client) != 0) {
+      fprintf(stderr, "[h%d c%d] enable_batching failed\n", host_id, client_id);
+      return 1;
+    }
+    if (is_host_primary_client) {
+      store.start_flusher();
+    }
+  }
+#endif
 
   // Same-host bypass wire-up (2a). Only meaningful for A/B (C has no
   // replicator, never pushes to rings). The C attach silently ignores

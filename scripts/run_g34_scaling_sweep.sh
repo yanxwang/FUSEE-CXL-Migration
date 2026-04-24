@@ -66,6 +66,8 @@ for cache in $CACHE_MODES; do
         [ -n "${FUSEE_A_GROUPS:-}" ] && cenv+="FUSEE_A_GROUPS=$FUSEE_A_GROUPS "
         [ -n "${FUSEE_B_BATCH_K:-}" ] && cenv+="FUSEE_B_BATCH_K=$FUSEE_B_BATCH_K "
         [ -n "${FUSEE_B_BATCH_TIMEOUT_US:-}" ] && cenv+="FUSEE_B_BATCH_TIMEOUT_US=$FUSEE_B_BATCH_TIMEOUT_US "
+        [ -n "${FUSEE_BATCH_K:-}" ] && cenv+="FUSEE_BATCH_K=$FUSEE_BATCH_K "
+        [ -n "${FUSEE_BATCH_T_US:-}" ] && cenv+="FUSEE_BATCH_T_US=$FUSEE_BATCH_T_US "
         [ -n "${FUSEE_SAME_HOST_BYPASS:-}" ] && cenv+="FUSEE_SAME_HOST_BYPASS=$FUSEE_SAME_HOST_BYPASS "
         bin="~/FUSEE_CXL/build-cxl/tests/cxl_ycsb_runner_${opt}"
         load="~/FUSEE_CXL/setup_workloads/${wl}.spec_load"

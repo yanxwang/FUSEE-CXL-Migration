@@ -40,6 +40,7 @@ set(source_fusee_cxl
     cxl_kv_ops_A.cc
     cxl_kv_ops_B.cc
     cxl_oplog.cc
+    cxl_batch_ring.cc
     cxl_latency_decomp_probe.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ticket_lock_fusee_patched.c)
@@ -64,6 +65,11 @@ option(FUSEE_PER_SLOT_LOCK "Use per-slot ticket lock for protocol C writes" OFF)
 if(FUSEE_PER_SLOT_LOCK)
     target_compile_definitions(fusee_cxl PUBLIC FUSEE_PER_SLOT_LOCK=1)
 endif()
+# Phase-3 micro-batching: drain merges same-slot writes to last-value-wins.
+option(FUSEE_BATCH_MERGE_SAME_KEY "Coalesce same-slot writes during flusher drain" ON)
+if(FUSEE_BATCH_MERGE_SAME_KEY)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_BATCH_MERGE_SAME_KEY=1)
+endif()
 # 2f: ring-depth sweep knob. -DFUSEE_RING_ENTRIES=N at CMake config time
 # sizes the per-(src,dst) PendingRing. Default 256 (see cxl_pending_ring.h).
 if(DEFINED FUSEE_RING_ENTRIES)
@@ -86,6 +92,9 @@ if(FUSEE_USE_TICKET_LOCK)
 endif()
 if(FUSEE_PER_SLOT_LOCK)
     target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_PER_SLOT_LOCK=1)
+endif()
+if(FUSEE_BATCH_MERGE_SAME_KEY)
+    target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_BATCH_MERGE_SAME_KEY=1)
 endif()
 if(DEFINED FUSEE_RING_ENTRIES)
     target_compile_definitions(fusee_cxl_decomp PUBLIC FUSEE_RING_ENTRIES=${FUSEE_RING_ENTRIES})

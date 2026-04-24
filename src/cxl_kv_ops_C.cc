@@ -1,8 +1,10 @@
 #include "cxl_kv_ops_C.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <limits>
+#include <thread>
 
 extern "C" {
 #include "common.h"  // cacheline_u64, CACHELINE_LOAD/STORE, flush_line, fences
@@ -257,6 +259,42 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
   CxlKvBucket *b = &buckets_[idx];
+
+  // Phase-3 micro-batching fast path: when batching is enabled, UPDATE
+  // deposits into the per-host DRAM ring with no slot-lock and no per-op
+  // CXL epoch bump. Flusher amortises one bump over K writes.
+  if (batch_enabled_) {
+    DECOMP_DECL(__dt0);
+    flush_line(&b->slots[0]);
+    flush_line(&b->slots[4]);
+    full_fence();
+    int target = -1;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      if (b->slots[s].key == key) { target = s; break; }
+    }
+    if (target < 0) return -1;
+    DECOMP_DECL(__dt1);
+    batch_ring_.append(idx, static_cast<uint16_t>(target), value,
+                       &ring_full_waits_);
+    // Read-your-writes: refresh local DRAM cache so same-process reads
+    // observe the write before the flusher materialises it onto CXL.
+    if (cache_enabled_) {
+      cache_buckets_[idx].slots[target].value = value;
+      // Advance cache_epoch_ optimistically; on next peer-host write
+      // the CXL epoch will overtake ours and we'll refetch.
+    }
+    DECOMP_DECL(__dt2);
+    DECOMP_DECL(__dt3);
+    DECOMP_DECL(__dt4);
+    DECOMP_DECL(__dt5);
+    DECOMP_REC(kDecompStageLock,    __dt0, __dt0);  // no lock
+    DECOMP_REC(kDecompStageScan,    __dt0, __dt1);
+    DECOMP_REC(kDecompStagePublish, __dt1, __dt2);
+    DECOMP_REC(kDecompStageEpoch,   __dt2, __dt2);  // no bump (amortised)
+    DECOMP_REC(kDecompStageUnlock,  __dt2, __dt2);
+    DECOMP_REC(kDecompStageTotal,   __dt0, __dt2);
+    return 0;
+  }
 
   for (int attempt = 0; attempt < kInsertRetries; attempt++) {
     DECOMP_DECL(__dt0);
@@ -627,6 +665,177 @@ void CxlKvStoreC::enable_dram_cache(bool on) {
     cache_buckets_.clear();
     cache_epoch_.clear();
   }
+}
+
+// ---------- Phase-3 micro-batching ----------
+
+int CxlKvStoreC::enable_batching(void *shm_base, std::size_t shm_bytes,
+                                 uint32_t K, uint32_t T_flush_us,
+                                 bool init_region) {
+  if (batch_enabled_) return -1;
+  if (batch_ring_.attach(shm_base, shm_bytes, num_buckets_, K, T_flush_us,
+                         init_region) != 0) {
+    return -1;
+  }
+  batch_enabled_ = true;
+  return 0;
+}
+
+void CxlKvStoreC::drain_bucket(uint32_t idx) {
+  BucketRingCursors *c = &batch_ring_.cursors()[idx];
+  uint64_t append_raw = c->append_cursor.load(std::memory_order_acquire);
+  uint64_t flush_cur  = __atomic_load_n(&c->flush_cursor, __ATOMIC_ACQUIRE);
+  if (append_raw == flush_cur) return;
+
+  const uint32_t K = batch_ring_.K();
+  // Cap drain window at flush_cur + K: any writer that already claimed a
+  // pos >= flush_cur + K is spin-waiting for flush_cursor to advance
+  // BEFORE writing its entry. If the flusher tries to spin on that entry's
+  // ready flag it deadlocks against the writer. Positions in
+  // [flush_cur, flush_cur + K) have writers that either already published
+  // their flag or are in the short non-blocking critical section just
+  // before the RELEASE store — flusher's short spin on flags is bounded.
+  uint64_t append_end = append_raw;
+  if (append_end > flush_cur + K) append_end = flush_cur + K;
+  RingEntry *ring_base = batch_ring_.ring() +
+      static_cast<std::size_t>(idx) * K;
+
+#if defined(FUSEE_BATCH_MERGE_SAME_KEY) && FUSEE_BATCH_MERGE_SAME_KEY
+  // Collapse to last-writer-wins per slot. At most 7 slots in a bucket,
+  // so a tiny fixed-size array beats a hashmap.
+  int64_t latest_pos[kCxlKvSlotsPerBucket];
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) latest_pos[s] = -1;
+  uint64_t p = flush_cur;
+  const uint64_t end = append_end;
+  while (p < end) {
+    RingEntry *e = &ring_base[p % K];
+    // Wait for the ready flag to be published by the writer.
+    while (__atomic_load_n(&e->flags, __ATOMIC_ACQUIRE) == 0) {
+      __builtin_ia32_pause();
+    }
+    if (e->slot_idx < kCxlKvSlotsPerBucket) {
+      latest_pos[e->slot_idx] = static_cast<int64_t>(p);
+    }
+    p++;
+  }
+  // Apply each slot's final value.
+  CxlKvBucket *bucket = &buckets_[idx];
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (latest_pos[s] < 0) continue;
+    RingEntry *e = &ring_base[latest_pos[s] % K];
+    bucket->slots[s].value = e->new_value;
+  }
+#else
+  // No merge: apply in cursor order.
+  CxlKvBucket *bucket = &buckets_[idx];
+  uint64_t p = flush_cur;
+  const uint64_t end = append_end;
+  while (p < end) {
+    RingEntry *e = &ring_base[p % K];
+    while (__atomic_load_n(&e->flags, __ATOMIC_ACQUIRE) == 0) {
+      __builtin_ia32_pause();
+    }
+    if (e->slot_idx < kCxlKvSlotsPerBucket) {
+      bucket->slots[e->slot_idx].value = e->new_value;
+    }
+    p++;
+  }
+#endif
+
+  // Single-bucket publish: 2 flushes cover both cachelines.
+  flush_line(&bucket->slots[0]);
+  flush_line(&bucket->slots[4]);
+  store_fence();
+
+  // Single epoch bump amortises all K entries (or merged subset).
+  uint64_t new_epoch = bump_epoch(lock_table_.entry(idx));
+  (void)new_epoch;
+
+  // Clear ready flags for the range we just drained so the next wrap-around
+  // can tell "not yet written" from stale.
+  p = flush_cur;
+  while (p < end) {
+    RingEntry *e = &ring_base[p % K];
+    __atomic_store_n(&e->flags, static_cast<uint16_t>(0), __ATOMIC_RELEASE);
+    p++;
+  }
+
+  // Advance flush_cursor last — after this, producers that were spinning
+  // on ring-full see the window open.
+  __atomic_store_n(&c->flush_cursor, append_end, __ATOMIC_RELEASE);
+  // Release the `queued` flag so a subsequent writer's first append will
+  // re-enqueue this bucket. Must come AFTER flush_cursor advance so any
+  // writer that already CAS-won after us sees our new flush_cursor.
+  c->queued.store(0, std::memory_order_release);
+}
+
+void CxlKvStoreC::flusher_loop() {
+  BatchRingHeader *hdr = batch_ring_.header();
+  const uint32_t T_us = batch_ring_.T_flush_us();
+  auto get_us = []() -> uint64_t {
+    timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL
+         + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
+  };
+  // Full-table scan is O(num_buckets), which is 65 k — ~6 ms per scan.
+  // We do NOT scan every T_us (that ate 60-100 % of the flusher's
+  // runtime in early measurements). Instead we scan only when the
+  // dirty queue has been empty for at least `kIdleScanUs` — under
+  // steady workload the queue is rarely empty, so the scan essentially
+  // never fires; at shutdown the dedicated drain in stop_flusher covers
+  // any residual entries.
+  const uint64_t kIdleScanUs = 5000;  // 5 ms idle → scan
+  uint64_t last_activity_us = get_us();
+  while (!hdr->stop.load(std::memory_order_acquire)) {
+    bool did_any = false;
+    for (int batch = 0; batch < 1024; batch++) {
+      uint64_t tail = hdr->dq_tail.load(std::memory_order_acquire);
+      uint64_t head = __atomic_load_n(&hdr->dq_head, __ATOMIC_ACQUIRE);
+      if (head >= tail) break;
+      uint32_t idx = __atomic_load_n(
+          &hdr->dq_slots[head % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
+      __atomic_store_n(&hdr->dq_head, head + 1, __ATOMIC_RELEASE);
+      drain_bucket(idx);
+      did_any = true;
+    }
+    if (did_any) {
+      last_activity_us = get_us();
+      continue;
+    }
+    uint64_t now = get_us();
+    if (now - last_activity_us >= kIdleScanUs) {
+      // Long-idle fallback scan: catches buckets whose writers' dirty-queue
+      // push was dropped due to queue overflow.
+      for (uint32_t idx = 0; idx < batch_ring_.num_buckets(); idx++) {
+        if (batch_ring_.has_pending(idx)) drain_bucket(idx);
+      }
+      last_activity_us = now;
+      continue;
+    }
+    // Short nap so we do not pin the core.
+    (void)T_us;  // kept for future adaptive sleep tuning
+    timespec ts = {0, 10 * 1000};  // 10 us
+    nanosleep(&ts, nullptr);
+  }
+  // Final drain before exiting.
+  for (uint32_t idx = 0; idx < batch_ring_.num_buckets(); idx++) {
+    if (batch_ring_.has_pending(idx)) drain_bucket(idx);
+  }
+}
+
+void CxlKvStoreC::start_flusher() {
+  if (!batch_enabled_) return;
+  bool expected = false;
+  if (!flusher_started_.compare_exchange_strong(expected, true)) return;
+  flusher_thread_ = std::thread([this]() { this->flusher_loop(); });
+}
+
+void CxlKvStoreC::stop_flusher() {
+  if (!flusher_started_.load()) return;
+  BatchRingHeader *hdr = batch_ring_.header();
+  hdr->stop.store(true, std::memory_order_release);
+  if (flusher_thread_.joinable()) flusher_thread_.join();
+  flusher_started_.store(false);
 }
 
 } // namespace fusee
