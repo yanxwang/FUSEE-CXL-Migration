@@ -74,3 +74,45 @@ non-scaling-sweep micro-benchmarks.
 
 **YCSB-C is met. YCSB-A is ~20× away** on every protocol. This is
 the open work.
+
+## Updated distance to target (2026-04-24 iter-3 phase-3 sweep, protocol C only)
+
+After four iterations of C write-path work (per-slot LFM, atomic
+epoch-outside-crit-section, read-singleshot + flush-collapse +
+route-seq, and finally per-host DRAM ring UPDATE micro-batching):
+
+| workload | opt | best thpt (Mops/s) | at T | gap to 20 Mops/s |
+|---|---|---|---|---|
+| workloada | C | 17.05 | 64 | 1.17 × (85 % of bar)|
+| workloadb | C | **33.37** | 64 | **met** ✓ |
+| workloadc | C | 48.73 | 86 | **met** (regressed 12 % vs phase-2 55.12) |
+| workloadd | C | 33.92 | 64 | **met** (regressed 14 % vs phase-2 39.50) |
+| workloadf | C | **20.48** | 64 | **met** ✓ |
+
+See `docs/g34_scaling_ycsb_C_only_20260424_052400/iteration_note.md`
+for the micro-batching design and the remaining-gap analysis on
+workload A (single-flusher saturation at T > 64 — flusher sharding is
+the documented next step).
+
+## Protocol-C under micro-batching — relaxed LRC bound
+
+With `FUSEE_BATCH_K > 0` (runtime env) protocol C batches UPDATE
+writes into a per-host DRAM ring and amortises one cross-host
+`bump_epoch` over K batched UPDATEs. Peer-host readers only observe
+the materialised slot state + `write_epoch` — ring entries are
+invisible to the peer. Formal staleness bound for UPDATEs under
+batching:
+
+  `peer_visibility_lag ≤ T_flush_us + cxl_epoch_latency (~3 µs)`
+
+where `T_flush_us` is the configured flusher interval. INSERT and
+DELETE remain on the iter-2 per-op path and keep the original
+"readers see writes immediately after the completing UPDATE returns"
+guarantee. When `FUSEE_BATCH_K = 0` (default), the relaxed bound does
+not apply and all of INSERT/UPDATE/DELETE use the stricter per-op
+path.
+
+`FUSEE_BATCH_MERGE_SAME_KEY=ON` (default) further strengthens the
+peer bound to "the peer may miss any intermediate UPDATE on a key
+within a single batch; only the last write in each batch is
+guaranteed to become peer-visible."
