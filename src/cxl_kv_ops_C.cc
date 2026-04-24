@@ -146,9 +146,10 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
   for (int attempt = 0; attempt < kInsertRetries; attempt++) {
     DECOMP_DECL(__dt0);
     // Unlocked scan to find a candidate empty slot and dup key.
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      flush_line(&b->slots[s].key);
-    }
+    // Phase-2.6 flush-collapse: bucket is 128 B = 2 cachelines; one
+    // clflushopt per line covers all 7 slots' (key, value) pairs.
+    flush_line(&b->slots[0]);
+    flush_line(&b->slots[4]);
     full_fence();
     int empty_slot_i = -1;
     bool dup = false;
@@ -164,10 +165,10 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
     DECOMP_DECL(__dt1);
 
     // Under slot lock, re-verify. Must also scan other slots for dup since
-    // a racing insert could have landed in any of them.
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      flush_line(&b->slots[s].key);
-    }
+    // a racing insert could have landed in any of them. Phase-2.6
+    // flush-collapse: 2 clflushopts cover all 7 slots.
+    flush_line(&b->slots[0]);
+    flush_line(&b->slots[4]);
     full_fence();
     bool dup_now = false;
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -239,9 +240,9 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
   for (int attempt = 0; attempt < kInsertRetries; attempt++) {
     DECOMP_DECL(__dt0);
     // Unlocked scan to find slot holding our key.
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      flush_line(&b->slots[s].key);
-    }
+    // Phase-2.6 flush-collapse.
+    flush_line(&b->slots[0]);
+    flush_line(&b->slots[4]);
     full_fence();
     int target = -1;
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -300,9 +301,9 @@ int CxlKvStoreC::remove(uint64_t key) {
   CxlKvBucket *b = &buckets_[idx];
 
   for (int attempt = 0; attempt < kInsertRetries; attempt++) {
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      flush_line(&b->slots[s].key);
-    }
+    // Phase-2.6 flush-collapse.
+    flush_line(&b->slots[0]);
+    flush_line(&b->slots[4]);
     full_fence();
     int target = -1;
     for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -513,10 +514,9 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
 
   uint64_t captured = 0;
   bool found = false;
-  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-    flush_line(&b->slots[s].key);
-    flush_line(&b->slots[s].value);
-  }
+  // Phase-2.6 flush-collapse: 128 B bucket = 2 cachelines.
+  flush_line(&b->slots[0]);
+  flush_line(&b->slots[4]);
   full_fence();
   if (cache_enabled_) {
     cache_buckets_[idx] = *b;
