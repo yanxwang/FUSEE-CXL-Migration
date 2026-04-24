@@ -838,4 +838,73 @@ void CxlKvStoreC::stop_flusher() {
   flusher_started_.store(false);
 }
 
+// ---------- Iter-4 variadic-length API (block pool-backed) ----------
+//
+// Dual-path design (see docs/task_plan_20260424_variable_kv_size.md
+// §4.4): if `blockpool_` is null OR `value_len <= 8`, fall back to the
+// inline u64 fast path (zero overhead vs iter-3). Otherwise allocate a
+// pool block, write the bytes there, and publish the offset in the
+// slot's `value` field — the slot field semantically becomes a pool
+// offset (`blk_off`) but the on-disk bytes / layout / size are
+// unchanged.
+
+int CxlKvStoreC::insert(uint64_t key, const void *value, uint32_t value_len) {
+  if (!value || value_len == 0) return -1;
+  if (!blockpool_ || value_len <= sizeof(uint64_t)) {
+    // Inline fast path: pack the bytes into a u64 and route through
+    // the legacy insert(key, u64).
+    uint64_t v = 0;
+    std::memcpy(&v, value, value_len);
+    return insert(key, v);
+  }
+  if (value_len > blockpool_->block_size()) return -1;
+  uint64_t off = blockpool_->alloc();
+  if (off == 0) return -1;
+  blockpool_->write(off, value, value_len);
+  // Publish the offset as the slot's "value" field.
+  return insert(key, off);
+}
+
+int CxlKvStoreC::update(uint64_t key, const void *value, uint32_t value_len) {
+  if (!value || value_len == 0) return -1;
+  if (!blockpool_ || value_len <= sizeof(uint64_t)) {
+    uint64_t v = 0;
+    std::memcpy(&v, value, value_len);
+    return update(key, v);
+  }
+  if (value_len > blockpool_->block_size()) return -1;
+  uint64_t new_off = blockpool_->alloc();
+  if (new_off == 0) return -1;
+  blockpool_->write(new_off, value, value_len);
+  // Substitute new offset in the existing UPDATE path. The old slot's
+  // offset becomes garbage (lazy-free stub — see plan §8.4).
+  int rc = update(key, new_off);
+  // No need to read the old offset: free_lazy is a no-op stub for now;
+  // sweep workloads stay well within the 2 GiB pool / host. iter-5 GC
+  // will reclaim.
+  return rc;
+}
+
+int CxlKvStoreC::search(uint64_t key, void *out_buf, uint32_t out_cap,
+                        uint32_t *out_len) const {
+  if (!out_buf) return -1;
+  uint64_t v = 0;
+  int rc = search(key, &v);
+  if (rc != 0) return rc;
+  if (!blockpool_) {
+    // Inline fast path: bytes live in the slot value field directly.
+    uint32_t n = out_cap < sizeof(uint64_t) ? out_cap
+                                            : (uint32_t)sizeof(uint64_t);
+    std::memcpy(out_buf, &v, n);
+    if (out_len) *out_len = n;
+    return 0;
+  }
+  // Pool path: v is the offset.
+  uint32_t bs = blockpool_->block_size();
+  uint32_t n = out_cap < bs ? out_cap : bs;
+  blockpool_->read(v, out_buf, n);
+  if (out_len) *out_len = n;
+  return 0;
+}
+
 } // namespace fusee

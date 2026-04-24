@@ -12,6 +12,7 @@
 #include "cxl_batch_ring.h"
 #include "cxl_bucket_lock.h"
 #include "cxl_hashtable.h"
+#include "cxl_kv_blockpool.h"
 #include "cxl_oplog.h"
 
 #include <atomic>
@@ -48,6 +49,22 @@ class CxlKvStoreC {
   // 0 on found (writes *out), -1 on not found.
   int search(uint64_t key, uint64_t *out) const;
 
+  // Iter-4 variadic-length API. Active only when set_blockpool() has
+  // attached a non-null pool AND value_len > 8. value_len <= 8 always
+  // takes the inline-u64 fast path through the wrappers above (the
+  // pool, if attached, is left untouched in that case — see
+  // docs/task_plan_20260424_variable_kv_size.md §4.4 dual-path
+  // semantics).
+  int insert(uint64_t key, const void *value, uint32_t value_len);
+  int update(uint64_t key, const void *value, uint32_t value_len);
+  int search(uint64_t key, void *out_buf, uint32_t out_cap,
+             uint32_t *out_len) const;
+
+  // Optional iter-4 block pool for variable-length values. nullptr
+  // means inline-u64 only. The pool must outlive the store.
+  void set_blockpool(CxlKvBlockPool *bp) { blockpool_ = bp; }
+  CxlKvBlockPool *blockpool() const { return blockpool_; }
+
   uint32_t num_buckets() const { return num_buckets_; }
 
   // API parity with CxlKvStoreA / CxlKvStoreB. C has no replicator thread
@@ -71,6 +88,7 @@ class CxlKvStoreC {
 #endif
   CxlKvBucket    *buckets_ = nullptr;
   OpLog          *oplog_ = nullptr;  // optional; set via enable_oplog()
+  CxlKvBlockPool *blockpool_ = nullptr;  // optional; set via set_blockpool()
 
   // Per-host DRAM bucket cache. Readers check cached_epoch_ against the CXL
   // bucket's write_epoch; on match, slots are served from DRAM without

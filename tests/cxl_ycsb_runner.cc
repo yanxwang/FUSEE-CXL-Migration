@@ -32,6 +32,7 @@
 #include "cxl_kv_store.h"
 #include "cxl_mm.h"
 #include "cxl_hashtable.h"
+#include "cxl_kv_blockpool.h"
 #include "cxl_same_host_queue.h"
 
 #include <algorithm>
@@ -228,9 +229,39 @@ int main(int argc, char **argv) {
     fprintf(stderr, "no valid ops parsed\n"); return 1;
   }
 
+  // Iter-4: variable-length value support. FUSEE_VALUE_SIZE env (default 8)
+  // selects the per-op value byte length. Values <= 8 use the inline
+  // u64 fast path (same as iter-3). Values > 8 require a CXL block pool.
+  uint32_t kValueSize = 8;
+  {
+    const char *env = getenv("FUSEE_VALUE_SIZE");
+    if (env && env[0]) {
+      int v = atoi(env);
+      if (v > 0 && v <= 65536) kValueSize = (uint32_t)v;
+    }
+  }
+  const bool use_pool = (kValueSize > sizeof(uint64_t));
+
   // Region sizing.
   size_t store_bytes = CxlKvStore::bytes_for(num_buckets);
-  size_t needed_total = store_bytes + kYcsbStatsOffsetFromEnd;
+  // Pool sizing: 2× the larger of load_ops_v / trans_ops_v per host gives
+  // 2× safety vs the workload's peak live-block count (every UPDATE
+  // allocates a new block; lazy free is a stub so we sweep-style accumulate
+  // over the trans phase). num_blocks_per_host caps at 2 GiB / block_size.
+  size_t pool_bytes = 0;
+  uint32_t pool_blocks_per_host = 0;
+  if (use_pool) {
+    size_t est_ops = std::max(load_ops_v.size(), trans_ops_v.size());
+    size_t want_blocks = est_ops * 2;  // 2× safety
+    // Cap at 2 GiB per host segment.
+    size_t cap = (size_t)2 * 1024 * 1024 * 1024 / kValueSize;
+    if (want_blocks > cap) want_blocks = cap;
+    if (want_blocks < 64) want_blocks = 64;  // tiny floor
+    pool_blocks_per_host = (uint32_t)want_blocks;
+    pool_bytes = fusee::CxlKvBlockPool::bytes_for(
+        pool_blocks_per_host, kValueSize, num_hosts);
+  }
+  size_t needed_total = store_bytes + pool_bytes + kYcsbStatsOffsetFromEnd;
   size_t needed = ((needed_total + fusee::kCxlDevdaxAlign - 1) /
                    fusee::kCxlDevdaxAlign) * fusee::kCxlDevdaxAlign;
 
@@ -393,6 +424,24 @@ int main(int argc, char **argv) {
   if (cache_on) store.enable_dram_cache(true);
 
 #if CONSENSUS_OPT == FUSEE_OPT_C
+  // Iter-4: attach the variable-length block pool to protocol-C store.
+  // Pool lives in CXL after the bucket array. All hosts share the pool;
+  // each host writes into its own segment. init only on host-0 primary.
+  fusee::CxlKvBlockPool blockpool;
+  if (use_pool) {
+    void *pool_base = reinterpret_cast<char *>(r.base) + store_bytes;
+    bool init_pool = is_primary_client;
+    if (blockpool.attach(pool_base, pool_bytes, pool_blocks_per_host,
+                         kValueSize, host_id, num_hosts, init_pool) != 0) {
+      fprintf(stderr, "[h%d c%d] blockpool attach failed (need %zu B)\n",
+              host_id, client_id, pool_bytes);
+      return 1;
+    }
+    store.set_blockpool(&blockpool);
+  }
+#endif
+
+#if CONSENSUS_OPT == FUSEE_OPT_C
   // Enable batching on every client (writers all use the same ring); start
   // the flusher on the host's primary client only. init_region=true on the
   // local host's primary, false elsewhere.
@@ -420,18 +469,61 @@ int main(int argc, char **argv) {
   (void)dram_mat;
 #endif
 
+  // Per-client value buffer. Reuses for every op; deterministic from key
+  // so reads can verify (we don't actually verify here, but the
+  // bytes-on-CXL footprint matches the workload's UPDATE traffic).
+  std::vector<uint8_t> v_buf(kValueSize > 8 ? kValueSize : 8, 0);
+  std::vector<uint8_t> r_buf(kValueSize > 8 ? kValueSize : 8, 0);
+
   // Helper: run one op, return latency in ns.
   auto do_op = [&](const Op &o, uint64_t *dt_out) {
-    uint64_t v = o.key ^ 0xCAFEBABEULL;
-    uint64_t out = 0;
     int rc = 0;
     uint64_t t0 = now_ns();
-    switch (o.kind) {
-      case OP_INSERT: rc = store.insert(o.key, v); break;
-      case OP_UPDATE: rc = store.update(o.key, v); break;
-      case OP_DELETE: rc = store.remove(o.key); break;
-      case OP_READ:   rc = store.search(o.key, &out); break;
-      default: break;
+    if (kValueSize <= 8) {
+      // Inline u64 fast path (iter-3 behaviour byte-for-byte).
+      uint64_t v = o.key ^ 0xCAFEBABEULL;
+      uint64_t out = 0;
+      switch (o.kind) {
+        case OP_INSERT: rc = store.insert(o.key, v); break;
+        case OP_UPDATE: rc = store.update(o.key, v); break;
+        case OP_DELETE: rc = store.remove(o.key); break;
+        case OP_READ:   rc = store.search(o.key, &out); break;
+        default: break;
+      }
+    } else {
+#if CONSENSUS_OPT == FUSEE_OPT_C
+      // Variable-length pool path. Generate deterministic bytes from key.
+      uint64_t seed = o.key ^ 0xCAFEBABEULL;
+      for (uint32_t i = 0; i < kValueSize; i++) {
+        v_buf[i] = (uint8_t)((seed >> (8 * (i & 7))) ^ (i * 31u));
+      }
+      uint32_t got = 0;
+      switch (o.kind) {
+        case OP_INSERT:
+          rc = store.insert(o.key, v_buf.data(), kValueSize); break;
+        case OP_UPDATE:
+          rc = store.update(o.key, v_buf.data(), kValueSize); break;
+        case OP_DELETE:
+          rc = store.remove(o.key); break;
+        case OP_READ:
+          rc = store.search(o.key, r_buf.data(), kValueSize, &got); break;
+        default: break;
+      }
+      (void)got;
+#else
+      // A/B do not support variable KV in this iteration; force-fall to
+      // inline path even if FUSEE_VALUE_SIZE > 8 was requested.
+      uint64_t v = o.key ^ 0xCAFEBABEULL;
+      uint64_t out = 0;
+      switch (o.kind) {
+        case OP_INSERT: rc = store.insert(o.key, v); break;
+        case OP_UPDATE: rc = store.update(o.key, v); break;
+        case OP_DELETE: rc = store.remove(o.key); break;
+        case OP_READ:   rc = store.search(o.key, &out); break;
+        default: break;
+      }
+      (void)out;
+#endif
     }
     if (dt_out) *dt_out = now_ns() - t0;
     return rc;
@@ -595,12 +687,12 @@ int main(int argc, char **argv) {
 
   // Print requested threads (for plot alignment), not the clamped value.
   // A "threads_eff" column gives the actual worker count used.
-  printf("YCSB opt=%c cache=%d num_hosts=%d threads=%d threads_eff=%d "
+  printf("YCSB opt=%c cache=%d value_size=%u num_hosts=%d threads=%d threads_eff=%d "
          "load_ops=%zu load_thpt=%.0f "
          "trans_ops=%lu trans_wall_max=%.3fs trans_agg_thpt=%.0f "
          "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
          "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu\n",
-         kConsensusOpt, cache_on ? 1 : 0, num_hosts,
+         kConsensusOpt, cache_on ? 1 : 0, kValueSize, num_hosts,
          requested_clients, num_clients,
          load_ops_v.size(), load_thpt,
          agg_ops, wall_max_s, agg_thpt,

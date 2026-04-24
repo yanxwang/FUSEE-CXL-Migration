@@ -41,6 +41,7 @@ set(source_fusee_cxl
     cxl_kv_ops_B.cc
     cxl_oplog.cc
     cxl_batch_ring.cc
+    cxl_kv_blockpool.cc
     cxl_latency_decomp_probe.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ticket_lock_fusee_patched.c)
