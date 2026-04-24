@@ -122,6 +122,24 @@ static inline uint64_t bump_epoch(Entry *e) {
 }
 
 #if defined(FUSEE_PER_SLOT_LOCK) && FUSEE_PER_SLOT_LOCK
+// Phase-2.5 route_seq: INSERT and DELETE may move a key to a different slot;
+// UPDATE never does. Writers that change slot layout bump this; UPDATE
+// readers observe it before and after lock_slot() and skip the under-lock
+// key re-verify when unchanged. Same cross-host flush pattern as write_epoch.
+static inline uint64_t bump_route_seq(SlotLockEntry *e) {
+  uint64_t *p = (uint64_t *)&e->route_seq.value;
+  uint64_t new_val = __atomic_add_fetch(p, 1ULL, __ATOMIC_ACQ_REL);
+  flush_line(p);
+  store_fence();
+  return new_val;
+}
+
+static inline uint64_t load_route_seq(SlotLockEntry *e) {
+  return CACHELINE_LOAD(&e->route_seq);
+}
+#endif
+
+#if defined(FUSEE_PER_SLOT_LOCK) && FUSEE_PER_SLOT_LOCK
 // ----- Per-slot lock write path (Phase-2b) -----
 //
 // UPDATE/DELETE: unlocked scan for matching key, lock the slot we found,
@@ -205,6 +223,9 @@ int CxlKvStoreC::insert(uint64_t key, uint64_t value) {
     // Letting the next writer on this slot enter while we bump saves ~2 µs
     // from the hot-slot critical section.
     lock_table_.unlock_slot(idx, empty_slot_i);
+    // Phase-2.5 route_seq: INSERT moves a key into a new slot; bump so any
+    // UPDATE reader in flight abandons its cached (key->slot) mapping.
+    bump_route_seq(lock_table_.entry(idx));
     uint64_t new_epoch = bump_epoch(lock_table_.entry(idx));
     DECOMP_DECL(__dt4);
 
@@ -239,6 +260,14 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
 
   for (int attempt = 0; attempt < kInsertRetries; attempt++) {
     DECOMP_DECL(__dt0);
+    // Phase-2.5 route_seq: snapshot BEFORE the unlocked pre-scan so that
+    // any INSERT/DELETE that completes between the pre-scan and our
+    // lock_slot() return is detected and we fall back to an under-lock
+    // re-verify. If the seq is unchanged, no such INSERT/DELETE can have
+    // moved our target key away, so the re-verify is pure overhead.
+    SlotLockEntry *le = lock_table_.entry(idx);
+    uint64_t seq_before = load_route_seq(le);
+
     // Unlocked scan to find slot holding our key.
     // Phase-2.6 flush-collapse.
     flush_line(&b->slots[0]);
@@ -253,12 +282,20 @@ int CxlKvStoreC::update(uint64_t key, uint64_t value) {
     lock_table_.lock_slot(idx, target);
     DECOMP_DECL(__dt1);
 
-    // Re-verify key under slot lock.
-    flush_line(&b->slots[target].key);
-    full_fence();
-    if (b->slots[target].key != key) {
-      lock_table_.unlock_slot(idx, target);
-      continue;  // racing delete+insert moved the key; try again
+    // Phase-2.5 fast path: if no INSERT/DELETE moved anything while we
+    // were grabbing the lock, trust the pre-scan result. Saves one CXL
+    // clflushopt + mfence + load per UPDATE on workloads where
+    // INSERT/DELETE pressure is low (A/B/F trans phase = zero
+    // INSERT/DELETE → always fast path).
+    if (load_route_seq(le) != seq_before) {
+      // Slow path: re-verify key under slot lock. Phase-2.5-inner falls
+      // back here when the layout actually changed.
+      flush_line(&b->slots[target].key);
+      full_fence();
+      if (b->slots[target].key != key) {
+        lock_table_.unlock_slot(idx, target);
+        continue;  // racing delete+insert moved the key; try again
+      }
     }
     DECOMP_DECL(__dt2);
 
@@ -331,6 +368,9 @@ int CxlKvStoreC::remove(uint64_t key) {
     store_fence();
     // Iter-2: unlock before bump_epoch.
     lock_table_.unlock_slot(idx, target);
+    // Phase-2.5 route_seq: DELETE clears a slot, which changes the
+    // (key -> slot) mapping observed by concurrent UPDATE pre-scans.
+    bump_route_seq(lock_table_.entry(idx));
     uint64_t new_epoch = bump_epoch(lock_table_.entry(idx));
     if (logged) oplog_->commit(log_idx);
     if (cache_enabled_) {

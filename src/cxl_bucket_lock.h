@@ -53,6 +53,13 @@ struct SlotLockEntry {
   bucket_mutex_t slot_mutexes[kSlotMutexesPerBucket];
   cacheline_u64  write_epoch;
   cacheline_u64  staging_scratch;
+  // Phase-2.5 route_seq. Bumped by INSERT/DELETE (which can move a key to
+  // a different slot) and NOT by UPDATE (which leaves slot keys unchanged).
+  // UPDATE readers use it to skip the under-lock re-verify when the bucket's
+  // slot layout has not changed between the unlocked pre-scan and the
+  // lock_slot() return. Cross-host publishing follows the same CACHELINE_STORE
+  // pattern as write_epoch.
+  cacheline_u64  route_seq;
 };
 
 // Thin view over a contiguous array of BucketLockEntry planted in a CXL

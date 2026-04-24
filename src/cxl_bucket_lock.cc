@@ -76,6 +76,7 @@ void SlotLockTable::attach(void *base, uint32_t num_buckets,
       }
       CACHELINE_STORE(&entries_[i].write_epoch, 0ULL);
       CACHELINE_STORE(&entries_[i].staging_scratch, 0ULL);
+      CACHELINE_STORE(&entries_[i].route_seq, 0ULL);
     }
   }
 }
