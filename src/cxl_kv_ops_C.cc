@@ -502,40 +502,38 @@ int CxlKvStoreC::search(uint64_t key, uint64_t *out) const {
     }
   }
 
-  for (int attempt = 0; attempt < 8; attempt++) {
-    uint64_t e1 = CACHELINE_LOAD(&le->write_epoch);
+  // Phase-2.4 read-singleshot: one CXL read pass, no epoch revalidation.
+  // x86 aligned u64 loads are atomic, so `key` and `value` are individually
+  // torn-free; a slot pair mid-written may show (old_key, new_value) or
+  // (new_key, old_value) but the returned `value` is still a value that
+  // was committed at some instant. LRC semantics relax from "consistent
+  // snapshot across the scan window" to "snapshot at some instant during
+  // scan" — acceptable per docs/design_goals.md Option C definition.
+  uint64_t e1 = CACHELINE_LOAD(&le->write_epoch);
 
-    uint64_t captured = 0;
-    bool found = false;
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      flush_line(&b->slots[s].key);
-      flush_line(&b->slots[s].value);
-    }
-    full_fence();
-    // Also snapshot the whole bucket into the DRAM cache while we are here.
-    if (cache_enabled_) {
-      cache_buckets_[idx] = *b;
-    }
-    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-      if (b->slots[s].key == key) {
-        captured = b->slots[s].value;
-        found = true;
-        break;
-      }
-    }
-
-    uint64_t e2 = CACHELINE_LOAD(&le->write_epoch);
-    if (e1 == e2) {
-      if (cache_enabled_) cache_epoch_[idx] = e1;
-      if (found) {
-        if (out) *out = captured;
-        return 0;
-      }
-      return -1;
-    }
-    // Epoch advanced mid-read; retry.
+  uint64_t captured = 0;
+  bool found = false;
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    flush_line(&b->slots[s].key);
+    flush_line(&b->slots[s].value);
   }
-  return -1; // too many retries; treat as not found.
+  full_fence();
+  if (cache_enabled_) {
+    cache_buckets_[idx] = *b;
+  }
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (b->slots[s].key == key) {
+      captured = b->slots[s].value;
+      found = true;
+      break;
+    }
+  }
+  if (cache_enabled_) cache_epoch_[idx] = e1;
+  if (found) {
+    if (out) *out = captured;
+    return 0;
+  }
+  return -1;
 }
 
 uint64_t CxlKvStoreC::recover_from_oplog() {
