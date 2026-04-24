@@ -35,7 +35,11 @@ struct alignas(64) BucketRingCursors {
   // dq inflation: each hot bucket contributes at most one enqueue per
   // drain cycle.
   std::atomic<uint8_t> queued;
-  char _pad1[64 - sizeof(std::atomic<uint64_t>) - sizeof(std::atomic<uint8_t>)];
+  // `draining`: mutual exclusion between concurrent flushers. Whichever
+  // thread CAS-wins 0 -> 1 gets to run drain_bucket(); losers skip. Needed
+  // once we spawn N > 1 flushers (multiple consumers on the dirty queue).
+  std::atomic<uint8_t> draining;
+  char _pad1[64 - sizeof(std::atomic<uint64_t>) - 2 * sizeof(std::atomic<uint8_t>)];
   // Flusher-only store; readers load relaxed (a slightly stale value just
   // means more spin-wait slack on the producer side).
   uint64_t flush_cursor;
@@ -67,13 +71,14 @@ struct BatchRingHeader {
   // region. Primary writes 1 after init.
   std::atomic<uint64_t> init_done;
   char _pad_init[64 - sizeof(std::atomic<uint64_t>)];
-  // MPSC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
+  // MPMC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
   // kDirtyQueueCapacity, skip the push (flusher's T-timer will catch it).
-  // Flusher dequeues via plain head++.
+  // Multiple flushers compete on dq_head via fetch_add too — needed once
+  // N > 1 flushers share the queue.
   std::atomic<uint64_t> dq_tail;
   char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
-  uint64_t dq_head;
-  char _pad_head[64 - sizeof(uint64_t)];
+  std::atomic<uint64_t> dq_head;
+  char _pad_head[64 - sizeof(std::atomic<uint64_t>)];
   uint32_t dq_slots[kDirtyQueueCapacity];
 };
 

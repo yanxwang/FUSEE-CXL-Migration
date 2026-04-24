@@ -687,6 +687,17 @@ void CxlKvStoreC::drain_bucket(uint32_t idx) {
   uint64_t flush_cur  = __atomic_load_n(&c->flush_cursor, __ATOMIC_ACQUIRE);
   if (append_raw == flush_cur) return;
 
+  // Mutual exclusion between concurrent flushers (N > 1 flusher threads
+  // share the same dirty queue). CAS-winner proceeds; losers bail — the
+  // winner will advance flush_cursor and re-consume the `queued` flag
+  // for the next round.
+  uint8_t expected = 0;
+  if (!c->draining.compare_exchange_strong(expected, 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_relaxed)) {
+    return;
+  }
+
   const uint32_t K = batch_ring_.K();
   // Cap drain window at flush_cur + K: any writer that already claimed a
   // pos >= flush_cur + K is spin-waiting for flush_cursor to advance
@@ -767,6 +778,9 @@ void CxlKvStoreC::drain_bucket(uint32_t idx) {
   // re-enqueue this bucket. Must come AFTER flush_cursor advance so any
   // writer that already CAS-won after us sees our new flush_cursor.
   c->queued.store(0, std::memory_order_release);
+  // Release draining last so another flusher won't contend on stale
+  // cursors.
+  c->draining.store(0, std::memory_order_release);
 }
 
 void CxlKvStoreC::flusher_loop() {
@@ -790,11 +804,25 @@ void CxlKvStoreC::flusher_loop() {
     bool did_any = false;
     for (int batch = 0; batch < 1024; batch++) {
       uint64_t tail = hdr->dq_tail.load(std::memory_order_acquire);
-      uint64_t head = __atomic_load_n(&hdr->dq_head, __ATOMIC_ACQUIRE);
+      uint64_t head = hdr->dq_head.load(std::memory_order_acquire);
       if (head >= tail) break;
+      // Atomically claim this head position via fetch_add. If another
+      // flusher beat us to it, the returned value is ahead of the
+      // snapshot; we then check against tail again and either take a
+      // different slot or bail. For a successful claim, read the slot.
+      uint64_t claimed = hdr->dq_head.fetch_add(1, std::memory_order_acq_rel);
+      if (claimed >= tail) {
+        // Another flusher drained it; restore head (best-effort — if
+        // contended, we just return a slightly pessimistic head and the
+        // next iteration will re-snapshot tail).
+        // Correctness: all CAS on bucket-level `draining` in drain_bucket
+        // still prevents concurrent drain of the same idx; so
+        // over-consuming dq_head here at worst makes the flusher idle
+        // briefly before re-reading tail.
+        break;
+      }
       uint32_t idx = __atomic_load_n(
-          &hdr->dq_slots[head % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
-      __atomic_store_n(&hdr->dq_head, head + 1, __ATOMIC_RELEASE);
+          &hdr->dq_slots[claimed % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
       drain_bucket(idx);
       did_any = true;
     }
@@ -823,18 +851,25 @@ void CxlKvStoreC::flusher_loop() {
   }
 }
 
-void CxlKvStoreC::start_flusher() {
+void CxlKvStoreC::start_flusher(int num_threads) {
   if (!batch_enabled_) return;
   bool expected = false;
   if (!flusher_started_.compare_exchange_strong(expected, true)) return;
-  flusher_thread_ = std::thread([this]() { this->flusher_loop(); });
+  if (num_threads < 1) num_threads = 1;
+  flusher_threads_.reserve(num_threads);
+  for (int i = 0; i < num_threads; i++) {
+    flusher_threads_.emplace_back([this]() { this->flusher_loop(); });
+  }
 }
 
 void CxlKvStoreC::stop_flusher() {
   if (!flusher_started_.load()) return;
   BatchRingHeader *hdr = batch_ring_.header();
   hdr->stop.store(true, std::memory_order_release);
-  if (flusher_thread_.joinable()) flusher_thread_.join();
+  for (std::thread &t : flusher_threads_) {
+    if (t.joinable()) t.join();
+  }
+  flusher_threads_.clear();
   flusher_started_.store(false);
 }
 
