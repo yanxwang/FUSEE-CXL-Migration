@@ -687,17 +687,6 @@ void CxlKvStoreC::drain_bucket(uint32_t idx) {
   uint64_t flush_cur  = __atomic_load_n(&c->flush_cursor, __ATOMIC_ACQUIRE);
   if (append_raw == flush_cur) return;
 
-  // Mutual exclusion between concurrent flushers (N > 1 flusher threads
-  // share the same dirty queue). CAS-winner proceeds; losers bail — the
-  // winner will advance flush_cursor and re-consume the `queued` flag
-  // for the next round.
-  uint8_t expected = 0;
-  if (!c->draining.compare_exchange_strong(expected, 1,
-                                            std::memory_order_acq_rel,
-                                            std::memory_order_relaxed)) {
-    return;
-  }
-
   const uint32_t K = batch_ring_.K();
   // Cap drain window at flush_cur + K: any writer that already claimed a
   // pos >= flush_cur + K is spin-waiting for flush_cursor to advance
@@ -778,9 +767,6 @@ void CxlKvStoreC::drain_bucket(uint32_t idx) {
   // re-enqueue this bucket. Must come AFTER flush_cursor advance so any
   // writer that already CAS-won after us sees our new flush_cursor.
   c->queued.store(0, std::memory_order_release);
-  // Release draining last so another flusher won't contend on stale
-  // cursors.
-  c->draining.store(0, std::memory_order_release);
 }
 
 void CxlKvStoreC::flusher_loop() {
@@ -804,30 +790,11 @@ void CxlKvStoreC::flusher_loop() {
     bool did_any = false;
     for (int batch = 0; batch < 1024; batch++) {
       uint64_t tail = hdr->dq_tail.load(std::memory_order_acquire);
-      uint64_t head = hdr->dq_head.load(std::memory_order_acquire);
+      uint64_t head = __atomic_load_n(&hdr->dq_head, __ATOMIC_ACQUIRE);
       if (head >= tail) break;
-      // Multi-flusher-safe pop: CAS-advance dq_head only if the claimed
-      // position is still < tail. fetch_add would over-consume head past
-      // tail under contention and silently skip valid slots (the entries
-      // at slot[tail-1] and earlier would be unreachable on the next
-      // pop iteration because dq_head has been advanced past them).
-      if (!hdr->dq_head.compare_exchange_weak(head, head + 1,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_relaxed)) {
-        // Another flusher won that slot; loop to retry with a fresh snapshot.
-        continue;
-      }
-      // Wait for producer's RELEASE publish on this slot. The queue
-      // space check in the writer prevents wrap-around collisions, so
-      // this spin is bounded by the length of one producer's critical
-      // section (store idx + release ready), i.e. nanoseconds.
-      uint32_t slot_pos = head % kDirtyQueueCapacity;
-      while (hdr->dq_ready[slot_pos].load(std::memory_order_acquire) == 0) {
-        __builtin_ia32_pause();
-      }
       uint32_t idx = __atomic_load_n(
-          &hdr->dq_slots[slot_pos], __ATOMIC_RELAXED);
-      hdr->dq_ready[slot_pos].store(0, std::memory_order_release);
+          &hdr->dq_slots[head % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
+      __atomic_store_n(&hdr->dq_head, head + 1, __ATOMIC_RELEASE);
       drain_bucket(idx);
       did_any = true;
     }
@@ -856,25 +823,18 @@ void CxlKvStoreC::flusher_loop() {
   }
 }
 
-void CxlKvStoreC::start_flusher(int num_threads) {
+void CxlKvStoreC::start_flusher() {
   if (!batch_enabled_) return;
   bool expected = false;
   if (!flusher_started_.compare_exchange_strong(expected, true)) return;
-  if (num_threads < 1) num_threads = 1;
-  flusher_threads_.reserve(num_threads);
-  for (int i = 0; i < num_threads; i++) {
-    flusher_threads_.emplace_back([this]() { this->flusher_loop(); });
-  }
+  flusher_thread_ = std::thread([this]() { this->flusher_loop(); });
 }
 
 void CxlKvStoreC::stop_flusher() {
   if (!flusher_started_.load()) return;
   BatchRingHeader *hdr = batch_ring_.header();
   hdr->stop.store(true, std::memory_order_release);
-  for (std::thread &t : flusher_threads_) {
-    if (t.joinable()) t.join();
-  }
-  flusher_threads_.clear();
+  if (flusher_thread_.joinable()) flusher_thread_.join();
   flusher_started_.store(false);
 }
 

@@ -115,12 +115,9 @@ class CxlKvStoreC {
   int enable_batching(void *shm_base, std::size_t shm_bytes, uint32_t K,
                       uint32_t T_flush_us, bool init_region);
 
-  // Primary-only: start / stop the flusher thread(s). On stop(), all
-  // flushers drain any residual ring entries before joining.
-  // num_threads==1 (default) runs a single flusher; >1 enables flusher
-  // sharding — each thread competes for dirty-queue pops, per-bucket
-  // CAS flag serialises concurrent drain_bucket on the same idx.
-  void start_flusher(int num_threads = 1);
+  // Primary-only: start / stop the flusher thread. On stop(), the
+  // flusher drains any residual ring entries before joining.
+  void start_flusher();
   void stop_flusher();
 
   bool batching_enabled() const { return batch_enabled_; }
@@ -133,7 +130,7 @@ class CxlKvStoreC {
 
   bool batch_enabled_ = false;
   MicroBatchRing batch_ring_;
-  std::vector<std::thread> flusher_threads_;
+  std::thread flusher_thread_;
   std::atomic<bool> flusher_started_{false};
   // Per-client ring-full wait counter (thread-local-ish, accumulated across
   // calls in this process).

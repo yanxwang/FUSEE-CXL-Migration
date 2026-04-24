@@ -404,11 +404,7 @@ int main(int argc, char **argv) {
       return 1;
     }
     if (is_host_primary_client) {
-      int num_flushers = 1;
-      const char *nfe = getenv("FUSEE_BATCH_NUM_FLUSHERS");
-      if (nfe && nfe[0]) num_flushers = atoi(nfe);
-      if (num_flushers < 1) num_flushers = 1;
-      store.start_flusher(num_flushers);
+      store.start_flusher();
     }
   }
 #endif

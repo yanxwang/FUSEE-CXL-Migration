@@ -89,13 +89,10 @@ void MicroBatchRing::append(uint32_t bucket_idx, uint16_t slot_idx,
                                          std::memory_order_acq_rel,
                                          std::memory_order_relaxed)) {
     uint64_t dq_pos = hdr_->dq_tail.fetch_add(1, std::memory_order_acq_rel);
-    uint64_t head = hdr_->dq_head.load(std::memory_order_acquire);
+    uint64_t head = __atomic_load_n(&hdr_->dq_head, __ATOMIC_ACQUIRE);
     if (dq_pos - head < kDirtyQueueCapacity) {
-      // Two-phase publish so flusher never reads a half-committed slot.
       __atomic_store_n(&hdr_->dq_slots[dq_pos % kDirtyQueueCapacity],
-                       bucket_idx, __ATOMIC_RELAXED);
-      hdr_->dq_ready[dq_pos % kDirtyQueueCapacity].store(
-          1, std::memory_order_release);
+                       bucket_idx, __ATOMIC_RELEASE);
     } else {
       // Queue overflow: release our claim so a subsequent writer can try
       // to enqueue again once the queue drains. Correctness still holds;

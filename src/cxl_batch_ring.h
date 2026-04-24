@@ -35,11 +35,7 @@ struct alignas(64) BucketRingCursors {
   // dq inflation: each hot bucket contributes at most one enqueue per
   // drain cycle.
   std::atomic<uint8_t> queued;
-  // `draining`: mutual exclusion between concurrent flushers. Whichever
-  // thread CAS-wins 0 -> 1 gets to run drain_bucket(); losers skip. Needed
-  // once we spawn N > 1 flushers (multiple consumers on the dirty queue).
-  std::atomic<uint8_t> draining;
-  char _pad1[64 - sizeof(std::atomic<uint64_t>) - 2 * sizeof(std::atomic<uint8_t>)];
+  char _pad1[64 - sizeof(std::atomic<uint64_t>) - sizeof(std::atomic<uint8_t>)];
   // Flusher-only store; readers load relaxed (a slightly stale value just
   // means more spin-wait slack on the producer side).
   uint64_t flush_cursor;
@@ -71,24 +67,14 @@ struct BatchRingHeader {
   // region. Primary writes 1 after init.
   std::atomic<uint64_t> init_done;
   char _pad_init[64 - sizeof(std::atomic<uint64_t>)];
-  // MPMC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
+  // MPSC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
   // kDirtyQueueCapacity, skip the push (flusher's T-timer will catch it).
-  // Multiple flushers claim positions via CAS on dq_head.
+  // Flusher dequeues via plain head++.
   std::atomic<uint64_t> dq_tail;
   char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
-  std::atomic<uint64_t> dq_head;
-  char _pad_head[64 - sizeof(std::atomic<uint64_t>)];
+  uint64_t dq_head;
+  char _pad_head[64 - sizeof(uint64_t)];
   uint32_t dq_slots[kDirtyQueueCapacity];
-  // `dq_ready[i]` — per-slot publication flag. Writer stores idx THEN
-  // RELEASE-sets ready=1. Flusher ACQUIRE-loads ready, spins on 0, then
-  // reads idx and clears ready. Without this, flushers could see a
-  // tail advance (dq_tail.fetch_add already visible) but read a
-  // dq_slots[] value that the writer has not yet committed, losing
-  // that bucket's queue entry. Queue space check in the writer
-  // (dq_pos - dq_head < CAP) prevents wrap-around between a live
-  // ready=1 from an older generation and a new writer arriving at
-  // the same slot.
-  std::atomic<uint8_t> dq_ready[kDirtyQueueCapacity];
 };
 
 class MicroBatchRing {
