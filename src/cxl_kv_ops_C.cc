@@ -806,23 +806,28 @@ void CxlKvStoreC::flusher_loop() {
       uint64_t tail = hdr->dq_tail.load(std::memory_order_acquire);
       uint64_t head = hdr->dq_head.load(std::memory_order_acquire);
       if (head >= tail) break;
-      // Atomically claim this head position via fetch_add. If another
-      // flusher beat us to it, the returned value is ahead of the
-      // snapshot; we then check against tail again and either take a
-      // different slot or bail. For a successful claim, read the slot.
-      uint64_t claimed = hdr->dq_head.fetch_add(1, std::memory_order_acq_rel);
-      if (claimed >= tail) {
-        // Another flusher drained it; restore head (best-effort — if
-        // contended, we just return a slightly pessimistic head and the
-        // next iteration will re-snapshot tail).
-        // Correctness: all CAS on bucket-level `draining` in drain_bucket
-        // still prevents concurrent drain of the same idx; so
-        // over-consuming dq_head here at worst makes the flusher idle
-        // briefly before re-reading tail.
-        break;
+      // Multi-flusher-safe pop: CAS-advance dq_head only if the claimed
+      // position is still < tail. fetch_add would over-consume head past
+      // tail under contention and silently skip valid slots (the entries
+      // at slot[tail-1] and earlier would be unreachable on the next
+      // pop iteration because dq_head has been advanced past them).
+      if (!hdr->dq_head.compare_exchange_weak(head, head + 1,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_relaxed)) {
+        // Another flusher won that slot; loop to retry with a fresh snapshot.
+        continue;
+      }
+      // Wait for producer's RELEASE publish on this slot. The queue
+      // space check in the writer prevents wrap-around collisions, so
+      // this spin is bounded by the length of one producer's critical
+      // section (store idx + release ready), i.e. nanoseconds.
+      uint32_t slot_pos = head % kDirtyQueueCapacity;
+      while (hdr->dq_ready[slot_pos].load(std::memory_order_acquire) == 0) {
+        __builtin_ia32_pause();
       }
       uint32_t idx = __atomic_load_n(
-          &hdr->dq_slots[claimed % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
+          &hdr->dq_slots[slot_pos], __ATOMIC_RELAXED);
+      hdr->dq_ready[slot_pos].store(0, std::memory_order_release);
       drain_bucket(idx);
       did_any = true;
     }

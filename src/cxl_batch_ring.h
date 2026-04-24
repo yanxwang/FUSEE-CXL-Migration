@@ -73,13 +73,22 @@ struct BatchRingHeader {
   char _pad_init[64 - sizeof(std::atomic<uint64_t>)];
   // MPMC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
   // kDirtyQueueCapacity, skip the push (flusher's T-timer will catch it).
-  // Multiple flushers compete on dq_head via fetch_add too — needed once
-  // N > 1 flushers share the queue.
+  // Multiple flushers claim positions via CAS on dq_head.
   std::atomic<uint64_t> dq_tail;
   char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
   std::atomic<uint64_t> dq_head;
   char _pad_head[64 - sizeof(std::atomic<uint64_t>)];
   uint32_t dq_slots[kDirtyQueueCapacity];
+  // `dq_ready[i]` — per-slot publication flag. Writer stores idx THEN
+  // RELEASE-sets ready=1. Flusher ACQUIRE-loads ready, spins on 0, then
+  // reads idx and clears ready. Without this, flushers could see a
+  // tail advance (dq_tail.fetch_add already visible) but read a
+  // dq_slots[] value that the writer has not yet committed, losing
+  // that bucket's queue entry. Queue space check in the writer
+  // (dq_pos - dq_head < CAP) prevents wrap-around between a live
+  // ready=1 from an older generation and a new writer arriving at
+  // the same slot.
+  std::atomic<uint8_t> dq_ready[kDirtyQueueCapacity];
 };
 
 class MicroBatchRing {
