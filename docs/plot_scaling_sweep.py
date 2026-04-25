@@ -26,6 +26,7 @@ import numpy as np
 
 YCSB = re.compile(
     r"^YCSB\s+opt=(?P<opt>[ABC])\s+cache=(?P<c>[01])\s+"
+    r"(?:value_size=(?P<vs>\d+)\s+)?"
     r"num_hosts=(?P<H>\d+)\s+threads=(?P<T>\d+)(?:\s+threads_eff=\d+)?\s+"
     r"load_ops=\d+\s+load_thpt=[\d.]+\s+"
     r"trans_ops=(?P<tops>\d+)\s+trans_wall_max=(?P<twall>[\d.]+)s\s+"

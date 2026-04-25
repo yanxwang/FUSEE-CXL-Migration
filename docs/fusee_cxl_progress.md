@@ -8,7 +8,7 @@
 - **Current focus**: Phases 1–8 all have substantive work landed; all three protocols pass multi-proc correctness, A stall fixed, cache-on v3 sweep complete
 - **Phase**: 0 skipped; 1,2,3,5,6,7 done; 4 done (soft-gate, hard-delete deferred); 8 done (cache-on numbers; cache-off sweep is fragile but individual runs work)
 - **Branch**: `feat/cxl-migration` on emr + GitHub origin (80+ commits); 4-way synced (local, emr, g3, g4)
-- **Last commit**: `d70afd5 [task 5] Full 5-workload g3+g4 cross-host sweep (30 runs)` — 2026-04-22 02:47 CDT
+- **Last commit**: `5189086 [micro-batch] Revert multi-flusher scaffold + ready-flag (both buggy)` — 2026-04-24 10:30 CDT (preceded by `b940c70` Phase-1 LFM anatomy data)
 - **Kernel transition**: g3/g4 now on 6.15.0 (was something pre-6.15). Fixes the overnight hard-offline issue; raises LFM fork-mode N threshold. See `docs/g34_bench/g34_kernel_new_observations.md`.
 - **GitHub**: https://github.com/yanxwang/FUSEE-CXL-Migration (private)
 - **Working tree**: clean on tracked files; untracked user setup scripts to ignore
@@ -216,6 +216,59 @@ is the documented follow-up step expected to close the A gap.
 - Decomp (`docs/latency_decomp_C_iter2_20260423_053919.md`): lock stage shrinks 6-27 % across T=8..32; epoch stage grows 68-82 % because the correctness-mandatory atomic RMW pays an explicit CXL roundtrip where the old non-atomic pattern did not.
 - Sweep (`docs/g34_scaling_ycsb_C_only_20260423_054027/`, per-slot LFM + iter-2 refinements, 80 runs, cache on peaks): A 3.41 → 3.27 (-4 %), B 9.98 → 10.54 (+6 %), D 38.30 → 41.00 (+7 %), F 3.53 → 4.34 (+23 %). Workloads that have reads (F) benefit from the cache refresh; workload A is still dominated by writes on the one Zipfian-hot slot.
 - 20 Mops/s bar still not met on A / B / F (6.1× / 1.9× / 4.6× short). The ceiling is structural: ~3-4 µs per-op atomic cross-host epoch bump is the critical-section floor for any design that maintains strict LRC. Breaking it needs LRC relaxation (defer bump every K writes), per-host sharded writes, or same-key micro-batching — all non-drop-in; each needs a dedicated design doc before iter 3.
+
+**Iter 3 (Phase-2 route-seq + Phase-3 micro-batching — see `docs/g34_scaling_ycsb_C_only_20260424_052400/iteration_note.md` for phase-3 detail):**
+
+- Phase-2 (`[read-singleshot]` + `[flush-collapse]` + `[route-seq]`, commits up to `75c99f1`) improves A 3.27 → 6.24, **B 10.54 → 32.57 (first crossing of 20 Mops/s)**, F 4.34 → 10.49.
+- Phase-3 (`[micro-batch]` per-host DRAM ring UPDATE batching, K=4096 T=100 µs merge=ON, commit `072070c`) lifts A 6.24 → 17.05 (0.85 × bar, still below), B 32.57 → 33.37 (above bar), F 10.49 → **20.48 (above bar)**, at the cost of C -12 % / D -14 %. **B and F cross 20 Mops/s under the 200 k-ops cap.**
+
+**Iter 3 — extended validation & deferred analysis (2026-04-24):**
+
+- **2 M-ops steady-state validation sweep** (`docs/g34_scaling_ycsb_C_only_20260424_091433/`, same config, ops=2 M, 80/80 ok): B 33.37 → **50.24** (+51 %), C 48.73 → 64.96, D 33.92 → 52.27, F 20.48 → 17.03 cache-on / **21.31 PASS cache-off @T=86**, A 17.05 → **15.03 @T=86 (−12 %, 0.75 × bar, still below)**. The 200 k-ops cap was under-reporting steady-state for B/C/D by 33–54 %. A's −12 % at 2 M sharpens the single-flusher `bump_epoch` saturation diagnosis (peak shifts T=64 → T=86; T=64 itself drops to 14.43 Mops/s).
+- **Phase-1 LFM anatomy** (`docs/latency_decomp_C_iter3_lock_anatomy_20260424_090048.md`, commit `b940c70`). Instrumented `src/lfm_lock_fusee_instrumented.c` with 4 `clock_gettime` probes (local_store / peer_scan / cont_wait / enter_cs), symbol-overriding upstream LFM only in `fusee_cxl_decomp` builds (`-DFUSEE_LFM_INSTRUMENT=ON`). Uncontended baseline lower bound ≈ 4.37 µs (peer_scan 2.85 µs + enter_cs 1.50 µs + local_store 15 ns + cont_wait 0). Under contention (T=8 → T=86, 86 % Zipf), acquire-physics stages stay **flat-to-decreasing at p50** (peer_scan p50 −3 %, enter_cs p50 −1 %, local_store p50 −22 %) while `cont_wait p99 grows 11.64 ×` (6.74 → 78.50 µs) — the **"queue dominates acquire-physics"** signature. Therefore **LFM acquire-physics is NOT the ceiling**; replacing LFM with MCS/ticket cannot move A past the current 15 Mops/s. Phase-1.5 (light-lock replacement) is **ruled out**. **The remaining work is on the queueing side**: (a) per-slot granularity is already in place since iter-1; (b) micro-batching is in place since Phase-3; (c) the **single-flusher `bump_epoch` serialisation** is the last identified structural bottleneck.
+- **Multi-flusher V2 (commits `94da706` → `aeadca9`) attempted + REVERTED** (commit `5189086`, 2026-04-24). Two bugs surfaced when scaling N ≥ 2 and when scrutinising the N=1 path:
+  1. `94da706`: producer uses `dq_tail.fetch_add` while consumer uses plain `dq_head++`; on overflow the producer rolls back `queued` but the tail advance is not rolled back → consumer can miss a slot and the bucket `queued` flag stays set forever, so later writers in that bucket stop enqueueing. Manifests as deadlock at T ≥ 32.
+  2. `aeadca9`: ready-flag hardening attempt — on overflow the producer skips the slot/ready-flag write but consumer continues to spin on `ready==0`. Observationally hangs at T=1 immediately under contention.
+  The V2 branch is preserved in git history for a future attempt; production path is the reverted `072070c` semantics (N=1, no ready-flag). **Multi-flusher is on the follow-up list, not the done list.**
+- **Tail risk note — runner reproducibility**: after repeated kill-restart cycles during V2 debugging, even the production reverted binary occasionally hangs at T=86 until slaves are rebooted (suspected stale CXL devdax / SysV shm state). Documented so a future session does not mistake this for a regression.
+
+### Status vs 20 Mops/s bar (final iter-3)
+
+| workload | 200 k peak | 2 M peak | vs 20 Mops/s |
+|----------|-----------:|---------:|-------------|
+| A        | 17.05 | 15.03 | **below (0.75 ×)** |
+| B        | 33.37 | 50.24 | PASS |
+| C        | 48.73 | 64.96 | PASS (reference) |
+| D        | 33.92 | 52.27 | PASS (reference) |
+| F (cache-on)  | 20.48 | 17.03 | marginal |
+| F (cache-off) | 22.0  | 21.31 | PASS |
+
+**Remaining gap: only workload A** is consistently below the bar. Diagnosed root cause: single-flusher cross-host `bump_epoch` serialisation (not LFM acquire-physics). Next iter should either (a) finish multi-flusher V2 correctly (CAS-based tail + ready flag carefully ordered) or (b) move `bump_epoch` off the flusher's per-drain critical path (batched-epoch-per-drain-cycle rather than per-bucket).
+
+## 2026-04-24 — iter 4 variable KV value-size sweep (per `docs/task_plan_20260424_variable_kv_size.md`)
+
+Added per-host bump-alloc CXL block pool (`src/cxl_kv_blockpool.{h,cc}`) and dual-path variadic insert/update/search on protocol C. A/B kept inline u64 (out of scope). Runner gains `FUSEE_VALUE_SIZE` env. 4× 80-run C-only sweeps at vsize 8 / 256 / 512 / 1024 (320 runs total, 0 fails).
+
+Cache-on peak throughput (Mops/s, T at peak):
+
+| vsize | A | B | C | D | F | A/B/F vs 20 Mops/s bar |
+|------:|---:|---:|---:|---:|---:|:---|
+| 8 (pooled-bypass) | 13.94 @86 | 32.15 @86 | 57.72 @86 | 48.01 @86 | 16.18 @86 | A miss / B PASS / F miss |
+| 256 | 17.18 @64 | 28.89 @64 | 31.25 @64 | 34.37 @86 | **21.24 @64** | A miss / B PASS / **F PASS** |
+| 512 | 12.09 @32 | 25.86 @64 | 30.19 @86 | 28.53 @86 | 19.87 @64 | A miss / B PASS / F ≈miss |
+| 1024 | 13.64 @64 | 16.37 @64 | 16.78 @64 | 16.78 @64 | 14.80 @64 | **all miss** |
+
+BW-ceiling comparison (from iter-2 hardware bench, 22 GB/s seq_write × 2 hosts, ~2× bytes per op including cross-host staging):
+
+| vsize | B-peak / ceiling |
+|------:|:-----------------|
+| 256 | 28.89 / 68 → 0.42 (latency-bound) |
+| 512 | 25.86 / 38 → 0.68 (mostly BW) |
+| 1024 | 16.37 / 20 → **0.82 (BW-saturated)** |
+
+**Hypothesis confirmed**: as value size grows, CXL write bandwidth becomes the floor. At kv=1024, all workloads cluster at 14-17 Mops/s regardless of lock contention profile. A still misses at every vsize — Zipf write hot-slot contention is a structural issue that value-size tuning cannot resolve. Full analysis in `docs/iter4_variable_kv_summary_20260424.md`.
+
+Cross-size plots: `docs/iter4_kv_compare/` (5 workload × 2 metric line plots + 1 peak-summary bar chart).
 
 ## Decisions made
 
