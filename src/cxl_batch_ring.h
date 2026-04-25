@@ -58,6 +58,20 @@ struct RingEntry {
 static_assert(sizeof(RingEntry) == 16, "RingEntry must be exactly 16 B");
 
 constexpr uint32_t kDirtyQueueCapacity = 8192;
+constexpr uint32_t kMaxFlushers = 8;
+
+// One MPSC dirty-bucket shard per flusher. Producers (any worker thread that
+// flips queued 0->1 for a bucket B) push to dq[B % num_flushers]. The single
+// owning flusher for that shard pops via plain head++. tail.fetch_add by
+// producers is atomic; head load/store are non-atomic since only the owning
+// flusher touches them.
+struct alignas(64) DirtyQueueShard {
+  std::atomic<uint64_t> dq_tail;
+  char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
+  uint64_t dq_head;
+  char _pad_head[64 - sizeof(uint64_t)];
+  uint32_t dq_slots[kDirtyQueueCapacity];
+};
 
 struct BatchRingHeader {
   // Flusher stop flag; primary sets on store::stop().
@@ -67,14 +81,11 @@ struct BatchRingHeader {
   // region. Primary writes 1 after init.
   std::atomic<uint64_t> init_done;
   char _pad_init[64 - sizeof(std::atomic<uint64_t>)];
-  // MPSC dirty-bucket queue. Writers fetch_add tail; if tail - head >=
-  // kDirtyQueueCapacity, skip the push (flusher's T-timer will catch it).
-  // Flusher dequeues via plain head++.
-  std::atomic<uint64_t> dq_tail;
-  char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
-  uint64_t dq_head;
-  char _pad_head[64 - sizeof(uint64_t)];
-  uint32_t dq_slots[kDirtyQueueCapacity];
+  // 1..kMaxFlushers, set once by primary during attach. All hosts independently
+  // start `num_flushers` flusher threads after seeing init_done=1.
+  uint32_t num_flushers;
+  char _pad_n[64 - sizeof(uint32_t)];
+  DirtyQueueShard dq[kMaxFlushers];
 };
 
 class MicroBatchRing {
@@ -85,9 +96,11 @@ class MicroBatchRing {
 
   // Attach a pre-mapped MAP_SHARED|MAP_ANONYMOUS blob. `init_region` is set
   // on exactly one process per host (the primary client). Non-primary
-  // processes spin until init_done flips.
+  // processes spin until init_done flips. `num_flushers` (1..kMaxFlushers)
+  // is written by the primary; non-primary callers may pass 0 and read the
+  // primary's value back.
   int attach(void *base, std::size_t bytes, uint32_t num_buckets, uint32_t K,
-             uint32_t T_flush_us, bool init_region);
+             uint32_t T_flush_us, bool init_region, uint32_t num_flushers = 1);
 
   // Writer path. Returns when the entry is in the ring and visible to the
   // flusher. Blocks (spin-yield) when the ring is full for this bucket.
@@ -99,6 +112,7 @@ class MicroBatchRing {
   uint32_t K() const { return K_; }
   uint32_t T_flush_us() const { return T_flush_us_; }
   uint32_t num_buckets() const { return num_buckets_; }
+  uint32_t num_flushers() const { return hdr_ ? hdr_->num_flushers : 1; }
   bool valid() const { return cursors_ != nullptr; }
 
   // Raw accessors for the flusher to read/write ring state under its own

@@ -297,11 +297,17 @@ int main(int argc, char **argv) {
   size_t batch_shm_bytes = 0;
   uint32_t batch_K = 0;
   uint32_t batch_T_us = 100;  // default 100 µs per plan §3.7 starting point
+  uint32_t batch_num_flushers = 1;  // iter-5: FUSEE_BATCH_NUM_FLUSHERS env
   {
     const char *bk_env = getenv("FUSEE_BATCH_K");
     if (bk_env && bk_env[0]) batch_K = (uint32_t)atoi(bk_env);
     const char *bt_env = getenv("FUSEE_BATCH_T_US");
     if (bt_env && bt_env[0]) batch_T_us = (uint32_t)atoi(bt_env);
+    const char *nf_env = getenv("FUSEE_BATCH_NUM_FLUSHERS");
+    if (nf_env && nf_env[0]) {
+      int v = atoi(nf_env);
+      if (v >= 1 && v <= 8) batch_num_flushers = (uint32_t)v;
+    }
     if (batch_K > 0) {
       batch_shm_bytes = fusee::MicroBatchRing::bytes_for(num_buckets, batch_K);
       void *mm = mmap(nullptr, batch_shm_bytes, PROT_READ | PROT_WRITE,
@@ -448,7 +454,8 @@ int main(int argc, char **argv) {
   if (batch_shm && batch_K > 0) {
     bool is_host_primary_client = (client_id == 0);
     if (store.enable_batching(batch_shm, batch_shm_bytes, batch_K, batch_T_us,
-                              /*init_region=*/is_host_primary_client) != 0) {
+                              /*init_region=*/is_host_primary_client,
+                              batch_num_flushers) != 0) {
       fprintf(stderr, "[h%d c%d] enable_batching failed\n", host_id, client_id);
       return 1;
     }
@@ -687,12 +694,18 @@ int main(int argc, char **argv) {
 
   // Print requested threads (for plot alignment), not the clamped value.
   // A "threads_eff" column gives the actual worker count used.
-  printf("YCSB opt=%c cache=%d value_size=%u num_hosts=%d threads=%d threads_eff=%d "
+  printf("YCSB opt=%c cache=%d value_size=%u num_flushers=%u num_hosts=%d threads=%d threads_eff=%d "
          "load_ops=%zu load_thpt=%.0f "
          "trans_ops=%lu trans_wall_max=%.3fs trans_agg_thpt=%.0f "
          "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
          "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu\n",
-         kConsensusOpt, cache_on ? 1 : 0, kValueSize, num_hosts,
+         kConsensusOpt, cache_on ? 1 : 0, kValueSize,
+#if CONSENSUS_OPT == FUSEE_OPT_C
+         batch_num_flushers,
+#else
+         1u,
+#endif
+         num_hosts,
          requested_clients, num_clients,
          load_ops_v.size(), load_thpt,
          agg_ops, wall_max_s, agg_thpt,

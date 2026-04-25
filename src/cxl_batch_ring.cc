@@ -23,10 +23,14 @@ std::size_t MicroBatchRing::bytes_for(uint32_t num_buckets, uint32_t K) {
 }
 
 int MicroBatchRing::attach(void *base, std::size_t bytes, uint32_t num_buckets,
-                           uint32_t K, uint32_t T_flush_us, bool init_region) {
+                           uint32_t K, uint32_t T_flush_us, bool init_region,
+                           uint32_t num_flushers) {
   if (!base || num_buckets == 0 || K == 0) return -1;
   std::size_t need = bytes_for(num_buckets, K);
   if (bytes < need) return -1;
+  if (init_region) {
+    if (num_flushers == 0 || num_flushers > kMaxFlushers) return -1;
+  }
 
   num_buckets_ = num_buckets;
   K_ = K;
@@ -45,6 +49,7 @@ int MicroBatchRing::attach(void *base, std::size_t bytes, uint32_t num_buckets,
     std::memset(ring_, 0,
                 static_cast<std::size_t>(num_buckets) * K * sizeof(RingEntry));
     std::memset(hdr_, 0, sizeof(*hdr_));
+    hdr_->num_flushers = num_flushers;
     __atomic_thread_fence(__ATOMIC_RELEASE);
     hdr_->init_done.store(1, std::memory_order_release);
   } else {
@@ -88,15 +93,17 @@ void MicroBatchRing::append(uint32_t bucket_idx, uint16_t slot_idx,
   if (c->queued.compare_exchange_strong(expected, 1,
                                          std::memory_order_acq_rel,
                                          std::memory_order_relaxed)) {
-    uint64_t dq_pos = hdr_->dq_tail.fetch_add(1, std::memory_order_acq_rel);
-    uint64_t head = __atomic_load_n(&hdr_->dq_head, __ATOMIC_ACQUIRE);
+    uint32_t fid = bucket_idx % hdr_->num_flushers;
+    DirtyQueueShard &dq = hdr_->dq[fid];
+    uint64_t dq_pos = dq.dq_tail.fetch_add(1, std::memory_order_acq_rel);
+    uint64_t head = __atomic_load_n(&dq.dq_head, __ATOMIC_ACQUIRE);
     if (dq_pos - head < kDirtyQueueCapacity) {
-      __atomic_store_n(&hdr_->dq_slots[dq_pos % kDirtyQueueCapacity],
+      __atomic_store_n(&dq.dq_slots[dq_pos % kDirtyQueueCapacity],
                        bucket_idx, __ATOMIC_RELEASE);
     } else {
-      // Queue overflow: release our claim so a subsequent writer can try
-      // to enqueue again once the queue drains. Correctness still holds;
-      // the flusher's idle-scan picks up any pending work eventually.
+      // Shard overflow: release the queued claim so a later writer for this
+      // bucket can try again once the consumer drains. Correctness still
+      // holds; the flusher's idle-scan covers the missed bucket.
       c->queued.store(0, std::memory_order_release);
     }
   }

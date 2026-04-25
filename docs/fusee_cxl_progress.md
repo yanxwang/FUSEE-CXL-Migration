@@ -21,8 +21,8 @@
 > The design used in FUSEE src/ (main migration) MUST match whatever A design
 > is current in the mini-bench. Every A change is logged here.
 
-- **Full log**: `docs/option_a_side_track.md` (primary doc, append-only)
-- **First investigation report**: `docs/option_a_perf_analysis.md` (initial cause analysis)
+- **Full log**: `docs/archive/option_a_side_track.md` (primary doc, append-only)
+- **First investigation report**: `docs/archive/option_a_perf_analysis.md` (initial cause analysis)
 
 ### Current A design: **A-v2 (SPSC ring)**
 
@@ -44,7 +44,7 @@
 
 Goal: find why Option A write throughput is ~100x lower than B/C in mini-bench; if root cause is implementation artifact (not fundamental), provide A-v2 that matches B/C write perf.
 
-See `docs/option_a_perf_analysis.md` (will be created) for the live research log.
+See `docs/archive/option_a_perf_analysis.md` (will be created) for the live research log.
 
 ## Environment
 
@@ -106,7 +106,7 @@ Guardrail: do not touch `src/client*.{h,cc}` or `src/hashtable.{h,cc}` yet — t
 **Dax0.0 ready**: ✅ reconfigured to devdax mode on 2026-04-20 02:00 CDT
 **Build status**: original FUSEE still has RDMA deps in libddckv; Phase 1 tests link cxl_mm.cc directly, bypassing libddckv. Full libddckv refactor in Phase 4.
 
-## 2026-04-23 — iter 1 of C write-path optimization (per `docs/task_plan_20260423_c_writepath.md`)
+## 2026-04-23 — iter 1 of C write-path optimization (per `docs/iters/task_plan_20260423_c_writepath.md`)
 
 Bar: C protocol must hit ≥ 20 Mops/s `trans_agg_thpt` on workloads A, B, F on g3+g4 (`docs/design_goals.md`). Baseline (from `logs/g34_scaling_sweep_p2_v4_20260422_205644`, cache=on): A = 1.08, B = 6.55, F = 1.44 Mops/s — 2 – 18× below target.
 
@@ -115,7 +115,7 @@ Bar: C protocol must hit ≥ 20 Mops/s `trans_agg_thpt` on workloads A, B, F on 
 - **Stage-level latency decomposition for C write path** — `src/cxl_latency_decomp_probe.{h,cc}`, `tests/cxl_latency_decomp_C.cc` (fork-based, per-client histograms, primary merges). Compile-gated by `FUSEE_LATENCY_DECOMP=1` on a sibling library `fusee_cxl_decomp` so production `cxl_ycsb_runner_C` pays zero runtime cost.
 - **FUSEE-local patched ticket_lock** — `src/ticket_lock_fusee_patched.c`. Upstream `$CXL_SHM_PROFILING_DIR/locks/ticket_lock.c` was missing the pre-`fetch_add` clflushopt required for cross-host correctness; patch kept inside the FUSEE tree via CMake so the shared repo is untouched.
 - **Per-slot LFM lock for protocol C** — `src/cxl_bucket_lock.{h,cc}` adds `SlotLockTable` (7 × `bucket_mutex_t` per bucket). `src/cxl_kv_ops_C.cc`, under `FUSEE_PER_SLOT_LOCK=ON`, runs unlocked-scan → lock one slot → re-verify → publish. INSERT carries an under-lock dup scan of the other 6 slots. `bump_epoch` promoted to atomic `__atomic_fetch_add + clflushopt + sfence` (per-slot granularity means concurrent writers on different slots race on the shared per-bucket counter).
-- **Decomp + sweep infra** — `scripts/run_latency_decomp_C.sh`, `scripts/finalize_c_only_sweep.sh`, `docs/plot_c_compare.py`; `scripts/run_g34_scaling_sweep.sh` reused with `OPTS=C`.
+- **Decomp + sweep infra** — `scripts/run_latency_decomp_C.sh`, `scripts/finalize_c_only_sweep.sh`, `docs/tools/plot_c_compare.py`; `scripts/run_g34_scaling_sweep.sh` reused with `OPTS=C`.
 
 **Numbers (cache=on peaks, vs baseline):**
 
@@ -213,7 +213,7 @@ is the documented follow-up step expected to close the A gap.
 **Iter 2 (fresh decomp on per-slot LFM → `bump_epoch` outside crit section + writer-side DRAM cache refresh):**
 
 - Code: `bump_epoch` moved after `unlock_slot()` in all three C write paths, now returns the post-increment epoch; writers replace `cache_epoch_[idx] = UINT64_MAX` with a local cache refresh (`cache_buckets_[idx].slots[s] = new`; `cache_epoch_[idx] = new_epoch`). Keeps iter-1's atomic `__atomic_add_fetch` (correctness requirement under per-slot granularity).
-- Decomp (`docs/latency_decomp_C_iter2_20260423_053919.md`): lock stage shrinks 6-27 % across T=8..32; epoch stage grows 68-82 % because the correctness-mandatory atomic RMW pays an explicit CXL roundtrip where the old non-atomic pattern did not.
+- Decomp (`docs/iters/latency_decomp_C_iter2_20260423_053919.md`): lock stage shrinks 6-27 % across T=8..32; epoch stage grows 68-82 % because the correctness-mandatory atomic RMW pays an explicit CXL roundtrip where the old non-atomic pattern did not.
 - Sweep (`docs/g34_scaling_ycsb_C_only_20260423_054027/`, per-slot LFM + iter-2 refinements, 80 runs, cache on peaks): A 3.41 → 3.27 (-4 %), B 9.98 → 10.54 (+6 %), D 38.30 → 41.00 (+7 %), F 3.53 → 4.34 (+23 %). Workloads that have reads (F) benefit from the cache refresh; workload A is still dominated by writes on the one Zipfian-hot slot.
 - 20 Mops/s bar still not met on A / B / F (6.1× / 1.9× / 4.6× short). The ceiling is structural: ~3-4 µs per-op atomic cross-host epoch bump is the critical-section floor for any design that maintains strict LRC. Breaking it needs LRC relaxation (defer bump every K writes), per-host sharded writes, or same-key micro-batching — all non-drop-in; each needs a dedicated design doc before iter 3.
 
@@ -225,7 +225,7 @@ is the documented follow-up step expected to close the A gap.
 **Iter 3 — extended validation & deferred analysis (2026-04-24):**
 
 - **2 M-ops steady-state validation sweep** (`docs/g34_scaling_ycsb_C_only_20260424_091433/`, same config, ops=2 M, 80/80 ok): B 33.37 → **50.24** (+51 %), C 48.73 → 64.96, D 33.92 → 52.27, F 20.48 → 17.03 cache-on / **21.31 PASS cache-off @T=86**, A 17.05 → **15.03 @T=86 (−12 %, 0.75 × bar, still below)**. The 200 k-ops cap was under-reporting steady-state for B/C/D by 33–54 %. A's −12 % at 2 M sharpens the single-flusher `bump_epoch` saturation diagnosis (peak shifts T=64 → T=86; T=64 itself drops to 14.43 Mops/s).
-- **Phase-1 LFM anatomy** (`docs/latency_decomp_C_iter3_lock_anatomy_20260424_090048.md`, commit `b940c70`). Instrumented `src/lfm_lock_fusee_instrumented.c` with 4 `clock_gettime` probes (local_store / peer_scan / cont_wait / enter_cs), symbol-overriding upstream LFM only in `fusee_cxl_decomp` builds (`-DFUSEE_LFM_INSTRUMENT=ON`). Uncontended baseline lower bound ≈ 4.37 µs (peer_scan 2.85 µs + enter_cs 1.50 µs + local_store 15 ns + cont_wait 0). Under contention (T=8 → T=86, 86 % Zipf), acquire-physics stages stay **flat-to-decreasing at p50** (peer_scan p50 −3 %, enter_cs p50 −1 %, local_store p50 −22 %) while `cont_wait p99 grows 11.64 ×` (6.74 → 78.50 µs) — the **"queue dominates acquire-physics"** signature. Therefore **LFM acquire-physics is NOT the ceiling**; replacing LFM with MCS/ticket cannot move A past the current 15 Mops/s. Phase-1.5 (light-lock replacement) is **ruled out**. **The remaining work is on the queueing side**: (a) per-slot granularity is already in place since iter-1; (b) micro-batching is in place since Phase-3; (c) the **single-flusher `bump_epoch` serialisation** is the last identified structural bottleneck.
+- **Phase-1 LFM anatomy** (`docs/iters/latency_decomp_C_iter3_lock_anatomy_20260424_090048.md`, commit `b940c70`). Instrumented `src/lfm_lock_fusee_instrumented.c` with 4 `clock_gettime` probes (local_store / peer_scan / cont_wait / enter_cs), symbol-overriding upstream LFM only in `fusee_cxl_decomp` builds (`-DFUSEE_LFM_INSTRUMENT=ON`). Uncontended baseline lower bound ≈ 4.37 µs (peer_scan 2.85 µs + enter_cs 1.50 µs + local_store 15 ns + cont_wait 0). Under contention (T=8 → T=86, 86 % Zipf), acquire-physics stages stay **flat-to-decreasing at p50** (peer_scan p50 −3 %, enter_cs p50 −1 %, local_store p50 −22 %) while `cont_wait p99 grows 11.64 ×` (6.74 → 78.50 µs) — the **"queue dominates acquire-physics"** signature. Therefore **LFM acquire-physics is NOT the ceiling**; replacing LFM with MCS/ticket cannot move A past the current 15 Mops/s. Phase-1.5 (light-lock replacement) is **ruled out**. **The remaining work is on the queueing side**: (a) per-slot granularity is already in place since iter-1; (b) micro-batching is in place since Phase-3; (c) the **single-flusher `bump_epoch` serialisation** is the last identified structural bottleneck.
 - **Multi-flusher V2 (commits `94da706` → `aeadca9`) attempted + REVERTED** (commit `5189086`, 2026-04-24). Two bugs surfaced when scaling N ≥ 2 and when scrutinising the N=1 path:
   1. `94da706`: producer uses `dq_tail.fetch_add` while consumer uses plain `dq_head++`; on overflow the producer rolls back `queued` but the tail advance is not rolled back → consumer can miss a slot and the bucket `queued` flag stays set forever, so later writers in that bucket stop enqueueing. Manifests as deadlock at T ≥ 32.
   2. `aeadca9`: ready-flag hardening attempt — on overflow the producer skips the slot/ready-flag write but consumer continues to spin on `ready==0`. Observationally hangs at T=1 immediately under contention.
@@ -245,7 +245,7 @@ is the documented follow-up step expected to close the A gap.
 
 **Remaining gap: only workload A** is consistently below the bar. Diagnosed root cause: single-flusher cross-host `bump_epoch` serialisation (not LFM acquire-physics). Next iter should either (a) finish multi-flusher V2 correctly (CAS-based tail + ready flag carefully ordered) or (b) move `bump_epoch` off the flusher's per-drain critical path (batched-epoch-per-drain-cycle rather than per-bucket).
 
-## 2026-04-24 — iter 4 variable KV value-size sweep (per `docs/task_plan_20260424_variable_kv_size.md`)
+## 2026-04-24 — iter 4 variable KV value-size sweep (per `docs/iters/task_plan_20260424_variable_kv_size.md`)
 
 Added per-host bump-alloc CXL block pool (`src/cxl_kv_blockpool.{h,cc}`) and dual-path variadic insert/update/search on protocol C. A/B kept inline u64 (out of scope). Runner gains `FUSEE_VALUE_SIZE` env. 4× 80-run C-only sweeps at vsize 8 / 256 / 512 / 1024 (320 runs total, 0 fails).
 
@@ -266,9 +266,40 @@ BW-ceiling comparison (from iter-2 hardware bench, 22 GB/s seq_write × 2 hosts,
 | 512 | 25.86 / 38 → 0.68 (mostly BW) |
 | 1024 | 16.37 / 20 → **0.82 (BW-saturated)** |
 
-**Hypothesis confirmed**: as value size grows, CXL write bandwidth becomes the floor. At kv=1024, all workloads cluster at 14-17 Mops/s regardless of lock contention profile. A still misses at every vsize — Zipf write hot-slot contention is a structural issue that value-size tuning cannot resolve. Full analysis in `docs/iter4_variable_kv_summary_20260424.md`.
+**Hypothesis confirmed**: as value size grows, CXL write bandwidth becomes the floor. At kv=1024, all workloads cluster at 14-17 Mops/s regardless of lock contention profile. A still misses at every vsize — Zipf write hot-slot contention is a structural issue that value-size tuning cannot resolve. Full analysis in `docs/iters/iter4_variable_kv_summary_20260424.md`.
 
 Cross-size plots: `docs/iter4_kv_compare/` (5 workload × 2 metric line plots + 1 peak-summary bar chart).
+
+## 2026-04-25 — iter 5 multi-flusher V2 + M-series microbenches (per `docs/iters/task_plan_20260424_iter5_multiflusher_valuecache.md`)
+
+iter-5 split (Q1): microbenches + multi-flusher V2; value-cache deferred to iter-6. 9-sweep matrix (kv ∈ {256, 512, 1024} × N ∈ {1, 2, 4}) = 720 runs total, **0 fails**.
+
+**M1 (dual-host CXL BW microbench)**: per-host saturates at 12.5 GB/s; aggregate dual-host = 25 GB/s; expander supports both hosts in parallel. The iter-4 "44 GB/s aggregate" ceiling was loose — the **real** ceiling is 25 GB/s aggregate. iter-4 kv=1024 utilisation re-derived: 0.74 (was 0.82).
+
+**Multi-flusher V2** (`src/cxl_batch_ring.{h,cc}` + `src/cxl_kv_ops_C.{h,cc}`): per-flusher MPSC dirty-queue shard, partition by `bucket_id % N`. Avoids iter-3 V1's MPMC-pop race (5189086 revert lessons). Default in-tree N=1 (byte-for-byte iter-3); validated at N ∈ {1, 2, 4}.
+
+**9-sweep peaks** (cache=on, Mops/s @T):
+
+| vsize / N | A | B | C | D | F |
+|----------:|--:|--:|--:|--:|--:|
+| 256/1 | 18.36 | 27.50 | 39.55 | 32.91 | 19.42 |
+| 256/2 | **19.35** | 27.48 | 32.86 | 33.79 | **21.09** ✓ |
+| 256/4 | 17.32 | 26.36 | 34.23 | 33.11 | 20.38 |
+| 512/1 | 17.32 | 23.95 ✓ | 28.85 | 31.17 | 19.59 |
+| 512/2 | 17.21 | 25.02 ✓ | 28.36 | 28.63 | 20.43 ✓ |
+| 1024/1 | 13.92 | 16.66 | 16.85 | 16.85 | 15.48 |
+| 1024/2 | 13.97 | 16.73 | 16.92 | 17.22 | 15.40 |
+
+**Iter-5 success criterion 3 (A ≥ 25 Mops/s) FAILED** — A peaks at 19.35 (kv256/N=2 cache=on). Multi-flusher gain on A: +5 % cache=on, +13 % cache=off. Insufficient.
+
+**Diagnosis revision**: A is not flusher-rate-bound. The bottleneck is hot-bucket producer-side serialisation under Zipf — `BucketRingCursors[hot].append_cursor.fetch_add` and per-bucket `bump_epoch` both serialise on the hot bucket regardless of flusher count. Multi-flusher only parallelises medium/cold buckets, which are a small fraction of A's load.
+
+**Iter-6 candidates** (per summary §"Why workload A still misses"):
+1. Slot-shard within hot bucket (7 slots × 2 sub-shards).
+2. Async/relaxed bump_epoch on detected-hot buckets (LRC slack).
+3. Value-block DRAM cache (deferred from Q1 split) — addresses C-read regression and may help F.
+
+Full analysis: `docs/iter5_summary_20260425.md`. Cross-(vsize, N) plots: `docs/iter5_kv_n_compare/` (5 heatmaps + 15 N-line plots + 5 peak bars). M1 writeup: `docs/iter5_microbench/m1_dualhost_bw.md`. Design doc: `docs/iter5_multiflusher_design.md`.
 
 ## Decisions made
 

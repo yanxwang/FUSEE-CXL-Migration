@@ -131,24 +131,26 @@ class CxlKvStoreC {
   // Flusher thread (started by primary via start_flusher()) drains the ring
   // in cursor order into materialised slots + one bump_epoch per drain.
   int enable_batching(void *shm_base, std::size_t shm_bytes, uint32_t K,
-                      uint32_t T_flush_us, bool init_region);
+                      uint32_t T_flush_us, bool init_region,
+                      uint32_t num_flushers = 1);
 
-  // Primary-only: start / stop the flusher thread. On stop(), the
-  // flusher drains any residual ring entries before joining.
+  // Primary-only: start / stop the flusher threads. On stop(), each flusher
+  // drains its partition's residual ring entries before joining.
   void start_flusher();
   void stop_flusher();
 
   bool batching_enabled() const { return batch_enabled_; }
   MicroBatchRing *batch_ring() { return &batch_ring_; }
   uint64_t ring_full_waits() const { return ring_full_waits_; }
+  uint32_t num_flushers() const { return batch_ring_.num_flushers(); }
 
  private:
-  void flusher_loop();
+  void flusher_loop(int my_id);
   void drain_bucket(uint32_t bucket_idx);
 
   bool batch_enabled_ = false;
   MicroBatchRing batch_ring_;
-  std::thread flusher_thread_;
+  std::vector<std::thread> flusher_threads_;
   std::atomic<bool> flusher_started_{false};
   // Per-client ring-full wait counter (thread-local-ish, accumulated across
   // calls in this process).

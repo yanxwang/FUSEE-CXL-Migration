@@ -671,10 +671,10 @@ void CxlKvStoreC::enable_dram_cache(bool on) {
 
 int CxlKvStoreC::enable_batching(void *shm_base, std::size_t shm_bytes,
                                  uint32_t K, uint32_t T_flush_us,
-                                 bool init_region) {
+                                 bool init_region, uint32_t num_flushers) {
   if (batch_enabled_) return -1;
   if (batch_ring_.attach(shm_base, shm_bytes, num_buckets_, K, T_flush_us,
-                         init_region) != 0) {
+                         init_region, num_flushers) != 0) {
     return -1;
   }
   batch_enabled_ = true;
@@ -769,18 +769,19 @@ void CxlKvStoreC::drain_bucket(uint32_t idx) {
   c->queued.store(0, std::memory_order_release);
 }
 
-void CxlKvStoreC::flusher_loop() {
+void CxlKvStoreC::flusher_loop(int my_id) {
   BatchRingHeader *hdr = batch_ring_.header();
+  DirtyQueueShard &dq = hdr->dq[my_id];
+  const uint32_t N = batch_ring_.num_flushers();
   const uint32_t T_us = batch_ring_.T_flush_us();
   auto get_us = []() -> uint64_t {
     timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL
          + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
   };
-  // Full-table scan is O(num_buckets), which is 65 k — ~6 ms per scan.
-  // We do NOT scan every T_us (that ate 60-100 % of the flusher's
-  // runtime in early measurements). Instead we scan only when the
-  // dirty queue has been empty for at least `kIdleScanUs` — under
+  // Full-table scan is O(num_buckets / N) per flusher (we walk only our
+  // own partition). We do NOT scan every T_us. Instead we scan only when
+  // the dirty queue has been empty for at least `kIdleScanUs` — under
   // steady workload the queue is rarely empty, so the scan essentially
   // never fires; at shutdown the dedicated drain in stop_flusher covers
   // any residual entries.
@@ -789,12 +790,12 @@ void CxlKvStoreC::flusher_loop() {
   while (!hdr->stop.load(std::memory_order_acquire)) {
     bool did_any = false;
     for (int batch = 0; batch < 1024; batch++) {
-      uint64_t tail = hdr->dq_tail.load(std::memory_order_acquire);
-      uint64_t head = __atomic_load_n(&hdr->dq_head, __ATOMIC_ACQUIRE);
+      uint64_t tail = dq.dq_tail.load(std::memory_order_acquire);
+      uint64_t head = __atomic_load_n(&dq.dq_head, __ATOMIC_ACQUIRE);
       if (head >= tail) break;
       uint32_t idx = __atomic_load_n(
-          &hdr->dq_slots[head % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
-      __atomic_store_n(&hdr->dq_head, head + 1, __ATOMIC_RELEASE);
+          &dq.dq_slots[head % kDirtyQueueCapacity], __ATOMIC_ACQUIRE);
+      __atomic_store_n(&dq.dq_head, head + 1, __ATOMIC_RELEASE);
       drain_bucket(idx);
       did_any = true;
     }
@@ -804,9 +805,9 @@ void CxlKvStoreC::flusher_loop() {
     }
     uint64_t now = get_us();
     if (now - last_activity_us >= kIdleScanUs) {
-      // Long-idle fallback scan: catches buckets whose writers' dirty-queue
-      // push was dropped due to queue overflow.
-      for (uint32_t idx = 0; idx < batch_ring_.num_buckets(); idx++) {
+      // Long-idle fallback scan: my partition only.
+      for (uint32_t idx = (uint32_t)my_id; idx < batch_ring_.num_buckets();
+           idx += N) {
         if (batch_ring_.has_pending(idx)) drain_bucket(idx);
       }
       last_activity_us = now;
@@ -817,8 +818,9 @@ void CxlKvStoreC::flusher_loop() {
     timespec ts = {0, 10 * 1000};  // 10 us
     nanosleep(&ts, nullptr);
   }
-  // Final drain before exiting.
-  for (uint32_t idx = 0; idx < batch_ring_.num_buckets(); idx++) {
+  // Final drain — partition only.
+  for (uint32_t idx = (uint32_t)my_id; idx < batch_ring_.num_buckets();
+       idx += N) {
     if (batch_ring_.has_pending(idx)) drain_bucket(idx);
   }
 }
@@ -827,14 +829,23 @@ void CxlKvStoreC::start_flusher() {
   if (!batch_enabled_) return;
   bool expected = false;
   if (!flusher_started_.compare_exchange_strong(expected, true)) return;
-  flusher_thread_ = std::thread([this]() { this->flusher_loop(); });
+  uint32_t N = batch_ring_.num_flushers();
+  if (N == 0) N = 1;
+  flusher_threads_.reserve(N);
+  for (uint32_t i = 0; i < N; i++) {
+    flusher_threads_.emplace_back(
+        [this, i]() { this->flusher_loop(static_cast<int>(i)); });
+  }
 }
 
 void CxlKvStoreC::stop_flusher() {
   if (!flusher_started_.load()) return;
   BatchRingHeader *hdr = batch_ring_.header();
   hdr->stop.store(true, std::memory_order_release);
-  if (flusher_thread_.joinable()) flusher_thread_.join();
+  for (auto &t : flusher_threads_) {
+    if (t.joinable()) t.join();
+  }
+  flusher_threads_.clear();
   flusher_started_.store(false);
 }
 

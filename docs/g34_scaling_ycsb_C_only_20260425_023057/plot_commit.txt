@@ -1,0 +1,30 @@
+git_sha=c26bb0d830dbb91ffeb586c018f1c347ca7b592d
+branch=feat/cxl-migration
+status= M CLAUDE.md
+R  docs/INDEX.md -> docs/archive/INDEX.md
+R  docs/SUMMARY.md -> docs/archive/SUMMARY.md
+R  docs/benchmark_index.md -> docs/archive/benchmark_index.md
+R  docs/c1_c2_ib_diagnostic.md -> docs/archive/c1_c2_ib_diagnostic.md
+R  docs/cxl_abc_results.md -> docs/archive/cxl_abc_results.md
+R  docs/fusee_mp_bench.log -> docs/archive/fusee_mp_bench.log
+R  docs/fusee_mp_bench_emr_20260421.log -> docs/archive/fusee_mp_bench_emr_20260421.log
+R  docs/fusee_mp_bench_g4_2h_20260421.log -> docs/archive/fusee_mp_bench_g4_2h_20260421.log
+R  docs/fusee_mp_bench_v2.log -> docs/archive/fusee_mp_bench_v2.log
+R  docs/fusee_mp_bench_v3.log -> docs/archive/fusee_mp_bench_v3.log
+R  docs/fusee_ycsb_g34_xhost_20260422.log -> docs/archive/fusee_ycsb_g34_xhost_20260422.log
+R  docs/fusee_ycsb_g34_xhost_full_20260422.log -> docs/archive/fusee_ycsb_g34_xhost_full_20260422.log
+R  docs/fusee_ycsb_g4_solo_20260421.log -> docs/archive/fusee_ycsb_g4_solo_20260421.log
+R  docs/fusee_ycsb_sweep.log -> docs/archive/fusee_ycsb_sweep.log
+R  docs/fusee_ycsb_sweep_emr_20260421.log -> docs/archive/fusee_ycsb_sweep_emr_20260421.log
+R  docs/fusee_ycsb_sweep_tmpfs.log -> docs/archive/fusee_ycsb_sweep_tmpfs.log
+R  docs/fusee_ycsb_sweep_tmpfs_cache.log -> docs/archive/fusee_ycsb_sweep_tmpfs_cache.log
+R  docs/implementation_log.md -> docs/archive/implementation_log.md
+R  docs/morning_summary_20260422.md -> docs/archive/morning_summary_20260422.md
+ts=20260425_023057
+host=soldier
+opts=C
+workloads=workloada workloadb workloadc workloadd workloadf
+threads=1 2 4 8 16 32 64 86
+cache_modes=on off
+num_buckets=65536
+max_ops=200000
