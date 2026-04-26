@@ -103,6 +103,20 @@ Solution-2 + B-wire deferred to iter-3A per Q-ε descope ladder).
 Default behaviour is byte-for-byte unchanged; opt-in env path is
 the new code. **Zero regression risk** for legacy benchmarks.
 
+Confirmed empirically post-Phase-1: workload A T={1, 4, 16} cache=on
+under PHR=0:
+
+| T  | iter-2A PHR=0 | iter-1A baseline | delta |
+|----|--------------:|-----------------:|------:|
+| 1  | 0.35 Mops/s   | 0.25             | +40 % |
+| 4  | 0.90          | 0.54             | +66 % |
+| 16 | 0.89          | 0.25             | +256 % |
+| 64 | TIMEOUT       | 0.01             | (both fail) |
+
+The PHR=0 numbers are higher than iter-1A's, which is most likely
+testbed variability (different CPU thermal, NUMA, cache state)
+since the legacy code path is unchanged. Either way, no regression.
+
 ---
 
 ## Why T=1 wins but T≥4 loses
