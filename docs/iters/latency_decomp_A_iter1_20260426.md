@@ -2,10 +2,11 @@
 
 **Date**: 2026-04-26
 **Iter**: iter-1A (Protocol A — first opt push)
-**Status**: instrumentation landed; empirical decomp run BLOCKED
-on testbed unreachability (g3+g4 ssh keys rejected after PXE reset
-between iter-5 and iter-1A; root password not available to this
-agent for re-keying).
+**Status**: instrumentation landed + **empirical decomp data
+captured** after testbed re-keyed mid-iter via
+`scripts/rekey_slave.sh`. Phase 4 GO/NO-GO confirmed empirically
+(see §"Empirical decomp results" below). Original first-principles
+decision unchanged.
 
 ---
 
@@ -31,22 +32,76 @@ verified (`make fusee_cxl_decomp` succeeds).
 
 ---
 
-## Why no decomp numbers in this doc
+## Empirical decomp results (added after testbed re-key)
 
-iter-1A's Phase 2 (baseline sweep) and Phase 3 (decomp run on
-workload A T=4 cache=on + workload F T=4 cache=on) both require
-running `cxl_ycsb_runner_A` on g3+g4. The hosts were re-PXE'd at
-some point between iter-5 (2026-04-25 ~05:00 CDT) and iter-1A
-start (2026-04-26 ~01:37 CDT); ephemeral overlay rootfs lost
-`/root/.ssh/authorized_keys`. Pubkey auth fails on both hosts;
-password auth requires the credentials documented in
-`reference_host_credentials.md`, which this agent is sandboxed
-out of reading.
+After user pointed out `scripts/rekey_slave.sh` (which re-installs
+the orchestrator pubkey on PXE-ephemeral slaves via password auth
+from a local credentials file), g3+g4 access was restored mid-iter.
+Then `daxctl reconfigure --mode=devdax` on both hosts (ssh-restored
+boxes were in system-ram mode), bootstrap_slave.sh, push workloads,
+build `cxl_latency_decomp_A` (new target — see
+`tests/CMakeLists.txt`).
 
-Empirical Phase 2/3/7 deferred to **iter-2A** as the first task
-once testbed access is restored. The instrumentation in
-`src/cxl_kv_ops_A.cc` is ready to run as-is — no further code
-change needed for the decomp pass.
+**Decomp pass: workload A T=4 cache=on (FUSEE_CACHE=1, num_hosts=2)**
+```
+DECOMP_A threads=4 num_hosts=2 cache=1 ops=99926
+  stage_lock_avg=6869    stage_lock_p50=5054    stage_lock_p99=66411
+  stage_scan_avg=1006    stage_scan_p50=992     stage_scan_p99=1817
+  stage_publish_avg=9295 stage_publish_p50=9257 stage_publish_p99=10405
+  stage_epoch_avg=17570  stage_epoch_p50=17814  stage_epoch_p99=23497
+  stage_unlock_avg=1517  stage_unlock_p50=1439  stage_unlock_p99=2568
+  stage_total_avg=36300  stage_total_p50=34479  stage_total_p99=96050
+  trans_agg_thpt=198583
+```
+
+**Decomp pass: workload F T=4 cache=on**
+```
+DECOMP_A threads=4 num_hosts=2 cache=1 ops=66525
+  stage_lock_avg=6456    stage_publish_avg=9290 stage_epoch_avg=17493
+  stage_total_avg=35864
+```
+
+### Per-stage breakdown (workload A T=4 cache=on, all in µs)
+
+| stage              | A meaning           | avg µs | p50 µs | p99 µs | % of total avg |
+|--------------------|---------------------|-------:|-------:|-------:|---------------:|
+| `stage_lock`       | S1 lock_acquire     |   6.87 |   5.05 |  66.41 |          18.9 % |
+| `stage_scan`       | S2 local_apply      |   1.01 |   0.99 |   1.82 |           2.8 % |
+| `stage_publish`    | **S3 broadcast**    |   9.30 |   9.26 |  10.41 |          25.6 % |
+| `stage_epoch`      | **S4 ack_wait**     |  17.57 |  17.81 |  23.50 |        **48.4 %** |
+| `stage_unlock`     | S5 epoch+release+unlock |  1.52 |   1.44 |   2.57 |           4.2 % |
+| **stage_total**    | end-to-end          |  36.30 |  34.48 |  96.05 |        100.0 % |
+
+### Phase 4 GO/NO-GO — empirically confirmed
+
+- **S3 broadcast + S4 ack_wait = 9.30 + 17.57 = 26.87 µs = 74.0%
+  of total write-path latency** at workload A T=4 cache=on (just 3
+  cross-host peers in 2-host config).
+- This crosses the §6.1 threshold (dominant stage(s) ≥ 50% of
+  total p50). Phase 4 = **GO** (empirically). Solution 1 is
+  exactly the right intervention: per-host MPSC ring kills S3's
+  N-cacheline cost; per-host ACK aggregation cuts S4 from N-1
+  ACKs to H-1 ACKs (= 1 ACK in 2-host).
+- The first-principles GO call from earlier in this doc is
+  fully validated. No revision needed.
+- p99 lock=66 µs >> avg=7 µs reflects LFM peer-scan tail
+  (a known C lesson — same primitive). Not the first-order
+  bottleneck; S4 ack_wait is.
+
+### Predicted vs measured (sanity check)
+
+| stage | predicted T=4 (this doc, top) | measured T=4 |
+|-------|-------------------------------|--------------|
+| S1    | 0.5–1 µs                      | 6.87 µs (medium contention even at T=4) |
+| S2    | 1–2 µs                        | 1.01 µs ✓ |
+| S3    | 0.3–1 µs                      | 9.30 µs (per-peer enqueue cost > predicted) |
+| S4    | 1–3 µs                        | 17.57 µs (CXL replicator polling cadence > predicted) |
+| S5    | 1–2 µs                        | 1.52 µs ✓ |
+| Total | 3–9 µs                        | 36.30 µs (4× over prediction; underestimate) |
+
+The S3 + S4 stages are 5–6× the prediction; this is **good news**
+for Solution 1's projected gain — the actual tax that aggregation
+removes is larger than the conservative pre-data estimate.
 
 ---
 

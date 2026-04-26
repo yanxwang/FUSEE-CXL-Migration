@@ -38,6 +38,17 @@ target_link_libraries(cxl_latency_decomp_C fusee_cxl_decomp)
 target_compile_options(cxl_latency_decomp_C
     PRIVATE -mclflushopt -O2 -DCONSENSUS_OPT=3)
 
+# iter-1A: per-stage A write-path latency decomposition runner. Same
+# harness shape as cxl_latency_decomp_C, built against CxlKvStoreA via
+# CONSENSUS_OPT=1. The DECOMP_REC calls live in src/cxl_kv_ops_A.cc
+# (added in iter-1A); the kDecompStage* enum slots are re-used with
+# A-specific semantics documented in
+# docs/iters/latency_decomp_A_iter1_20260426.md.
+add_executable(cxl_latency_decomp_A cxl_latency_decomp_A.cc)
+target_link_libraries(cxl_latency_decomp_A fusee_cxl_decomp)
+target_compile_options(cxl_latency_decomp_A
+    PRIVATE -mclflushopt -O2 -DCONSENSUS_OPT=1)
+
 # Unified micro-bench + YCSB runner: one binary per (protocol × variant).
 foreach(opt A B C)
     if(${opt} STREQUAL "A")

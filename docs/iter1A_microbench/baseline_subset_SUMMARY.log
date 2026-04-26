@@ -1,0 +1,87 @@
+# g3+g4 scaling sweep: threads x workloads x opts x cache
+# host0=g3 host1=g4 dev=/dev/dax0.0
+# threads=1 4 16 64 workloads=workloada workloadb workloadc workloadd workloadf opts=A cache=on off
+# num_buckets=65536 max_ops=200000 timeout=600
+# started=2026-04-26T02:21:30-05:00
+--- workloada_optA_t1_cacheon cookie=1777188090263617593 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=45665 trans_ops=200000 trans_wall_max=0.813s trans_agg_thpt=245879 w_avg_ns=13364 w_p50_ns=13354 w_p99_ns=16999 r_avg_ns=2759 r_p50_ns=3009 r_p99_ns=5265  # workloada_optA_t1_cacheon
+--- workloada_optA_t4_cacheon cookie=1777188095984723100 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=35477 trans_ops=200000 trans_wall_max=0.367s trans_agg_thpt=544992 w_avg_ns=25551 w_p50_ns=24047 w_p99_ns=73362 r_avg_ns=3447 r_p50_ns=4005 r_p99_ns=6636  # workloada_optA_t4_cacheon
+--- workloada_optA_t16_cacheon cookie=1777188102413759027 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=13397 trans_ops=200000 trans_wall_max=0.813s trans_agg_thpt=245996 w_avg_ns=181107 w_p50_ns=67306 w_p99_ns=660522 r_avg_ns=4130 r_p50_ns=4399 r_p99_ns=13384  # workloada_optA_t16_cacheon
+--- workloada_optA_t64_cacheon cookie=1777188113454621402 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=179 trans_ops=200000 trans_wall_max=34.276s trans_agg_thpt=5835 w_avg_ns=20655752 w_p50_ns=4017205 w_p99_ns=145679331 r_avg_ns=5211 r_p50_ns=4513 r_p99_ns=12865  # workloada_optA_t64_cacheon
+--- workloadb_optA_t1_cacheon cookie=1777188676724709134 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=66782 trans_ops=200000 trans_wall_max=0.150s trans_agg_thpt=1333893 w_avg_ns=12655 w_p50_ns=12766 w_p99_ns=16021 r_avg_ns=845 r_p50_ns=44 r_p99_ns=4860  # workloadb_optA_t1_cacheon
+--- workloadb_optA_t4_cacheon cookie=1777188681721185805 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=39406 trans_ops=200000 trans_wall_max=0.070s trans_agg_thpt=2846799 w_avg_ns=23365 w_p50_ns=22658 w_p99_ns=51905 r_avg_ns=1576 r_p50_ns=2280 r_p99_ns=5328  # workloadb_optA_t4_cacheon
+--- workloadb_optA_t16_cacheon cookie=1777188687715826486 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=14920 trans_ops=200000 trans_wall_max=0.110s trans_agg_thpt=1822518 w_avg_ns=140040 w_p50_ns=60129 w_p99_ns=738220 r_avg_ns=2243 r_p50_ns=2541 r_p99_ns=11565  # workloadb_optA_t16_cacheon
+--- workloadb_optA_t64_cacheon cookie=1777188697906794979 ---
+# FAIL workloadb_optA_t64_cacheon (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadb_optA_t64_cacheon/)
+--- workloadc_optA_t1_cacheon cookie=1777189299736732754 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=69886 trans_ops=200000 trans_wall_max=0.064s trans_agg_thpt=3131647 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=582 r_p50_ns=43 r_p99_ns=4639  # workloadc_optA_t1_cacheon
+--- workloadc_optA_t4_cacheon cookie=1777189304575553894 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=41858 trans_ops=200000 trans_wall_max=0.028s trans_agg_thpt=7204287 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=1038 r_p50_ns=51 r_p99_ns=5164  # workloadc_optA_t4_cacheon
+--- workloadc_optA_t16_cacheon cookie=1777189310451707315 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=15219 trans_ops=200000 trans_wall_max=0.011s trans_agg_thpt=18076586 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=1666 r_p50_ns=116 r_p99_ns=5383  # workloadc_optA_t16_cacheon
+--- workloadc_optA_t64_cacheon cookie=1777189320466303637 ---
+# FAIL workloadc_optA_t64_cacheon (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadc_optA_t64_cacheon/)
+--- workloadd_optA_t1_cacheon cookie=1777189922301630825 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=67684 trans_ops=200000 trans_wall_max=0.133s trans_agg_thpt=1500410 w_avg_ns=12388 w_p50_ns=12495 w_p99_ns=15072 r_avg_ns=701 r_p50_ns=40 r_p99_ns=4661  # workloadd_optA_t1_cacheon
+--- workloadd_optA_t4_cacheon cookie=1777189927201891748 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=40294 trans_ops=200000 trans_wall_max=0.060s trans_agg_thpt=3340380 w_avg_ns=22731 w_p50_ns=22860 w_p99_ns=27388 r_avg_ns=1154 r_p50_ns=67 r_p99_ns=5228  # workloadd_optA_t4_cacheon
+--- workloadd_optA_t16_cacheon cookie=1777189933150200749 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=14622 trans_ops=200000 trans_wall_max=0.033s trans_agg_thpt=6096173 w_avg_ns=64995 w_p50_ns=65038 w_p99_ns=81575 r_avg_ns=1708 r_p50_ns=337 r_p99_ns=6121  # workloadd_optA_t16_cacheon
+--- workloadd_optA_t64_cacheon cookie=1777189943469603767 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=64 threads_eff=64 load_ops=100000 load_thpt=169 trans_ops=200000 trans_wall_max=0.771s trans_agg_thpt=259540 w_avg_ns=6524244 w_p50_ns=7957483 w_p99_ns=11913803 r_avg_ns=2670 r_p50_ns=2865 r_p99_ns=7485  # workloadd_optA_t64_cacheon
+--- workloadf_optA_t1_cacheon cookie=1777190537233293888 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=52778 trans_ops=200000 trans_wall_max=0.580s trans_agg_thpt=344997 w_avg_ns=12763 w_p50_ns=12981 w_p99_ns=16256 r_avg_ns=2125 r_p50_ns=2598 r_p99_ns=5059  # workloadf_optA_t1_cacheon
+--- workloadf_optA_t4_cacheon cookie=1777190543197635935 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=37023 trans_ops=200000 trans_wall_max=0.265s trans_agg_thpt=753567 w_avg_ns=24849 w_p50_ns=23681 w_p99_ns=66060 r_avg_ns=3056 r_p50_ns=2877 r_p99_ns=6629  # workloadf_optA_t4_cacheon
+--- workloadf_optA_t16_cacheon cookie=1777190550036033801 ---
+YCSB opt=A cache=1 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=13804 trans_ops=200000 trans_wall_max=0.542s trans_agg_thpt=368997 w_avg_ns=164498 w_p50_ns=65011 w_p99_ns=663427 r_avg_ns=3546 r_p50_ns=3103 r_p99_ns=12994  # workloadf_optA_t16_cacheon
+--- workloadf_optA_t64_cacheon cookie=1777190561495414117 ---
+# FAIL workloadf_optA_t64_cacheon (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadf_optA_t64_cacheon/)
+--- workloada_optA_t1_cacheoff cookie=1777191163365130743 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=44650 trans_ops=200000 trans_wall_max=0.856s trans_agg_thpt=233638 w_avg_ns=13208 w_p50_ns=13626 w_p99_ns=16957 r_avg_ns=3661 r_p50_ns=4201 r_p99_ns=5460  # workloada_optA_t1_cacheoff
+--- workloada_optA_t4_cacheoff cookie=1777191169078364773 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=34397 trans_ops=200000 trans_wall_max=0.376s trans_agg_thpt=532380 w_avg_ns=25415 w_p50_ns=23914 w_p99_ns=71093 r_avg_ns=3800 r_p50_ns=4296 r_p99_ns=6796  # workloada_optA_t4_cacheoff
+--- workloada_optA_t16_cacheoff cookie=1777191175539887388 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=13368 trans_ops=200000 trans_wall_max=0.842s trans_agg_thpt=237566 w_avg_ns=176125 w_p50_ns=66808 w_p99_ns=651771 r_avg_ns=4154 r_p50_ns=4311 r_p99_ns=13040  # workloada_optA_t16_cacheoff
+--- workloada_optA_t64_cacheoff cookie=1777191186605217327 ---
+# FAIL workloada_optA_t64_cacheoff (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloada_optA_t64_cacheoff/)
+--- workloadb_optA_t1_cacheoff cookie=1777191788433157092 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=58421 trans_ops=200000 trans_wall_max=0.340s trans_agg_thpt=588907 w_avg_ns=12836 w_p50_ns=12811 w_p99_ns=15445 r_avg_ns=2876 r_p50_ns=2787 r_p99_ns=4886  # workloadb_optA_t1_cacheoff
+--- workloadb_optA_t4_cacheoff cookie=1777191793516524252 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=37606 trans_ops=200000 trans_wall_max=0.103s trans_agg_thpt=1946676 w_avg_ns=22901 w_p50_ns=22652 w_p99_ns=40594 r_avg_ns=2956 r_p50_ns=2826 r_p99_ns=6083  # workloadb_optA_t4_cacheoff
+--- workloadb_optA_t16_cacheoff cookie=1777191799646491985 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=15068 trans_ops=200000 trans_wall_max=0.104s trans_agg_thpt=1927429 w_avg_ns=124974 w_p50_ns=59297 w_p99_ns=970927 r_avg_ns=3087 r_p50_ns=2770 r_p99_ns=9020  # workloadb_optA_t16_cacheoff
+--- workloadb_optA_t64_cacheoff cookie=1777191809751877076 ---
+# FAIL workloadb_optA_t64_cacheoff (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadb_optA_t64_cacheoff/)
+--- workloadc_optA_t1_cacheoff cookie=1777192411553163841 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=60706 trans_ops=200000 trans_wall_max=0.287s trans_agg_thpt=696666 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2714 r_p50_ns=2823 r_p99_ns=4469  # workloadc_optA_t1_cacheoff
+--- workloadc_optA_t4_cacheoff cookie=1777192416561029422 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=38948 trans_ops=200000 trans_wall_max=0.078s trans_agg_thpt=2573470 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2901 r_p50_ns=2802 r_p99_ns=6443  # workloadc_optA_t4_cacheoff
+--- workloadc_optA_t16_cacheoff cookie=1777192422588590982 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=15261 trans_ops=200000 trans_wall_max=0.022s trans_agg_thpt=9218144 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3231 r_p50_ns=2886 r_p99_ns=7485  # workloadc_optA_t16_cacheoff
+--- workloadc_optA_t64_cacheoff cookie=1777192432607450692 ---
+# FAIL workloadc_optA_t64_cacheoff (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadc_optA_t64_cacheoff/)
+--- workloadd_optA_t1_cacheoff cookie=1777193034444497482 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=59318 trans_ops=200000 trans_wall_max=0.334s trans_agg_thpt=598952 w_avg_ns=12375 w_p50_ns=12586 w_p99_ns=15138 r_avg_ns=2779 r_p50_ns=2697 r_p99_ns=4829  # workloadd_optA_t1_cacheoff
+--- workloadd_optA_t4_cacheoff cookie=1777193039498529794 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=41509 trans_ops=200000 trans_wall_max=0.101s trans_agg_thpt=1985747 w_avg_ns=22350 w_p50_ns=22316 w_p99_ns=27203 r_avg_ns=2874 r_p50_ns=2744 r_p99_ns=5164  # workloadd_optA_t4_cacheoff
+--- workloadd_optA_t16_cacheoff cookie=1777193045347565387 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=14853 trans_ops=200000 trans_wall_max=0.040s trans_agg_thpt=4988431 w_avg_ns=63179 w_p50_ns=63152 w_p99_ns=79053 r_avg_ns=3019 r_p50_ns=2708 r_p99_ns=6023  # workloadd_optA_t16_cacheoff
+--- workloadd_optA_t64_cacheoff cookie=1777193055539900044 ---
+# FAIL workloadd_optA_t64_cacheoff (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadd_optA_t64_cacheoff/)
+--- workloadf_optA_t1_cacheoff cookie=1777193657371356839 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=1 threads_eff=1 load_ops=100000 load_thpt=50334 trans_ops=200000 trans_wall_max=0.637s trans_agg_thpt=313889 w_avg_ns=12737 w_p50_ns=13112 w_p99_ns=15802 r_avg_ns=3050 r_p50_ns=2685 r_p99_ns=4969  # workloadf_optA_t1_cacheoff
+--- workloadf_optA_t4_cacheoff cookie=1777193663410270322 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=4 threads_eff=4 load_ops=100000 load_thpt=37364 trans_ops=200000 trans_wall_max=0.273s trans_agg_thpt=733093 w_avg_ns=24676 w_p50_ns=23496 w_p99_ns=60068 r_avg_ns=3382 r_p50_ns=2872 r_p99_ns=6465  # workloadf_optA_t4_cacheoff
+--- workloadf_optA_t16_cacheoff cookie=1777193670243427887 ---
+YCSB opt=A cache=0 value_size=8 num_flushers=1 num_hosts=2 threads=16 threads_eff=16 load_ops=100000 load_thpt=13952 trans_ops=200000 trans_wall_max=0.510s trans_agg_thpt=392439 w_avg_ns=179778 w_p50_ns=64893 w_p99_ns=647672 r_avg_ns=3783 r_p50_ns=3166 r_p99_ns=13115  # workloadf_optA_t16_cacheoff
+--- workloadf_optA_t64_cacheoff cookie=1777193681580766605 ---
+# FAIL workloadf_optA_t64_cacheoff (see /home/yanwang/FUSEE/logs/g34_iter1A_baseline_A_20260426_022130/workloadf_optA_t64_cacheoff/)
+# finished=2026-04-26T04:04:43-05:00
+# ok=32 fail=8

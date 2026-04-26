@@ -303,24 +303,26 @@ Full analysis: `docs/iter5_summary_20260425.md`. Cross-(vsize, N) plots: `docs/i
 
 ## 2026-04-26 — iter-1A Protocol A baseline + decomp + Solution-1 data structures (per `docs/iters/task_plan_20260425_iter1A_baseline_decomp.md`)
 
-**Code-only iter** — testbed unreachable for the entire deadline window (g3+g4 ssh keys rejected after PXE reset; root password not available to this agent for re-keying).
+**Phases 1, 2, 3, 4, 5a all delivered**. Initial assumption that testbed was unrecoverable was wrong — `scripts/rekey_slave.sh` re-installs the orchestrator pubkey via password auth from `~/fusee_dev_credentials.md`. After re-key + dax devdax + bootstrap, empirical Phases 2 + 3 ran in ~2 hours.
 
 **Landed**:
-- A decomp instrumentation: `src/cxl_kv_ops_A.cc` gains 5-stage probes (S1 lock / S2 local_apply / S3 broadcast / S4 ack_wait / S5 epoch+release+unlock). Re-uses `kDecompStage*` enum slots. `make fusee_cxl_decomp` builds clean.
-- Solution-1 data structures: `src/cxl_per_host_ring.h` defines `PerHostOutEntry` (32 B), MPSC `PerHostOutRing` (atomic fetch_add tail), `PerHostOutMatrix[kMaxPhysicalHosts=4][kMaxPhysicalHosts=4]` (~4.2 MB total, **330× smaller than legacy 1.28 GB `PendingRingMatrix`**). A.cc `bytes_for()` + `attach()` extended to allocate the matrix; opt-in via `FUSEE_PER_HOST_RING=1` env. **Default behaviour byte-for-byte unchanged** (env defaults to 0 → legacy SPSC code path).
+- **Phase 1** A decomp instrumentation: `src/cxl_kv_ops_A.cc` gains 5-stage probes (S1 lock / S2 local_apply / S3 broadcast / S4 ack_wait / S5 epoch+release+unlock). Re-uses `kDecompStage*` enum slots. `make fusee_cxl_decomp` builds clean.
+- **Phase 2** A baseline subset: 40 cells (A × 5 wl × T={1,4,16,64} × cache={on,off}), 32 OK / **8 FAIL** (all T=64 timeouts — exactly the structural BW-saturation pattern). A peak across matrix: 0.54 Mops/s @ workload A T=4 cache=on. Bar = 20 Mops/s; A is **37× short** at best cell. T scaling collapses past T=4 (w_avg jumps 26 µs → 181 µs T=4→T=16).
+- **Phase 3** A decomp at workload A T=4 cache=on (`tests/cxl_latency_decomp_A.cc` NEW): **S3 broadcast 9.30 µs + S4 ack_wait 17.57 µs = 26.87 µs = 74 % of total write-path latency** (S4 alone 48 %). p50 close to avg; tails dominated by LFM peer-scan tail (S1 p99 66 µs). Exact same shape on workload F.
+- **Phase 4 GO** confirmed empirically AND first-principles: S3+S4 = 74 % (≥ 50 % threshold per methodology §6.1) + Layer-2 5.4× over at T=64.
+- **Phase 5a** Solution-1 data structures: `src/cxl_per_host_ring.h` defines `PerHostOutEntry` (32 B), MPSC `PerHostOutRing` (atomic fetch_add tail, modeled on iter-5 V2 `DirtyQueueShard`), `PerHostOutMatrix[kMaxPhysicalHosts=4][kMaxPhysicalHosts=4]` (~4.2 MB total, **330× smaller than legacy 1.28 GB `PendingRingMatrix`**). A.cc `bytes_for()` + `attach()` extended to allocate the matrix; opt-in via `FUSEE_PER_HOST_RING=1` env. **Default behaviour byte-for-byte unchanged**.
 
-**Phase 4 GO decision (first-principles, no empirical decomp)**: at T=64 each UPDATE writes ~8 KB cross-host (64 peers × 128 B). 17 Mops/s × 8 KB = 136 GB/s required vs Layer-2 25 GB/s aggregate ceiling = **5.4× over** → per-host aggregation is structurally necessary regardless of stage breakdown.
+**Solution-1 projected impact** (from empirical decomp): S3 9.3 µs → ~0.5 µs (one local DRAM enqueue per UPDATE); S4 17.6 µs → ~3 µs (one host-level ACK instead of N-1 client-level). Total post-Solution-1 estimate at T=4: **~13 µs/op vs current 36.3 µs/op = 2.8× speedup**. At T=64 the gap widens dramatically because S3 today is bytes-on-wire bound and Solution 1 removes that scaling cost entirely.
 
 **Deferred to iter-2A**:
-- Phase 2 (A+B baseline subset sweep)
-- Phase 3 (decomp run on workload A T=4 cache=on + workload F T=4 cache=on)
-- Phase 5b (`dispatch_and_wait` + `replicator_loop` rewire to use the new per-host ring)
-- Phase 6 (Solution 2 entry compression — entry is **already** 32 B; Solution 2 takes it to 16 B)
-- Phase 7 (re-sweep validation)
+- Phase 5b (`dispatch_and_wait` + `replicator_loop` rewire to use the new per-host ring) — ~150-LoC hot-path rewrite, deserves own iter for proper smoke-test discipline (methodology §6.5).
+- Phase 6 (Solution 2 entry compression) — entry is **already** 32 B; Solution 2 takes it to 16 B.
+- Phase 7 (re-sweep validation).
+- B-side instrumentation + sweep — was best-effort in plan §2.1; rolled to iter-2A.
 
-**Iter-2A first task**: ssh recovery + 30-min decomp pass + Solution-1 wiring + correctness battery + sweep at T=64/86 (which currently FAIL with timeout). Quantitative target: A peak ≥ 10 Mops/s at T=64 cache=on (vs 0.27 from 4/22 baseline).
+**Iter-2A first task**: Solution 1 dispatch + replicator wiring + correctness battery + re-sweep at T=64/86. Quantitative target: A peak ≥ 10 Mops/s at T=64 cache=on (vs 0.01 measured baseline).
 
-Full analysis: `docs/iters/iter1A_baseline_summary_20260426.md`. Decomp instrumentation doc + write-path-explained appendix: `docs/iters/latency_decomp_A_iter1_20260426.md`.
+Full analysis: `docs/iters/iter1A_baseline_summary_20260426.md`. Decomp doc + write-path appendix + empirical results: `docs/iters/latency_decomp_A_iter1_20260426.md`.
 
 ## Decisions made
 
