@@ -40,19 +40,24 @@ namespace fusee {
 constexpr int kMaxPhysicalHosts = 4;
 constexpr int kPerHostRingDepth = 8192;  // power-of-two
 
-// 32-B per entry (half-cacheline); pre-compressed shape for Solution 2
-// follow-up. Field semantics mirror PendingRingEntry::Payload but keep
-// only what the receiver needs to apply the update.
-struct PerHostOutEntry {
+// 64-B per entry (one full cacheline). Sub-cacheline sharing across
+// hosts on coherence-less CXL produces false-sharing torn-write
+// scenarios — same lesson as PendingRingEntry's 2-cacheline split
+// (see iter-5 cxl_pending_ring.h note from 2026-04-22). Each entry
+// owns its own cacheline so producer's clflushopt and receiver's
+// clflushopt can proceed independently. Solution-2 byte-compression
+// (plan §2.1) targets the *payload* sized inside this 64 B cell, not
+// the cacheline alignment.
+struct alignas(64) PerHostOutEntry {
   uint32_t bucket_idx;   // u32 enough for num_buckets ≤ 2^32
   uint16_t slot_idx;
   uint16_t src_worker;   // for ACK routing back to the originating client
   uint64_t new_value;
   uint64_t op_id;        // 0 = free; written last (release fence)
-  uint64_t _pad;         // pad to 32 B
+  uint64_t _pad[5];      // pad to 64 B (full cacheline)
 };
-static_assert(sizeof(PerHostOutEntry) == 32,
-              "PerHostOutEntry packed to 32 bytes");
+static_assert(sizeof(PerHostOutEntry) == 64,
+              "PerHostOutEntry must occupy one full cacheline");
 
 // Per-(src_host, dst_host) MPSC ring. Producers fetch_add(tail) atomically;
 // consumer (replicator on dst_host) reads sequentially via head.

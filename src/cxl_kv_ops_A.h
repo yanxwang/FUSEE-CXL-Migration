@@ -121,6 +121,13 @@ class CxlKvStoreA {
   // docs/iters/iter1A_baseline_summary_<date>.md §"Phase 5 status".
   PerHostOutMatrix *per_host_rings_ = nullptr;
   bool              per_host_rings_enabled_ = false;
+  // iter-2A Solution-1 wire: derived from FUSEE_NUM_HOSTS env at attach
+  // when per_host_rings_enabled_ is true. Indexes the [phys_hosts_pr_]
+  // dimension of PerHostOutMatrix.
+  int  phys_hosts_pr_         = 1;
+  int  my_phys_host_pr_       = 0;
+  int  clients_per_host_pr_   = 1;
+  int  my_cid_in_host_pr_     = 0;
 
   // Per-dst producer tail mirror: single-producer cursor lives on src side so
   // we do not need atomic-fetch-add on CXL.

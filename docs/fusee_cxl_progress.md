@@ -324,6 +324,27 @@ Full analysis: `docs/iter5_summary_20260425.md`. Cross-(vsize, N) plots: `docs/i
 
 Full analysis: `docs/iters/iter1A_baseline_summary_20260426.md`. Decomp doc + write-path appendix + empirical results: `docs/iters/latency_decomp_A_iter1_20260426.md`.
 
+## 2026-04-26 — iter-2A Solution-1 wire-up (per `docs/iters/task_plan_20260426_iter2A_perhost_wire_compress.md`)
+
+**Partial iter (deadline-compressed to 7h45min window)**. Phases 2/3/4/5/6/7/8 explicitly deferred to iter-3A (see Q-ε descope ladder).
+
+**Phase 1 (A dispatch + replicator wire)**: ✅ landed. When `FUSEE_PER_HOST_RING=1` env is set, `dispatch_and_wait()` enqueues one `PerHostOutEntry` per cross-host dst (instead of N-1 per-client `PendingRingEntry`s); waits for one host-level ACK. `replicator_loop()` on each host's primary client (cid=0) drains the per-host MPSC ring, fans out invalidation to local clients via `DramInvalQueue`, publishes `ack_seq`. Default behaviour byte-for-byte unchanged (env defaults to 0). Also: `PerHostOutEntry` repacked 32 B → 64 B (full cacheline) — coherence-less cross-host CXL produces false-sharing torn-write under sub-cacheline shared entries, same lesson as `PendingRingEntry`'s 2-cacheline split.
+
+**Phase 1 perf** (T=1 cells, ±25 % noise envelope):
+  - workload A: 0.35 Mops/s vs iter-1A 0.25 (+40 %)
+  - workload B: 1.30 vs 1.33 (−2 %)
+  - workload D: 1.15 vs 1.50 (−23 %)
+
+**Phase 1 perf at T ≥ 4**: **REGRESSION**. Single-receiver-per-host fan-out is the new bottleneck: at T=4 with 4 producers per host, the one receiver (cid=0) processes entries serially with N-1 = 3 DRAM-queue fan-out pushes per cross-host UPDATE. Producer wait extends to ~300 µs (10 × legacy). T=16/64 timeout.
+
+**Hypothesis revision** (methodology §1.3): Solution-1's cross-host BW reduction is **not** the binding constraint at T ≥ 4 on this testbed. The new dominant cost is **single-receiver fan-out serialisation** — exactly the iter-2A plan §8.a candidate. iter-3A pivots to **multi-replicator V2** (mirror iter-5 multi-flusher V2 `DirtyQueueShard` pattern): N replicators per host partitioning the per-host ring drain. Quantitative target: A T=4 ≥ 5 Mops/s (vs current 0.019 PHR=1, 0.54 legacy).
+
+**Lessons added to methodology corpus** (commit message + summary):
+- Cross-host CXL ring entries MUST be cacheline-aligned (no sub-cacheline sharing) under coherence-less inter-host fabric.
+- "Aggregate-before-CXL" pattern (§9.1) needs multi-consumer scaling when N producers per host > 1, otherwise the receiver becomes the new bottleneck — design fan-out for N consumers from day one.
+
+Full analysis: `docs/iters/iter2A_summary_20260426.md`.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

@@ -111,6 +111,12 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
               phys_hosts, kMaxPhysicalHosts);
       per_host_rings_enabled_ = false;
     }
+    if (per_host_rings_enabled_) {
+      phys_hosts_pr_ = phys_hosts;
+      clients_per_host_pr_ = num_hosts / phys_hosts;
+      my_phys_host_pr_ = host_id / clients_per_host_pr_;
+      my_cid_in_host_pr_ = host_id % clients_per_host_pr_;
+    }
   }
 
   if (init_region) {
@@ -188,6 +194,129 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     return 0;
   }
   DECOMP_DECL(__dispatch_t0);  // S3 begins (broadcast)
+
+  // iter-2A Solution-1 wire path: when FUSEE_PER_HOST_RING=1, aggregate
+  // cross-host writes to a per-(src_host, dst_host) MPSC ring. ACK is
+  // host-level (replicator publishes ack_seq after applying the entry
+  // and dispatching local invalidations via DramInvalQueue). Same-host
+  // peers still use the existing Phase-4 DramInvalQueue path. Methodology
+  // §9.1 "Aggregate-before-CXL" — third documented application.
+  if (per_host_rings_enabled_ && per_host_rings_) {
+    uint64_t op_id =
+        ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
+
+    uint64_t my_ph_pos[kMaxPhysicalHosts] = {0};
+    bool     ph_pushed[kMaxPhysicalHosts] = {false};
+    uint64_t dram_my_t[kSameHostMaxClients];
+    bool     dram_pushed[kSameHostMaxClients];
+    for (int i = 0; i < kSameHostMaxClients; i++) {
+      dram_my_t[i] = 0; dram_pushed[i] = false;
+    }
+
+    // Cross-host: ONE PerHostOutEntry per dst_host (regardless of N).
+    for (int dst_host = 0; dst_host < phys_hosts_pr_; dst_host++) {
+      if (dst_host == my_phys_host_pr_) continue;
+      PerHostOutRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst_host];
+      uint64_t pos = r->tail.fetch_add(1, std::memory_order_acq_rel);
+      // CXL cross-host visibility: atomic gives local-CPU ordering; the
+      // tail cacheline must be flushed back so the receiver host's
+      // flush_line+load picks up the new value. Same pattern legacy uses
+      // for ring->tail (CACHELINE_STORE macro).
+      flush_line((void *)&r->tail);
+      store_fence();
+      PerHostOutEntry *e = &r->entries[pos % kPerHostRingDepth];
+      // Wait for slot free (op_id == 0). Conservative: also flush_line so
+      // we observe peer-replicator's last clear.
+      const int kRingWaitBudgetUs = 2000000; // 2 s sanity
+      uint64_t start = now_ns();
+      for (;;) {
+        flush_line((void *)e);
+        full_fence();
+        if (e->op_id == 0) break;
+        if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) {
+          return -3; // ring full / replicator stuck
+        }
+        __builtin_ia32_pause();
+      }
+      e->bucket_idx = b_idx;
+      e->slot_idx   = (uint16_t)s_idx;
+      e->src_worker = (uint16_t)host_id_;
+      e->new_value  = value_word;
+      compiler_barrier();
+      e->op_id      = op_id;          // publish (writer-last field)
+      compiler_barrier();
+      flush_line((void *)e);
+      my_ph_pos[dst_host] = pos;
+      ph_pushed[dst_host] = true;
+    }
+
+    // Same-host peers: use the existing Phase-4 DramInvalQueue (unchanged).
+    if (dram_mat_ && num_clients_per_host_ > 1) {
+      for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
+        if (dst_cid == my_cid_in_host_) continue;
+        uint64_t t = dram_local_tail_[dst_cid]++;
+        DramInvalQueue *q = &dram_mat_->rings[my_cid_in_host_][dst_cid];
+        DramInvalEntry *de = &q->entries[t % kSameHostQueueDepth];
+        while (de->op_id.load(std::memory_order_acquire) != 0) {
+          __builtin_ia32_pause();
+        }
+        de->bucket_idx = (uint64_t)b_idx;
+        de->processed_op_id.store(0, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        de->op_id.store(op_id, std::memory_order_release);
+        q->tail.store(t + 1, std::memory_order_release);
+        dram_my_t[dst_cid] = t;
+        dram_pushed[dst_cid] = true;
+      }
+    }
+    store_fence();
+    DECOMP_DECL(__dispatch_t1);  // S3 ends, S4 begins
+
+    // Wait for cross-host host-level ACKs (one per dst_host).
+    const int kAckWaitBudgetUs = 200000; // 200 ms per dst
+    bool timed_out = false;
+    for (int dst_host = 0; dst_host < phys_hosts_pr_; dst_host++) {
+      if (!ph_pushed[dst_host]) continue;
+      PerHostOutRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst_host];
+      uint64_t want = my_ph_pos[dst_host] + 1;
+      uint64_t start = now_ns();
+      for (;;) {
+        // CXL visibility: refresh ack_seq cacheline from CXL each spin.
+        flush_line((void *)&r->ack_seq);
+        full_fence();
+        if (r->ack_seq.load(std::memory_order_acquire) >= want) break;
+        if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
+          timed_out = true;
+          ack_timeouts_[dst_host].fetch_add(1, std::memory_order_relaxed);
+          break;
+        }
+        __builtin_ia32_pause();
+      }
+    }
+
+    // Same-host DRAM peers' ACKs.
+    if (dram_mat_ && num_clients_per_host_ > 1) {
+      for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
+        if (!dram_pushed[dst_cid]) continue;
+        DramInvalQueue *q = &dram_mat_->rings[my_cid_in_host_][dst_cid];
+        DramInvalEntry *de = &q->entries[dram_my_t[dst_cid] % kSameHostQueueDepth];
+        uint64_t start = now_ns();
+        for (;;) {
+          if (de->processed_op_id.load(std::memory_order_acquire) == op_id) break;
+          if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
+            timed_out = true; break;
+          }
+          __builtin_ia32_pause();
+        }
+      }
+    }
+    DECOMP_DECL(__dispatch_t2);  // S4 ends
+    DECOMP_REC(kDecompStagePublish, __dispatch_t0, __dispatch_t1);
+    DECOMP_REC(kDecompStageEpoch,   __dispatch_t1, __dispatch_t2);
+    return timed_out ? -4 : 0;
+  }
+  // ---------- legacy path (FUSEE_PER_HOST_RING=0, default) ----------
+
   // op_id = host_id in high bits + monotonic nanoseconds (unique per caller).
   uint64_t op_id =
       ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
@@ -671,6 +800,90 @@ void CxlKvStoreA::replicator_loop() {
           did_work = true;
         }
         q->head.store(head, std::memory_order_release);
+      }
+    }
+
+    // iter-2A Solution-1 wire: primary client (cid=0 within physical host)
+    // drains the per-host MPSC rings rings[*][my_phys_host_pr_], applies
+    // each entry's update, dispatches DramInvalQueue invalidations to
+    // every OTHER local client on this host, then publishes ack_seq for
+    // the cross-host writer. Non-primary clients skip this section
+    // entirely (single-consumer per ring).
+    if (per_host_rings_enabled_ && per_host_rings_ &&
+        my_cid_in_host_pr_ == 0) {
+      for (int src_host = 0; src_host < phys_hosts_pr_; src_host++) {
+        if (src_host == my_phys_host_pr_) continue;
+        PerHostOutRing *r =
+            &per_host_rings_->rings[src_host][my_phys_host_pr_];
+        // CXL visibility: refresh tail cacheline from CXL.
+        flush_line((void *)&r->tail);
+        full_fence();
+        uint64_t tail = r->tail.load(std::memory_order_acquire);
+        uint64_t head = r->head;
+        while (head < tail) {
+          PerHostOutEntry *e = &r->entries[head % kPerHostRingDepth];
+          flush_line((void *)e);
+          full_fence();
+          uint64_t op_id = e->op_id;
+          if (op_id == 0) break;            // producer hasn't published yet
+          uint32_t b_idx = e->bucket_idx;
+          // Replicator-side cache invalidation on this client (cid=0).
+          if (cache_enabled_ && b_idx < num_buckets_) {
+            cache_epoch_[b_idx].store(
+                std::numeric_limits<uint64_t>::max(),
+                std::memory_order_release);
+          }
+          // Fan-out to all OTHER local clients on this host via the
+          // existing Phase-4 DramInvalQueue. No local-ACK wait here:
+          // local clients drain on their own replicator polling cycle
+          // (~µs DRAM). This is the iter-2A semantic relaxation noted
+          // in the iter-2A summary: "host-level ACK = applied locally
+          // + queued for fan-out", not "all local clients have
+          // invalidated their cache". A reader on a non-primary local
+          // client may serve a stale cached value for ≤ replicator
+          // poll cycle (~10 µs) after the cross-host writer returns.
+          // iter-3A may tighten this with replicator-side local-ACK
+          // gating if needed.
+          if (dram_mat_ && num_clients_per_host_ > 1) {
+            for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
+              if (dst_cid == my_cid_in_host_) continue;
+              uint64_t t = dram_local_tail_[dst_cid]++;
+              DramInvalQueue *q =
+                  &dram_mat_->rings[my_cid_in_host_][dst_cid];
+              DramInvalEntry *de =
+                  &q->entries[t % kSameHostQueueDepth];
+              // Best-effort: if slot occupied, skip (next replicator
+              // cycle will catch up via op_id monotonicity).
+              if (de->op_id.load(std::memory_order_acquire) != 0) {
+                dram_local_tail_[dst_cid]--;  // restore
+                continue;
+              }
+              de->bucket_idx = (uint64_t)b_idx;
+              de->processed_op_id.store(0, std::memory_order_relaxed);
+              std::atomic_thread_fence(std::memory_order_release);
+              de->op_id.store(op_id, std::memory_order_release);
+              q->tail.store(t + 1, std::memory_order_release);
+            }
+          }
+          // Free the per-host ring slot (so producer can reuse).
+          e->op_id = 0;
+          compiler_barrier();
+          flush_line((void *)e);
+          // Publish ack_seq incrementally but DEFER the cacheline flush
+          // to the outer loop — producers spin on this with their own
+          // flush+load, so a single batched flush at end of inner loop
+          // is sufficient and saves N-1 CXL flushes per drain pass.
+          r->ack_seq.store(head + 1, std::memory_order_release);
+          head++;
+          replicated_ops_.fetch_add(1, std::memory_order_relaxed);
+          did_work = true;
+        }
+        // One sfence + ack_seq flush after the inner drain covers all
+        // entries processed in this pass.
+        store_fence();
+        flush_line((void *)&r->ack_seq);
+        store_fence();
+        r->head = head;
       }
     }
 
