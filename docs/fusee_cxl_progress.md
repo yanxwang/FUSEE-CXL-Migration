@@ -301,6 +301,27 @@ iter-5 split (Q1): microbenches + multi-flusher V2; value-cache deferred to iter
 
 Full analysis: `docs/iter5_summary_20260425.md`. Cross-(vsize, N) plots: `docs/iter5_kv_n_compare/` (5 heatmaps + 15 N-line plots + 5 peak bars). M1 writeup: `docs/iter5_microbench/m1_dualhost_bw.md`. Design doc: `docs/iter5_multiflusher_design.md`.
 
+## 2026-04-26 — iter-1A Protocol A baseline + decomp + Solution-1 data structures (per `docs/iters/task_plan_20260425_iter1A_baseline_decomp.md`)
+
+**Code-only iter** — testbed unreachable for the entire deadline window (g3+g4 ssh keys rejected after PXE reset; root password not available to this agent for re-keying).
+
+**Landed**:
+- A decomp instrumentation: `src/cxl_kv_ops_A.cc` gains 5-stage probes (S1 lock / S2 local_apply / S3 broadcast / S4 ack_wait / S5 epoch+release+unlock). Re-uses `kDecompStage*` enum slots. `make fusee_cxl_decomp` builds clean.
+- Solution-1 data structures: `src/cxl_per_host_ring.h` defines `PerHostOutEntry` (32 B), MPSC `PerHostOutRing` (atomic fetch_add tail), `PerHostOutMatrix[kMaxPhysicalHosts=4][kMaxPhysicalHosts=4]` (~4.2 MB total, **330× smaller than legacy 1.28 GB `PendingRingMatrix`**). A.cc `bytes_for()` + `attach()` extended to allocate the matrix; opt-in via `FUSEE_PER_HOST_RING=1` env. **Default behaviour byte-for-byte unchanged** (env defaults to 0 → legacy SPSC code path).
+
+**Phase 4 GO decision (first-principles, no empirical decomp)**: at T=64 each UPDATE writes ~8 KB cross-host (64 peers × 128 B). 17 Mops/s × 8 KB = 136 GB/s required vs Layer-2 25 GB/s aggregate ceiling = **5.4× over** → per-host aggregation is structurally necessary regardless of stage breakdown.
+
+**Deferred to iter-2A**:
+- Phase 2 (A+B baseline subset sweep)
+- Phase 3 (decomp run on workload A T=4 cache=on + workload F T=4 cache=on)
+- Phase 5b (`dispatch_and_wait` + `replicator_loop` rewire to use the new per-host ring)
+- Phase 6 (Solution 2 entry compression — entry is **already** 32 B; Solution 2 takes it to 16 B)
+- Phase 7 (re-sweep validation)
+
+**Iter-2A first task**: ssh recovery + 30-min decomp pass + Solution-1 wiring + correctness battery + sweep at T=64/86 (which currently FAIL with timeout). Quantitative target: A peak ≥ 10 Mops/s at T=64 cache=on (vs 0.27 from 4/22 baseline).
+
+Full analysis: `docs/iters/iter1A_baseline_summary_20260426.md`. Decomp instrumentation doc + write-path-explained appendix: `docs/iters/latency_decomp_A_iter1_20260426.md`.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

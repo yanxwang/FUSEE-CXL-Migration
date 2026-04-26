@@ -22,6 +22,7 @@
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
 #include "cxl_pending_ring.h"
+#include "cxl_per_host_ring.h"
 #include "cxl_same_host_queue.h"
 
 #include <atomic>
@@ -111,6 +112,15 @@ class CxlKvStoreA {
   BucketLockTable   lock_table_;
   CxlKvBucket      *buckets_ = nullptr;
   PendingRingMatrix *rings_ = nullptr;
+
+  // iter-1A Solution 1 (data structures only — opt-in via
+  // FUSEE_PER_HOST_RING=1 env at attach). Producer-side enqueue and
+  // consumer-side replicator dispatch are NOT wired in this iter; the
+  // matrix attaches but stays unused unless a future iter rewires
+  // dispatch_and_wait + replicator_loop. See
+  // docs/iters/iter1A_baseline_summary_<date>.md §"Phase 5 status".
+  PerHostOutMatrix *per_host_rings_ = nullptr;
+  bool              per_host_rings_enabled_ = false;
 
   // Per-dst producer tail mirror: single-producer cursor lives on src side so
   // we do not need atomic-fetch-add on CXL.

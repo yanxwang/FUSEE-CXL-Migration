@@ -11,6 +11,32 @@ extern "C" {
 #include "common.h"
 }
 
+#include "cxl_latency_decomp_probe.h"
+
+// iter-1A: per-stage decomp for protocol A's write path. Reuses the C
+// enum slots (no enum widening), with this protocol-specific mapping:
+//   kDecompStageLock     S1 lock_acquire    BucketLockTable::lock returns
+//   kDecompStageScan     S2 local_apply     7-slot scan + slot write + flush
+//   kDecompStagePublish  S3 broadcast       enqueue to N-1 peers + sfence
+//   kDecompStageEpoch    S4 ack_wait        spin on N-1 ACKs
+//   kDecompStageUnlock   S5 epoch+release   bump_epoch + ring slot clear + unlock
+//   kDecompStageTotal    end-to-end
+// When -DFUSEE_LATENCY_DECOMP=0 (default), all macros expand to ((void)0).
+#if defined(FUSEE_LATENCY_DECOMP) && FUSEE_LATENCY_DECOMP
+#include <time.h>
+namespace {
+inline uint64_t decomp_now_ns_a() {
+  timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+} // namespace
+#define DECOMP_DECL(name) uint64_t name = decomp_now_ns_a()
+#define DECOMP_REC(stage, a, b) ::fusee::decomp_record(::fusee::stage, (b) - (a))
+#else
+#define DECOMP_DECL(name) ((void)0)
+#define DECOMP_REC(stage, a, b) ((void)0)
+#endif
+
 namespace fusee {
 
 constexpr size_t kHeaderBytes = 4096;
@@ -24,7 +50,10 @@ size_t CxlKvStoreA::bytes_for(uint32_t num_buckets) {
   size_t after_locks = align_up(kHeaderBytes + locks, 64);
   size_t buckets = sizeof(CxlKvBucket) * num_buckets;
   size_t after_buckets = align_up(after_locks + buckets, 64);
-  return after_buckets + pending_ring_matrix_bytes();
+  // iter-1A: always reserve PerHostOutMatrix region tail; the structure
+  // is small (~4 MB) and only consumed when FUSEE_PER_HOST_RING=1.
+  size_t after_pending = align_up(after_buckets + pending_ring_matrix_bytes(), 64);
+  return after_pending + per_host_out_matrix_bytes();
 }
 
 static inline uint64_t now_ns() {
@@ -57,6 +86,25 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
       align_up(after_locks + sizeof(CxlKvBucket) * num_buckets, 64);
   rings_ = reinterpret_cast<PendingRingMatrix *>(base + after_buckets);
 
+  // iter-1A Solution 1 data structure (opt-in via FUSEE_PER_HOST_RING=1).
+  // The matrix is allocated unconditionally so a future build can flip the
+  // env without re-attach; producer/consumer integration is NOT in this
+  // iter — see iter1A summary §"Phase 5 status" for what is + is not wired.
+  size_t after_pending =
+      align_up(after_buckets + pending_ring_matrix_bytes(), 64);
+  per_host_rings_ = reinterpret_cast<PerHostOutMatrix *>(base + after_pending);
+  {
+    const char *e = getenv("FUSEE_PER_HOST_RING");
+    per_host_rings_enabled_ = (e && e[0] == '1');
+    if (per_host_rings_enabled_ && num_hosts > kMaxPhysicalHosts) {
+      fprintf(stderr,
+              "FUSEE_PER_HOST_RING=1 requires num_hosts (%d) <= "
+              "kMaxPhysicalHosts (%d); falling back to legacy path\n",
+              num_hosts, kMaxPhysicalHosts);
+      per_host_rings_enabled_ = false;
+    }
+  }
+
   if (init_region) {
     for (uint32_t b = 0; b < num_buckets_; b++) {
       for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -68,6 +116,9 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
     // Zero the pending rings.
     std::memset(rings_, 0, pending_ring_matrix_bytes());
     flush_region(rings_, pending_ring_matrix_bytes());
+    // Zero the per-host out matrix.
+    std::memset(per_host_rings_, 0, per_host_out_matrix_bytes());
+    flush_region(per_host_rings_, per_host_out_matrix_bytes());
     store_fence();
   }
 
@@ -128,6 +179,7 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     (void)b_idx; (void)s_idx; (void)value_word;
     return 0;
   }
+  DECOMP_DECL(__dispatch_t0);  // S3 begins (broadcast)
   // op_id = host_id in high bits + monotonic nanoseconds (unique per caller).
   uint64_t op_id =
       ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
@@ -215,6 +267,7 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   // before we spin on ACK. Peers that poll tail first simply see op_id==0
   // and retry; this sfence bounds the window.
   store_fence();
+  DECOMP_DECL(__dispatch_t1);  // S3 ends, S4 begins (ack_wait)
 
   // Spin on processed_op_id == op_id only for SAME-GROUP peers. Under
   // FUSEE_A_GROUPS=1 (default), this is every peer (original all-sync
@@ -277,6 +330,9 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
   // DRAM slots: consumer clears op_id after processing; no writer-side
   // release needed.
 
+  DECOMP_DECL(__dispatch_t2);  // S4 ends (slot clear is part of S4)
+  DECOMP_REC(kDecompStagePublish, __dispatch_t0, __dispatch_t1);  // S3 broadcast
+  DECOMP_REC(kDecompStageEpoch,   __dispatch_t1, __dispatch_t2);  // S4 ack_wait
   return timed_out ? -4 : 0;
 }
 
@@ -287,7 +343,9 @@ int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
   }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
+  DECOMP_DECL(__dt0);
   lock_table_.lock(idx, host_id_, num_hosts_);
+  DECOMP_DECL(__dt1);
 
   CxlKvBucket *b = &buckets_[idx];
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) flush_line(&b->slots[s].key);
@@ -315,8 +373,10 @@ int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
   }
 
   publish_slot(&b->slots[empty_idx], key, value);
+  DECOMP_DECL(__dt2);
 
   int rc = dispatch_and_wait(idx, (uint32_t)empty_idx, value);
+  DECOMP_DECL(__dt4);
   // Bump the reader-visible epoch regardless so seqlock readers pick it up
   // even if replication ACK timed out (they still see the authoritative slot).
   bump_epoch(lock_table_.entry(idx));
@@ -326,6 +386,11 @@ int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
                             std::memory_order_release);
   }
   lock_table_.unlock(idx, host_id_);
+  DECOMP_DECL(__dt5);
+  DECOMP_REC(kDecompStageLock,    __dt0, __dt1);
+  DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+  DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+  DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
   return rc;
 }
 
@@ -336,7 +401,9 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
   }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
+  DECOMP_DECL(__dt0);
   lock_table_.lock(idx, host_id_, num_hosts_);
+  DECOMP_DECL(__dt1);
 
   CxlKvBucket *b = &buckets_[idx];
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) flush_line(&b->slots[s].key);
@@ -358,10 +425,13 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
 
   b->slots[match].value = value;
   flush_line(&b->slots[match].value);
+  DECOMP_DECL(__dt2);
   // 2b: drop intermediate sfence. dispatch_and_wait starts with a
   // full_fence'd slot-free spin and ends with one sfence before the ACK wait.
 
   int rc = dispatch_and_wait(idx, (uint32_t)match, value);
+  DECOMP_DECL(__dt4);  // dispatch_and_wait covers S3+S4 internally; we split
+                       // in the dispatch helper via __dt2..__dt4.
   bump_epoch(lock_table_.entry(idx));
   if (logged) oplog_->commit(log_idx);
   if (cache_enabled_) {
@@ -369,6 +439,13 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
                             std::memory_order_release);
   }
   lock_table_.unlock(idx, host_id_);
+  DECOMP_DECL(__dt5);
+  DECOMP_REC(kDecompStageLock,    __dt0, __dt1);  // S1 lock_acquire
+  DECOMP_REC(kDecompStageScan,    __dt1, __dt2);  // S2 local_apply
+  // S3 broadcast and S4 ack_wait are recorded inside dispatch_and_wait
+  // (split point passed via this call's elapsed time below).
+  DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);  // S5 epoch+release+unlock
+  DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);  // end-to-end
   return rc;
 }
 
