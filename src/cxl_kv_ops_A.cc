@@ -96,11 +96,19 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
   {
     const char *e = getenv("FUSEE_PER_HOST_RING");
     per_host_rings_enabled_ = (e && e[0] == '1');
-    if (per_host_rings_enabled_ && num_hosts > kMaxPhysicalHosts) {
+    // CxlKvStoreA::attach receives `num_hosts` = total_workers (per-client
+    // ring topology); the *physical* host count comes from the runner's
+    // FUSEE_NUM_HOSTS env. The PerHostOutMatrix is sized by physical hosts.
+    int phys_hosts = 1;
+    if (const char *nh = getenv("FUSEE_NUM_HOSTS")) {
+      int v = atoi(nh);
+      if (v >= 1) phys_hosts = v;
+    }
+    if (per_host_rings_enabled_ && phys_hosts > kMaxPhysicalHosts) {
       fprintf(stderr,
-              "FUSEE_PER_HOST_RING=1 requires num_hosts (%d) <= "
+              "FUSEE_PER_HOST_RING=1 requires FUSEE_NUM_HOSTS (%d) <= "
               "kMaxPhysicalHosts (%d); falling back to legacy path\n",
-              num_hosts, kMaxPhysicalHosts);
+              phys_hosts, kMaxPhysicalHosts);
       per_host_rings_enabled_ = false;
     }
   }
