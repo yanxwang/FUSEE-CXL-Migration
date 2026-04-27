@@ -347,7 +347,7 @@ Full analysis: `docs/iters/iter2A_summary_20260426.md`.
 
 ## 2026-04-27 — iter-2A-revised N:1:1:N + atomic_store invalidation (per `docs/iters/task_plan_20260427_iter2A_revised_n11n_atomic.md`)
 
-**Code complete (Phases 1-5), empirical blocked (Phases 5-7)** — g3+g4 PXE-booted into custom `vmlinuz_uintr_6.15` kernel that lacks `CONFIG_CXL_MEM`; no `/dev/dax0.0` device created; `cxl list -M` empty; `kexec` not installed; PXE-server config edit (192.168.128.5) needed to swap to stock `vmlinuz-6.12.38+deb13-amd64` (already on disk in `/boot/`, has `CXL_MEM=m`).
+**Status (2026-04-27 ~03:00 CDT): PAUSED** — Phases 1-5 code complete + unit tests 4/4 pass + methodology §9.1 update + summary committed. **Empirical Phases 5b/6/6.5/7 PAUSED awaiting CXL hardware fix.** g3+g4 booted custom `vmlinuz_uintr_6.15` lacks `CONFIG_CXL_PCI`/`CXL_ACPI`; `/dev/dax0.0` does not exist; user confirmed reboot of g3+g4 did not restore CXL — server unreachable beyond just driver issue. **Iter explicitly carried forward as "code complete, empirical pending"; resume when hardware returns** via `docs/iters/iter2A_revised_summary_20260427.md` §"Resume checklist" (8 numbered steps).
 
 **Architecture rewritten in tree** (default `FUSEE_PER_HOST_RING=0` byte-for-byte unchanged → zero regression risk):
 - `src/cxl_per_host_ring.h` MPSC → **SPSC** (1 sender per src-host, 1 receiver per dst-host); 64-B cacheline-aligned `PerHostInvalEntry`; `AckChannel` per (src,dst).
@@ -363,7 +363,7 @@ Full analysis: `docs/iters/iter2A_summary_20260426.md`.
 
 **Empirically blocked**: Phase 5 integration battery, Phase 6 80-cell sweep, Phase 6.5 K batching sweep, Phase 7 N:1:1:N decomp + queue depth probe + Little's law check.
 
-**iter-3A first task**: PXE-server kernel restore (one config-file edit on 192.168.128.5; both g3+g4 boot fixed on next PXE). Then run iter-2A-revised's deferred Phases 5-7 unchanged on the existing in-tree code.
+**Next step (when CXL hardware returns)**: not iter-3A — first finish iter-2A-revised's deferred Phases 5b/6/6.5/7/8. Resume checklist in summary doc. Only after iter-2A-revised actually has empirical data should iter-3A be planned (its candidates depend on Phase 7 decomp output).
 
 Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`.
 
