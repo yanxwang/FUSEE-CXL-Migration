@@ -96,6 +96,24 @@
   - Strict A linearizability hold: writer's release-store +
     receiver's release-store are happens-before any reader's
     acquire-load that observes the new value (free on x86 TSO).
+- **Unit-level correctness validation** (NEW after initial draft):
+  `tests/cxl_a_aggr_test.cc` — single-process unit test of the
+  aggregator + cache_epoch_arr (no CXL needed). All 4 sub-tests
+  PASS on the orchestrator:
+  1. Single-thread enqueue 1000 + interleaved drain → no loss.
+  2. MPSC concurrent: 4 producer threads × 250 ops + 1 drainer →
+     all 1000 entries reach the drainer; no lost / duplicate.
+  3. Backpressure: queue depth=256 fully filled, next enqueue
+     returns `-1` after exactly 5 ms (the documented timeout).
+  4. CacheEpochArr init + atomic store/release/acquire load
+     roundtrip works.
+
+  This validates the **logic** of Phases 1-3 (aggregator MPSC +
+  backpressure semantics + atomic_store invalidation primitive)
+  independent of CXL hardware. Phase 4 (writer dispatch) and
+  Phase 5 (reader path) are wired into this same correct logic;
+  the only remaining unknown is the CXL hop's behavior which
+  needs the testbed.
 - **Phases 5 (integration battery) / 6 (sweep) / 6.5 (K sweep) / 7
   (decomp + queue depth) / 8 (plots)**: empirical work BLOCKED on
   testbed kernel issue (see banner above).

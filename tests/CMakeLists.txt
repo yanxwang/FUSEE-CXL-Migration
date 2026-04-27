@@ -24,7 +24,7 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
          cxl_dram_cache_test cxl_dram_cache_B_test
          cxl_xhost_test cxl_latency_decomp
          cxl_kv_bench_threads cxl_atomic_bench cxl_atomic_xhost
-         cxl_blockpool_test cxl_dualhost_bw_bench)
+         cxl_blockpool_test cxl_dualhost_bw_bench cxl_a_aggr_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -mclflushopt -mavx512f)
