@@ -345,6 +345,74 @@ int main(int argc, char **argv) {
     }
   }
 
+  // iter-2A-revised — per-host aggregator + cache_epoch_arr (DRAM,
+  // pre-fork MAP_SHARED|MAP_ANONYMOUS so all forked clients inherit
+  // the same address). Active for protocol A only when
+  // FUSEE_PER_HOST_RING=1; allocated unconditionally to keep the
+  // attach plumbing simple (small overhead).
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  fusee::LocalAggregatorRegion *aggr_region = nullptr;
+  fusee::CacheEpochArr *cache_epoch_arr = nullptr;
+  bool per_host_ring_env = false;
+  uint32_t per_host_batch_k = 4;
+  uint64_t per_host_batch_t_ns = 20000ULL;
+  int per_host_sender_core = -1;
+  int per_host_receiver_core = -1;
+  {
+    const char *e = getenv("FUSEE_PER_HOST_RING");
+    per_host_ring_env = (e && e[0] == '1');
+    if (per_host_ring_env) {
+      // aggregator
+      size_t aggr_bytes = fusee::local_aggregator_region_bytes();
+      void *mm = mmap(nullptr, aggr_bytes, PROT_READ | PROT_WRITE,
+                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      if (mm == MAP_FAILED) {
+        fprintf(stderr, "mmap LocalAggregatorRegion (%zu) failed: %s\n",
+                aggr_bytes, strerror(errno));
+        return 1;
+      }
+      aggr_region = reinterpret_cast<fusee::LocalAggregatorRegion *>(mm);
+      fusee::aggr_region_init(aggr_region);
+      // cache_epoch_arr
+      size_t epoch_bytes = sizeof(fusee::CacheEpochArr);
+      void *mm2 = mmap(nullptr, epoch_bytes, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+      if (mm2 == MAP_FAILED) {
+        fprintf(stderr, "mmap CacheEpochArr (%zu) failed: %s\n",
+                epoch_bytes, strerror(errno));
+        return 1;
+      }
+      cache_epoch_arr = reinterpret_cast<fusee::CacheEpochArr *>(mm2);
+      fusee::cache_epoch_arr_init(cache_epoch_arr, num_buckets);
+      // batching knobs
+      if (const char *k = getenv("FUSEE_SENDER_BATCH_K")) {
+        int v = atoi(k);
+        if (v >= 1 && v <= (int)fusee::kPerHostSpscDepth) per_host_batch_k = (uint32_t)v;
+      }
+      if (const char *t = getenv("FUSEE_SENDER_BATCH_T_US")) {
+        int v = atoi(t);
+        if (v >= 1) per_host_batch_t_ns = (uint64_t)v * 1000ULL;
+      }
+      // CPU pinning defaults: sender = min(num_clients, ncores-2), recv +1.
+      int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
+      int default_sender = std::min(num_clients, ncores - 2);
+      int default_recv = std::min(num_clients + 1, ncores - 1);
+      if (default_sender < 0) default_sender = 0;
+      if (default_recv < 0) default_recv = 0;
+      per_host_sender_core = default_sender;
+      per_host_receiver_core = default_recv;
+      if (const char *sc = getenv("FUSEE_SENDER_CORE")) {
+        int v = atoi(sc);
+        if (v >= 0 && v < ncores) per_host_sender_core = v;
+      }
+      if (const char *rc = getenv("FUSEE_RECEIVER_CORE")) {
+        int v = atoi(rc);
+        if (v >= 0 && v < ncores) per_host_receiver_core = v;
+      }
+    }
+  }
+#endif
+
   // Fork num_clients-1 children. Parent has client_id=0.
   std::vector<pid_t> children;
   int client_id = 0;
@@ -474,6 +542,23 @@ int main(int argc, char **argv) {
   }
 #else
   (void)dram_mat;
+#endif
+
+  // iter-2A-revised — wire per-host ring on every A client. The store
+  // attach already reads FUSEE_PER_HOST_RING and sets phys_hosts_pr_;
+  // here we feed the DRAM regions in. Must be after attach() and
+  // enable_same_host_bypass (so my_cid_in_host_pr_ is set).
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  if (per_host_ring_env && aggr_region && cache_epoch_arr) {
+    if (store.enable_per_host_ring(aggr_region, cache_epoch_arr,
+                                   per_host_batch_k,
+                                   per_host_batch_t_ns,
+                                   per_host_sender_core,
+                                   per_host_receiver_core) != 0) {
+      fprintf(stderr, "[h%d c%d] enable_per_host_ring failed; legacy path\n",
+              host_id, client_id);
+    }
+  }
 #endif
 
   // Per-client value buffer. Reuses for every op; deterministic from key

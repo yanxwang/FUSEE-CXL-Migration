@@ -18,6 +18,8 @@
 // itself — there is no separate staging area; the authoritative bucket is
 // already shared on CXL. This matches the mini-bench simulated-pull model.
 
+#include "cxl_a_cache_epoch_arr.h"
+#include "cxl_a_local_aggregator.h"
 #include "cxl_bucket_lock.h"
 #include "cxl_hashtable.h"
 #include "cxl_oplog.h"
@@ -121,13 +123,46 @@ class CxlKvStoreA {
   // docs/iters/iter1A_baseline_summary_<date>.md §"Phase 5 status".
   PerHostOutMatrix *per_host_rings_ = nullptr;
   bool              per_host_rings_enabled_ = false;
-  // iter-2A Solution-1 wire: derived from FUSEE_NUM_HOSTS env at attach
-  // when per_host_rings_enabled_ is true. Indexes the [phys_hosts_pr_]
-  // dimension of PerHostOutMatrix.
-  int  phys_hosts_pr_         = 1;
-  int  my_phys_host_pr_       = 0;
-  int  clients_per_host_pr_   = 1;
-  int  my_cid_in_host_pr_     = 0;
+
+  // iter-2A-revised: full N:1:1:N path (this becomes the active path
+  // when per_host_rings_enabled_ is true). DRAM aggregator + per-host
+  // sender thread + atomic_store-via-coherence cache_epoch_arr.
+  LocalAggregatorRegion *aggregator_ = nullptr;   // DRAM, MAP_SHARED
+  CacheEpochArr         *cache_epoch_arr_ = nullptr;  // DRAM, MAP_SHARED
+  int phys_hosts_pr_       = 1;
+  int my_phys_host_pr_     = 0;
+  int clients_per_host_pr_ = 1;
+  int my_cid_in_host_pr_   = 0;
+  // Sender thread state. Spawned only on each host's primary client
+  // (host_id within physical host == 0).
+  std::thread sender_thread_;
+  std::atomic<bool> sender_started_{false};
+  uint32_t sender_batch_k_ = 4;
+  uint64_t sender_batch_t_ns_ = 20000ULL;  // 20 µs
+  int sender_core_ = -1;     // <0 = no pinning
+  int receiver_core_ = -1;
+ public:
+  // iter-2A-revised wiring API. Call after attach() on every client;
+  // primary client (cid_in_host == 0) attaches with init_region=true
+  // for the aggregator + cache_epoch_arr regions and spawns the sender
+  // thread. All clients pass the same `aggr_region` and
+  // `cache_epoch_arr` pre-fork-mmap'd addresses.
+  int enable_per_host_ring(LocalAggregatorRegion *aggr_region,
+                           CacheEpochArr *epoch_arr,
+                           uint32_t batch_k,
+                           uint64_t batch_t_ns,
+                           int sender_core,
+                           int receiver_core);
+  // Stop the sender thread (primary only). Idempotent.
+  void stop_per_host_sender();
+  // Lookup current cache_epoch (for diagnostics + reader path).
+  uint64_t cache_epoch_load(uint32_t bucket_idx) const;
+
+ private:
+  void sender_loop();
+  // Per-worker slot index for worker_ack_buf. Set in
+  // enable_per_host_ring. <0 if not configured.
+  int my_worker_slot_pr_ = -1;
 
   // Per-dst producer tail mirror: single-producer cursor lives on src side so
   // we do not need atomic-fetch-add on CXL.

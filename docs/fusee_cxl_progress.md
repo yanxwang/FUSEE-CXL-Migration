@@ -345,6 +345,28 @@ Full analysis: `docs/iters/iter1A_baseline_summary_20260426.md`. Decomp doc + wr
 
 Full analysis: `docs/iters/iter2A_summary_20260426.md`.
 
+## 2026-04-27 — iter-2A-revised N:1:1:N + atomic_store invalidation (per `docs/iters/task_plan_20260427_iter2A_revised_n11n_atomic.md`)
+
+**Code complete (Phases 1-5), empirical blocked (Phases 5-7)** — g3+g4 PXE-booted into custom `vmlinuz_uintr_6.15` kernel that lacks `CONFIG_CXL_MEM`; no `/dev/dax0.0` device created; `cxl list -M` empty; `kexec` not installed; PXE-server config edit (192.168.128.5) needed to swap to stock `vmlinuz-6.12.38+deb13-amd64` (already on disk in `/boot/`, has `CXL_MEM=m`).
+
+**Architecture rewritten in tree** (default `FUSEE_PER_HOST_RING=0` byte-for-byte unchanged → zero regression risk):
+- `src/cxl_per_host_ring.h` MPSC → **SPSC** (1 sender per src-host, 1 receiver per dst-host); 64-B cacheline-aligned `PerHostInvalEntry`; `AckChannel` per (src,dst).
+- `src/cxl_a_local_aggregator.{h,cc}` (NEW) — DRAM MPSC queue (5 ms spin-timeout backpressure per strict A "do not drop") + `WorkerAckBuf`.
+- `src/cxl_a_cache_epoch_arr.h` (NEW) — shared (mmap MAP_SHARED) `std::atomic<uint64_t>` per-bucket array; receiver atomic_store fans out to all local clients via x86 coherence.
+- `cxl_kv_ops_A.cc::sender_loop()` — drain aggregator with batch K + timeout, single-flush K entries to SPSC ring, spin on AckChannel, flip worker_ack_buf. CPU-pinned.
+- `cxl_kv_ops_A.cc::replicator_loop()` — primary client (cid_in_host==0) drains incoming SPSC ring; per entry: `cache_epoch_arr_->epoch[B].store(new_epoch, release)` (atomic_store invalidation, replaces DramInvalQueue push); per drain pass: AckChannel publish.
+- `cxl_kv_ops_A.cc::dispatch_and_wait()` — N:1:1:N step 1-9: lock → write slot → bump epoch → same-host atomic_store + mfence → enqueue cross-host → spin worker_ack_buf → unlock.
+- `cxl_kv_ops_A.cc::search()` — cache-hit branch additionally compares `cache_epoch_arr_->epoch[idx].load(acquire)` against last-fetched epoch.
+- `tests/cxl_ycsb_runner.cc` — pre-fork mmap of `LocalAggregatorRegion` + `CacheEpochArr`; reads `FUSEE_SENDER_BATCH_K` / `FUSEE_SENDER_BATCH_T_US` / `FUSEE_SENDER_CORE` / `FUSEE_RECEIVER_CORE`; calls `enable_per_host_ring()` per A client.
+
+**Strict A linearizability** (designed-in, awaiting empirical validation): writer release-store + sender→receiver→sender ACK + receiver release-store form a happens-before chain that any reader's acquire-load respects. x86 TSO makes this free of fence cost beyond the writer's mfence between same-host atomic_store and cross-host enqueue.
+
+**Empirically blocked**: Phase 5 integration battery, Phase 6 80-cell sweep, Phase 6.5 K batching sweep, Phase 7 N:1:1:N decomp + queue depth probe + Little's law check.
+
+**iter-3A first task**: PXE-server kernel restore (one config-file edit on 192.168.128.5; both g3+g4 boot fixed on next PXE). Then run iter-2A-revised's deferred Phases 5-7 unchanged on the existing in-tree code.
+
+Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

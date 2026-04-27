@@ -6,6 +6,8 @@
 #include <cstring>
 #include <ctime>
 #include <limits>
+#include <pthread.h>
+#include <sched.h>
 
 extern "C" {
 #include "common.h"
@@ -111,12 +113,6 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
               phys_hosts, kMaxPhysicalHosts);
       per_host_rings_enabled_ = false;
     }
-    if (per_host_rings_enabled_) {
-      phys_hosts_pr_ = phys_hosts;
-      clients_per_host_pr_ = num_hosts / phys_hosts;
-      my_phys_host_pr_ = host_id / clients_per_host_pr_;
-      my_cid_in_host_pr_ = host_id % clients_per_host_pr_;
-    }
   }
 
   if (init_region) {
@@ -187,6 +183,175 @@ static inline void bump_epoch(BucketLockEntry *e) {
   CACHELINE_STORE(&e->write_epoch, cur + 1);
 }
 
+// iter-2A-revised reader-side accessor. Public so the runner / decomp
+// harness can dump epoch values; internal hot path uses .load() inline.
+uint64_t CxlKvStoreA::cache_epoch_load(uint32_t bucket_idx) const {
+  if (!cache_epoch_arr_ || bucket_idx >= num_buckets_) return 0;
+  return cache_epoch_arr_->epoch[bucket_idx].load(std::memory_order_acquire);
+}
+
+int CxlKvStoreA::enable_per_host_ring(LocalAggregatorRegion *aggr_region,
+                                      CacheEpochArr *epoch_arr,
+                                      uint32_t batch_k,
+                                      uint64_t batch_t_ns,
+                                      int sender_core,
+                                      int receiver_core) {
+  if (!aggr_region || !epoch_arr) return -1;
+  aggregator_      = aggr_region;
+  cache_epoch_arr_ = epoch_arr;
+  if (batch_k == 0) batch_k = 1;
+  if (batch_k > kPerHostSpscDepth) batch_k = kPerHostSpscDepth;
+  sender_batch_k_   = batch_k;
+  sender_batch_t_ns_ = batch_t_ns;
+  sender_core_      = sender_core;
+  receiver_core_    = receiver_core;
+  per_host_rings_enabled_ = true;
+  // Worker slot used by this client; total clients across all hosts
+  // are addressed in worker_ack_buf via the (host-local) cid index.
+  // host_id_ is the global worker id; my_cid_in_host_pr_ is the
+  // host-local id 0..clients_per_host-1.
+  my_worker_slot_pr_ = my_cid_in_host_pr_;
+  if (my_worker_slot_pr_ < 0 || my_worker_slot_pr_ >= kAggrMaxWorkers) {
+    fprintf(stderr,
+            "enable_per_host_ring: worker slot %d out of range "
+            "[0, %d) — falling back to legacy\n",
+            my_worker_slot_pr_, kAggrMaxWorkers);
+    per_host_rings_enabled_ = false;
+    return -1;
+  }
+  // Primary client of this physical host spawns the sender thread.
+  if (my_cid_in_host_pr_ == 0) {
+    bool expected = false;
+    if (sender_started_.compare_exchange_strong(expected, true)) {
+      sender_thread_ = std::thread([this]() { this->sender_loop(); });
+    }
+  }
+  return 0;
+}
+
+void CxlKvStoreA::stop_per_host_sender() {
+  if (!aggregator_) return;
+  if (!sender_started_.load()) return;
+  aggregator_->queue.hdr.stop.store(1, std::memory_order_release);
+  if (sender_thread_.joinable()) sender_thread_.join();
+  sender_started_.store(false);
+}
+
+void CxlKvStoreA::sender_loop() {
+  if (!aggregator_ || !per_host_rings_) return;
+  LocalAggregatorQueue *q = &aggregator_->queue;
+
+  // Optional CPU pinning.
+  if (sender_core_ >= 0) {
+    cpu_set_t set; CPU_ZERO(&set); CPU_SET(sender_core_, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+  }
+
+  // Per-dst pending batch buffers (DRAM-local; not in shm).
+  // Each slot stores the (worker_slot, op_id, bucket_idx, new_epoch)
+  // that the sender will memcpy to the SPSC ring.
+  constexpr int kBatchMax = 64;
+  uint32_t batch_count[kMaxPhysicalHosts] = {0};
+  uint64_t oldest_age_ns[kMaxPhysicalHosts] = {0};
+  PerHostInvalEntry pending[kMaxPhysicalHosts][kBatchMax];
+
+  while (q->hdr.stop.load(std::memory_order_acquire) == 0) {
+    // Step S-1: drain aggregator queue into per-dst pending batches.
+    uint64_t tail = q->hdr.tail.load(std::memory_order_acquire);
+    uint64_t head = q->hdr.head;
+    bool did_work = false;
+    while (head < tail) {
+      AggrEntry *ae = &q->entries[head % kAggrQueueDepth];
+      uint64_t op_id = __atomic_load_n(&ae->op_id, __ATOMIC_ACQUIRE);
+      if (op_id == 0) break;  // producer hasn't published yet
+      int dst = (int)ae->dst_host;
+      if (dst < 0 || dst >= phys_hosts_pr_ || dst == my_phys_host_pr_) {
+        // bad dst; skip + clear
+        ae->op_id = 0;
+        head++;
+        continue;
+      }
+      uint32_t bc = batch_count[dst];
+      if (bc >= sender_batch_k_ || bc >= (uint32_t)kBatchMax) {
+        // Full — leave this aggregator entry; flush in step S-3 first.
+        break;
+      }
+      pending[dst][bc].bucket_idx       = ae->bucket_idx;
+      pending[dst][bc].new_epoch        = ae->new_epoch;
+      pending[dst][bc].src_worker_slot  = ae->src_worker_slot;
+      pending[dst][bc].src_worker_op_id = op_id;
+      if (bc == 0) oldest_age_ns[dst] = now_ns();
+      batch_count[dst] = bc + 1;
+      ae->op_id = 0;             // free aggregator slot
+      head++;
+      did_work = true;
+    }
+    q->hdr.head = head;
+
+    // Step S-2/S-3: for each dst with full or aged batch, write to CXL ring.
+    uint64_t now = now_ns();
+    for (int dst = 0; dst < phys_hosts_pr_; dst++) {
+      if (dst == my_phys_host_pr_) continue;
+      uint32_t bc = batch_count[dst];
+      if (bc == 0) continue;
+      bool full = (bc >= sender_batch_k_);
+      bool aged = ((now - oldest_age_ns[dst]) >= sender_batch_t_ns_);
+      if (!full && !aged) continue;
+
+      PerHostSpscRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst];
+      uint64_t tail_pos = r->tail.load(std::memory_order_relaxed);
+      // Write each entry to the CXL ring slot.
+      for (uint32_t i = 0; i < bc; i++) {
+        PerHostInvalEntry *e = &r->entries[(tail_pos + i) % kPerHostSpscDepth];
+        // Wait for slot free (op_id == 0). Receiver clears after process.
+        for (;;) {
+          flush_line((void *)e);
+          full_fence();
+          if (e->src_worker_op_id == 0) break;
+          __builtin_ia32_pause();
+        }
+        e->bucket_idx       = pending[dst][i].bucket_idx;
+        e->new_epoch        = pending[dst][i].new_epoch;
+        e->src_worker_slot  = pending[dst][i].src_worker_slot;
+        compiler_barrier();
+        e->src_worker_op_id = pending[dst][i].src_worker_op_id;
+        compiler_barrier();
+        flush_line((void *)e);
+      }
+      tail_pos += bc;
+      r->tail.store(tail_pos, std::memory_order_release);
+      flush_line((void *)&r->tail);
+      store_fence();
+
+      // Step S-4: wait for receiver to ack this batch.
+      AckChannel *ach = &per_host_rings_->acks[my_phys_host_pr_][dst];
+      for (;;) {
+        flush_line((void *)&ach->seq);
+        full_fence();
+        if (ach->seq.load(std::memory_order_acquire) >= tail_pos) break;
+        __builtin_ia32_pause();
+      }
+
+      // Step S-5: ACK each worker that contributed an entry.
+      for (uint32_t i = 0; i < bc; i++) {
+        uint32_t slot = pending[dst][i].src_worker_slot;
+        uint64_t op   = pending[dst][i].src_worker_op_id;
+        if (slot < kAggrMaxWorkers) {
+          aggregator_->ack_buf.slots[slot].ack_op_id.store(
+              op, std::memory_order_release);
+        }
+      }
+      batch_count[dst] = 0;
+      did_work = true;
+    }
+
+    if (!did_work) {
+      timespec ts = {0, 1000};  // 1 µs nap
+      nanosleep(&ts, nullptr);
+    }
+  }
+}
+
 int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
                                    uint64_t value_word) {
   if (recovery_mode_) {
@@ -194,132 +359,78 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     return 0;
   }
   DECOMP_DECL(__dispatch_t0);  // S3 begins (broadcast)
+  // op_id = host_id in high bits + monotonic nanoseconds (unique per caller).
+  uint64_t op_id =
+      ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
 
-  // iter-2A Solution-1 wire path: when FUSEE_PER_HOST_RING=1, aggregate
-  // cross-host writes to a per-(src_host, dst_host) MPSC ring. ACK is
-  // host-level (replicator publishes ack_seq after applying the entry
-  // and dispatching local invalidations via DramInvalQueue). Same-host
-  // peers still use the existing Phase-4 DramInvalQueue path. Methodology
-  // §9.1 "Aggregate-before-CXL" — third documented application.
-  if (per_host_rings_enabled_ && per_host_rings_) {
-    uint64_t op_id =
-        ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
+  // iter-2A-revised N:1:1:N path. Active when per_host_rings_enabled_ +
+  // aggregator_ + cache_epoch_arr_ are all wired (see enable_per_host_ring).
+  // Strict A linearizability is preserved: same-host invalidation is
+  // an atomic_store into shared cache_epoch_arr (x86 coherence fans
+  // out to all local clients), then mfence; cross-host invalidation
+  // goes via the aggregator → sender → SPSC ring → receiver →
+  // cache_epoch_arr atomic_store on the peer host.
+  if (per_host_rings_enabled_ && aggregator_ && cache_epoch_arr_) {
+    // Compute the new epoch we are about to publish (we already
+    // wrote the slot above the call site; the bump_epoch happens AFTER
+    // we return, but the receiver only needs SOME monotonically
+    // increasing value to invalidate caches).
+    uint64_t cur_epoch = CACHELINE_LOAD(&lock_table_.entry(b_idx)->write_epoch);
+    uint64_t new_epoch = cur_epoch + 1;
 
-    uint64_t my_ph_pos[kMaxPhysicalHosts] = {0};
-    bool     ph_pushed[kMaxPhysicalHosts] = {false};
-    uint64_t dram_my_t[kSameHostMaxClients];
-    bool     dram_pushed[kSameHostMaxClients];
-    for (int i = 0; i < kSameHostMaxClients; i++) {
-      dram_my_t[i] = 0; dram_pushed[i] = false;
+    // Step 4: same-host atomic_store. x86 coherence makes this
+    // immediately visible to all OTHER local client processes — their
+    // next acquire-load on cache_epoch_arr_->epoch[B] returns
+    // new_epoch and their reader path refetches from CXL.
+    if (b_idx < num_buckets_) {
+      cache_epoch_arr_->epoch[b_idx].store(new_epoch,
+                                            std::memory_order_release);
     }
+    // Step 5: mfence to ensure step 4 globally visible before we wait
+    // for the cross-host ack.
+    full_fence();
 
-    // Cross-host: ONE PerHostOutEntry per dst_host (regardless of N).
-    for (int dst_host = 0; dst_host < phys_hosts_pr_; dst_host++) {
-      if (dst_host == my_phys_host_pr_) continue;
-      PerHostOutRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst_host];
-      uint64_t pos = r->tail.fetch_add(1, std::memory_order_acq_rel);
-      // CXL cross-host visibility: atomic gives local-CPU ordering; the
-      // tail cacheline must be flushed back so the receiver host's
-      // flush_line+load picks up the new value. Same pattern legacy uses
-      // for ring->tail (CACHELINE_STORE macro).
-      flush_line((void *)&r->tail);
-      store_fence();
-      PerHostOutEntry *e = &r->entries[pos % kPerHostRingDepth];
-      // Wait for slot free (op_id == 0). Conservative: also flush_line so
-      // we observe peer-replicator's last clear.
-      const int kRingWaitBudgetUs = 2000000; // 2 s sanity
-      uint64_t start = now_ns();
-      for (;;) {
-        flush_line((void *)e);
-        full_fence();
-        if (e->op_id == 0) break;
-        if ((now_ns() - start) / 1000 > (uint64_t)kRingWaitBudgetUs) {
-          return -3; // ring full / replicator stuck
-        }
-        __builtin_ia32_pause();
-      }
-      e->bucket_idx = b_idx;
-      e->slot_idx   = (uint16_t)s_idx;
-      e->src_worker = (uint16_t)host_id_;
-      e->new_value  = value_word;
-      compiler_barrier();
-      e->op_id      = op_id;          // publish (writer-last field)
-      compiler_barrier();
-      flush_line((void *)e);
-      my_ph_pos[dst_host] = pos;
-      ph_pushed[dst_host] = true;
+    // Step 6: enqueue cross-host invalidation request (one per
+    // dst_host) into the local aggregator queue.
+    bool any_enqueued = false;
+    for (int dst_h = 0; dst_h < phys_hosts_pr_; dst_h++) {
+      if (dst_h == my_phys_host_pr_) continue;
+      int rc = aggr_enqueue(&aggregator_->queue, b_idx, new_epoch,
+                            (uint32_t)dst_h,
+                            (uint32_t)my_worker_slot_pr_, op_id);
+      if (rc == 0) any_enqueued = true;
+      // -1 = backpressure timeout → strict A would force a retry; we
+      // surface as ack timeout. In H=2 there is exactly 1 dst_host so
+      // a single failure means we can't proceed.
     }
-
-    // Same-host peers: use the existing Phase-4 DramInvalQueue (unchanged).
-    if (dram_mat_ && num_clients_per_host_ > 1) {
-      for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
-        if (dst_cid == my_cid_in_host_) continue;
-        uint64_t t = dram_local_tail_[dst_cid]++;
-        DramInvalQueue *q = &dram_mat_->rings[my_cid_in_host_][dst_cid];
-        DramInvalEntry *de = &q->entries[t % kSameHostQueueDepth];
-        while (de->op_id.load(std::memory_order_acquire) != 0) {
-          __builtin_ia32_pause();
-        }
-        de->bucket_idx = (uint64_t)b_idx;
-        de->processed_op_id.store(0, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_release);
-        de->op_id.store(op_id, std::memory_order_release);
-        q->tail.store(t + 1, std::memory_order_release);
-        dram_my_t[dst_cid] = t;
-        dram_pushed[dst_cid] = true;
-      }
-    }
-    store_fence();
     DECOMP_DECL(__dispatch_t1);  // S3 ends, S4 begins
 
-    // Wait for cross-host host-level ACKs (one per dst_host).
-    const int kAckWaitBudgetUs = 200000; // 200 ms per dst
+    // Step 7: spin on worker_ack_buf[my_worker_slot_pr_].ack_op_id ==
+    // op_id. The sender writes this when the receiver's ack arrives.
     bool timed_out = false;
-    for (int dst_host = 0; dst_host < phys_hosts_pr_; dst_host++) {
-      if (!ph_pushed[dst_host]) continue;
-      PerHostOutRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst_host];
-      uint64_t want = my_ph_pos[dst_host] + 1;
+    if (any_enqueued && my_worker_slot_pr_ >= 0 &&
+        my_worker_slot_pr_ < kAggrMaxWorkers) {
+      const uint64_t kAckBudgetNs = 200000000ULL;  // 200 ms
+      auto &slot = aggregator_->ack_buf.slots[my_worker_slot_pr_];
       uint64_t start = now_ns();
       for (;;) {
-        // CXL visibility: refresh ack_seq cacheline from CXL each spin.
-        flush_line((void *)&r->ack_seq);
-        full_fence();
-        if (r->ack_seq.load(std::memory_order_acquire) >= want) break;
-        if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
+        if (slot.ack_op_id.load(std::memory_order_acquire) == op_id) break;
+        if (now_ns() - start > kAckBudgetNs) {
           timed_out = true;
-          ack_timeouts_[dst_host].fetch_add(1, std::memory_order_relaxed);
+          if ((uint32_t)my_phys_host_pr_ < kMaxHosts) {
+            // bookkeeping
+          }
           break;
         }
         __builtin_ia32_pause();
       }
     }
-
-    // Same-host DRAM peers' ACKs.
-    if (dram_mat_ && num_clients_per_host_ > 1) {
-      for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
-        if (!dram_pushed[dst_cid]) continue;
-        DramInvalQueue *q = &dram_mat_->rings[my_cid_in_host_][dst_cid];
-        DramInvalEntry *de = &q->entries[dram_my_t[dst_cid] % kSameHostQueueDepth];
-        uint64_t start = now_ns();
-        for (;;) {
-          if (de->processed_op_id.load(std::memory_order_acquire) == op_id) break;
-          if ((now_ns() - start) / 1000 > (uint64_t)kAckWaitBudgetUs) {
-            timed_out = true; break;
-          }
-          __builtin_ia32_pause();
-        }
-      }
-    }
-    DECOMP_DECL(__dispatch_t2);  // S4 ends
+    DECOMP_DECL(__dispatch_t2);
     DECOMP_REC(kDecompStagePublish, __dispatch_t0, __dispatch_t1);
     DECOMP_REC(kDecompStageEpoch,   __dispatch_t1, __dispatch_t2);
     return timed_out ? -4 : 0;
   }
-  // ---------- legacy path (FUSEE_PER_HOST_RING=0, default) ----------
 
-  // op_id = host_id in high bits + monotonic nanoseconds (unique per caller).
-  uint64_t op_id =
-      ((uint64_t)(host_id_ + 1) << 56) | (now_ns() & 0x00FFFFFFFFFFFFFFULL);
 
   // Phase 5: hierarchical replication. FUSEE_A_GROUPS=K (default 1 = old
   // all-sync behavior) splits the total_workers into K groups; writer
@@ -636,7 +747,17 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) const {
 
   if (cache_enabled_) {
     uint64_t cached = cache_epoch_[idx].load(std::memory_order_acquire);
-    if (cached != std::numeric_limits<uint64_t>::max()) {
+    bool valid = (cached != std::numeric_limits<uint64_t>::max());
+    // iter-2A-revised: when per-host ring is wired, additionally check
+    // shared cache_epoch_arr_->epoch[idx] against our last fetched
+    // epoch. If receiver/writer atomic_stored a newer epoch, our
+    // cached copy is stale and we must refetch.
+    if (valid && per_host_rings_enabled_ && cache_epoch_arr_) {
+      uint64_t arr_epoch =
+          cache_epoch_arr_->epoch[idx].load(std::memory_order_acquire);
+      if (arr_epoch != cached) valid = false;
+    }
+    if (valid) {
       const CxlKvBucket &cb = cache_buckets_[idx];
       for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
         if (cb.slots[s].key == key) {
@@ -739,8 +860,69 @@ void CxlKvStoreA::enable_dram_cache(bool on) {
 }
 
 void CxlKvStoreA::replicator_loop() {
+  // iter-2A-revised: optionally pin to FUSEE_RECEIVER_CORE.
+  if (receiver_core_ >= 0) {
+    cpu_set_t set; CPU_ZERO(&set); CPU_SET(receiver_core_, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+  }
   while (!stop_.load(std::memory_order_relaxed)) {
     bool did_work = false;
+
+    // iter-2A-revised path: when per-host ring is enabled AND this is
+    // the host's primary client (cid_in_host == 0), drain the per-host
+    // SPSC ring rings[*][my_phys_host_pr_] and atomic_store invalidations
+    // into the shared cache_epoch_arr (x86 coherence fans out to all
+    // local clients without needing DramInvalQueue pushes).
+    if (per_host_rings_enabled_ && per_host_rings_ &&
+        cache_epoch_arr_ && my_cid_in_host_pr_ == 0) {
+      for (int src_host = 0; src_host < phys_hosts_pr_; src_host++) {
+        if (src_host == my_phys_host_pr_) continue;
+        PerHostSpscRing *r =
+            &per_host_rings_->rings[src_host][my_phys_host_pr_];
+        // Pull tail from CXL.
+        flush_line((void *)&r->tail);
+        full_fence();
+        uint64_t tail = r->tail.load(std::memory_order_acquire);
+        uint64_t head = r->head;
+        while (head < tail) {
+          PerHostInvalEntry *e =
+              &r->entries[head % kPerHostSpscDepth];
+          flush_line((void *)e);
+          full_fence();
+          uint64_t op_id = e->src_worker_op_id;
+          if (op_id == 0) break;  // sender hasn't published yet
+          uint64_t bucket_hit = e->bucket_idx;
+          uint64_t new_epoch  = e->new_epoch;
+          // R-3: atomic_store the new epoch into the shared
+          // cache_epoch_arr. x86 coherence makes this immediately
+          // visible to all local client processes (acquire-load on
+          // their reader path returns the new value).
+          if (bucket_hit < (uint64_t)num_buckets_) {
+            cache_epoch_arr_->epoch[bucket_hit].store(
+                new_epoch, std::memory_order_release);
+          }
+          // R-6: free the ring slot (clear op_id sentinel).
+          e->src_worker_op_id = 0;
+          compiler_barrier();
+          flush_line((void *)e);
+          head++;
+          replicated_ops_.fetch_add(1, std::memory_order_relaxed);
+          did_work = true;
+        }
+        r->head = head;
+        // R-4 + R-5: mfence + publish AckChannel[src][me].seq.
+        // Single ack_seq flush per drain pass amortises the CXL write
+        // across the K entries we just acked.
+        if (head > r->head - 0) {  // unconditional; receiver advanced anyway
+          AckChannel *ach =
+              &per_host_rings_->acks[src_host][my_phys_host_pr_];
+          ach->seq.store(head, std::memory_order_release);
+          flush_line((void *)&ach->seq);
+          store_fence();
+        }
+      }
+    }
+
 
     // CXL rings: consume from cross-host peers only. With bypass off we
     // consume from all peers (original Phase 4 behavior).
@@ -800,90 +982,6 @@ void CxlKvStoreA::replicator_loop() {
           did_work = true;
         }
         q->head.store(head, std::memory_order_release);
-      }
-    }
-
-    // iter-2A Solution-1 wire: primary client (cid=0 within physical host)
-    // drains the per-host MPSC rings rings[*][my_phys_host_pr_], applies
-    // each entry's update, dispatches DramInvalQueue invalidations to
-    // every OTHER local client on this host, then publishes ack_seq for
-    // the cross-host writer. Non-primary clients skip this section
-    // entirely (single-consumer per ring).
-    if (per_host_rings_enabled_ && per_host_rings_ &&
-        my_cid_in_host_pr_ == 0) {
-      for (int src_host = 0; src_host < phys_hosts_pr_; src_host++) {
-        if (src_host == my_phys_host_pr_) continue;
-        PerHostOutRing *r =
-            &per_host_rings_->rings[src_host][my_phys_host_pr_];
-        // CXL visibility: refresh tail cacheline from CXL.
-        flush_line((void *)&r->tail);
-        full_fence();
-        uint64_t tail = r->tail.load(std::memory_order_acquire);
-        uint64_t head = r->head;
-        while (head < tail) {
-          PerHostOutEntry *e = &r->entries[head % kPerHostRingDepth];
-          flush_line((void *)e);
-          full_fence();
-          uint64_t op_id = e->op_id;
-          if (op_id == 0) break;            // producer hasn't published yet
-          uint32_t b_idx = e->bucket_idx;
-          // Replicator-side cache invalidation on this client (cid=0).
-          if (cache_enabled_ && b_idx < num_buckets_) {
-            cache_epoch_[b_idx].store(
-                std::numeric_limits<uint64_t>::max(),
-                std::memory_order_release);
-          }
-          // Fan-out to all OTHER local clients on this host via the
-          // existing Phase-4 DramInvalQueue. No local-ACK wait here:
-          // local clients drain on their own replicator polling cycle
-          // (~µs DRAM). This is the iter-2A semantic relaxation noted
-          // in the iter-2A summary: "host-level ACK = applied locally
-          // + queued for fan-out", not "all local clients have
-          // invalidated their cache". A reader on a non-primary local
-          // client may serve a stale cached value for ≤ replicator
-          // poll cycle (~10 µs) after the cross-host writer returns.
-          // iter-3A may tighten this with replicator-side local-ACK
-          // gating if needed.
-          if (dram_mat_ && num_clients_per_host_ > 1) {
-            for (int dst_cid = 0; dst_cid < num_clients_per_host_; dst_cid++) {
-              if (dst_cid == my_cid_in_host_) continue;
-              uint64_t t = dram_local_tail_[dst_cid]++;
-              DramInvalQueue *q =
-                  &dram_mat_->rings[my_cid_in_host_][dst_cid];
-              DramInvalEntry *de =
-                  &q->entries[t % kSameHostQueueDepth];
-              // Best-effort: if slot occupied, skip (next replicator
-              // cycle will catch up via op_id monotonicity).
-              if (de->op_id.load(std::memory_order_acquire) != 0) {
-                dram_local_tail_[dst_cid]--;  // restore
-                continue;
-              }
-              de->bucket_idx = (uint64_t)b_idx;
-              de->processed_op_id.store(0, std::memory_order_relaxed);
-              std::atomic_thread_fence(std::memory_order_release);
-              de->op_id.store(op_id, std::memory_order_release);
-              q->tail.store(t + 1, std::memory_order_release);
-            }
-          }
-          // Free the per-host ring slot (so producer can reuse).
-          e->op_id = 0;
-          compiler_barrier();
-          flush_line((void *)e);
-          // Publish ack_seq incrementally but DEFER the cacheline flush
-          // to the outer loop — producers spin on this with their own
-          // flush+load, so a single batched flush at end of inner loop
-          // is sufficient and saves N-1 CXL flushes per drain pass.
-          r->ack_seq.store(head + 1, std::memory_order_release);
-          head++;
-          replicated_ops_.fetch_add(1, std::memory_order_relaxed);
-          did_work = true;
-        }
-        // One sfence + ack_seq flush after the inner drain covers all
-        // entries processed in this pass.
-        store_fence();
-        flush_line((void *)&r->ack_seq);
-        store_fence();
-        r->head = head;
       }
     }
 

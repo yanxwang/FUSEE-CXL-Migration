@@ -1,35 +1,27 @@
 #ifndef FUSEE_CXL_PER_HOST_RING_H_
 #define FUSEE_CXL_PER_HOST_RING_H_
 
-// iter-1A Solution 1 — per-host MPSC ring for cross-host PendingRingEntry
-// aggregation. Models methodology §9.1 "Aggregate-before-CXL":
+// iter-2A-revised — N:1:1:N aggregation primitives on CXL.
 //
-//   Legacy [kMaxHosts][kMaxHosts] = [200][200] = 40 000 SPSC rings, with
-//   per-(src_worker, dst_worker) ring traffic. At T=64 each UPDATE writes
-//   N-1 = 127 cachelines to CXL, easily exceeding the 25 GB/s aggregate
-//   ceiling above T~16.
+// The single CXL hop in the writer commit path crosses one of these
+// rings: the local aggregator (DRAM, MPSC) gathers writer enqueues
+// behind exactly one sender thread per host; the sender batches K
+// entries, single-flushes them across CXL into the per-(src_host,
+// dst_host) ring; the receiver thread on the destination drains
+// sequentially and atomic_stores invalidations into the local
+// cache_epoch_arr (no DramInvalQueue fan-out, x86 coherence does it).
+// AckChannel is a per-(src,dst) seq counter the receiver advances; the
+// sender spins on it; the worker spins on the in-DRAM worker_ack_buf
+// the sender flips when its op_id finally clears.
 //
-//   New [kMaxPhysicalHosts][kMaxPhysicalHosts] = [4][4] = 16 MPSC rings.
-//   N producer clients on each src_host enqueue to a single outgoing
-//   ring per dst_host (atomic fetch_add tail; same correctness pattern
-//   as iter-5 V2 DirtyQueueShard). Each UPDATE puts at most 1 entry on
-//   each peer-host outgoing ring; the receiving host's replicator
-//   processes entries and dispatches local invalidations via Phase-4
-//   DramInvalQueue.
-//
-// Layout (designed to fit comfortably inside the existing CXL region):
-//   [PerHostOutRing rings[H][H]]      — H × H matrix; only off-diagonal used
-//   each PerHostOutRing:
-//     [tail (atomic, multi-producer)] — 1 cacheline
-//     [head (single-consumer)]         — 1 cacheline
-//     [entries[kPerHostRingDepth]]     — circular buffer (32 B/entry)
-//
-// Sizing: with H=4 and kPerHostRingDepth=8192 the matrix totals
-// 4×4×(2*64 + 8192*32) = ~4.2 MB, ~330× smaller than the legacy 1.28 GB
-// PendingRingMatrix.
-//
-// Opt-in: gated by env `FUSEE_PER_HOST_RING=1` at attach time. Default
-// 0 preserves legacy SPSC code path byte-for-byte.
+// Both ring and ack channel live in shared CXL memory (the host that
+// owns the writer side flushes; the receiver host clflushopts to
+// pull). They are SPSC end to end: 1 sender produces, 1 receiver
+// consumes. Sub-cacheline sharing is forbidden — every entry +
+// every counter occupies its own 64-B line. Same lesson as
+// PendingRingEntry's 2-cacheline split (cxl_pending_ring.h note from
+// 2026-04-22) and the iter-2A wire failure (entry 32-B repacked
+// after producers on adjacent slots false-shared).
 
 #include <atomic>
 #include <stddef.h>
@@ -38,46 +30,71 @@
 namespace fusee {
 
 constexpr int kMaxPhysicalHosts = 4;
-constexpr int kPerHostRingDepth = 8192;  // power-of-two
+constexpr int kPerHostSpscDepth = 256;  // power of two, per-(src,dst) ring
 
-// 64-B per entry (one full cacheline). Sub-cacheline sharing across
-// hosts on coherence-less CXL produces false-sharing torn-write
-// scenarios — same lesson as PendingRingEntry's 2-cacheline split
-// (see iter-5 cxl_pending_ring.h note from 2026-04-22). Each entry
-// owns its own cacheline so producer's clflushopt and receiver's
-// clflushopt can proceed independently. Solution-2 byte-compression
-// (plan §2.1) targets the *payload* sized inside this 64 B cell, not
-// the cacheline alignment.
-struct alignas(64) PerHostOutEntry {
-  uint32_t bucket_idx;   // u32 enough for num_buckets ≤ 2^32
-  uint16_t slot_idx;
-  uint16_t src_worker;   // for ACK routing back to the originating client
-  uint64_t new_value;
-  uint64_t op_id;        // 0 = free; written last (release fence)
-  uint64_t _pad[5];      // pad to 64 B (full cacheline)
+// 64-B per entry, full cacheline owned by exactly one ring slot.
+//   bucket_idx: which CXL bucket the receiver should refresh
+//   new_epoch: the bucket's new write_epoch (receiver atomic_stores
+//              this into cache_epoch_arr[bucket_idx])
+//   src_worker_slot: index into the source host's worker_ack_buf so
+//              the source-side sender knows which worker to ACK once
+//              the receiver acknowledges this entry
+//   src_worker_op_id: the source worker's per-op id (uniqueness +
+//              double-ACK guard); also doubles as the ring-slot
+//              "ready" sentinel. 0 = slot free.
+//   _pad rounds the entry up to one full cacheline.
+struct alignas(64) PerHostInvalEntry {
+  uint64_t bucket_idx;
+  uint64_t new_epoch;
+  uint32_t src_worker_slot;
+  uint32_t _pad32;
+  uint64_t src_worker_op_id;   // 0 = slot free; written last (release)
+  uint64_t _pad[4];
 };
-static_assert(sizeof(PerHostOutEntry) == 64,
-              "PerHostOutEntry must occupy one full cacheline");
+static_assert(sizeof(PerHostInvalEntry) == 64,
+              "PerHostInvalEntry must occupy one full 64-B cacheline");
 
-// Per-(src_host, dst_host) MPSC ring. Producers fetch_add(tail) atomically;
-// consumer (replicator on dst_host) reads sequentially via head.
-struct alignas(64) PerHostOutRing {
-  std::atomic<uint64_t> tail;            // multi-producer fetch_add
+// SPSC ring: 1 src-host sender writes; 1 dst-host receiver reads. head
+// and tail live in separate cachelines so producer / consumer cacheline
+// updates don't ping-pong each other.
+struct alignas(64) PerHostSpscRing {
+  // Producer (sender) cursor. clflushopt'd by sender after each batch
+  // publish; receiver clflushopt+load to pull.
+  std::atomic<uint64_t> tail;
   char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
-  uint64_t              head;            // single-consumer plain
+  // Consumer (receiver) cursor. Plain uint64_t; only the receiver
+  // writes it. Sender doesn't read head.
+  uint64_t head;
   char _pad_head[64 - sizeof(uint64_t)];
-  std::atomic<uint64_t> ack_seq;         // replicator publishes per-host ACK
-  char _pad_ack[64 - sizeof(std::atomic<uint64_t>)];
-  PerHostOutEntry       entries[kPerHostRingDepth];
+  PerHostInvalEntry entries[kPerHostSpscDepth];
 };
 
+// Per-(src_host, dst_host) ACK channel. The DST receiver bumps `seq`
+// every time it processes an entry; the SRC sender clflushopt+loads
+// `seq` to know when its batch is acknowledged. Then the sender
+// flips the per-worker worker_ack_buf slot in DRAM so the original
+// writer can return.
+struct alignas(64) AckChannel {
+  std::atomic<uint64_t> seq;
+  char _pad[64 - sizeof(std::atomic<uint64_t>)];
+};
+
+// CXL-resident matrix: every (src, dst) pair has a ring + ack channel.
+// At H = 2 only off-diagonal cells are used.
 struct PerHostOutMatrix {
-  PerHostOutRing rings[kMaxPhysicalHosts][kMaxPhysicalHosts];
+  PerHostSpscRing rings[kMaxPhysicalHosts][kMaxPhysicalHosts];
+  AckChannel      acks[kMaxPhysicalHosts][kMaxPhysicalHosts];
 };
 
 inline size_t per_host_out_matrix_bytes() {
   return sizeof(PerHostOutMatrix);
 }
+
+// Backwards-compat type aliases — code that referenced the iter-2A
+// dead-code names still compiles. New code should use the names above.
+using PerHostOutEntry = PerHostInvalEntry;
+using PerHostOutRing  = PerHostSpscRing;
+constexpr int kPerHostRingDepth = kPerHostSpscDepth;
 
 } // namespace fusee
 
