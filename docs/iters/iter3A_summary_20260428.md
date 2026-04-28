@@ -30,10 +30,14 @@ iter-3A delivered all 7 planned phases:
   for stability). All `trans_wall_max` values are 6–9 ms — at this
   short wall-clock, measurement is noise-dominated; multi-rep
   averaging is required to compare K=1 vs K=2.
-- **Workload A peak in sweep2 (K=2) = 4.01 Mops/s** @ T=82 cache=off
-  (3.2× over iter-2A-revised 1.27). Still below the 5 Mops/s bar
-  because A is structurally hot-bucket-producer-bound under Zipf, not
-  channel-bound.
+- **Workload A peak (5-rep median in extension) = 4.62 Mops/s** @
+  T=82 cache=off K=2 (5 reps: 4.46, 4.62, 5.22, 3.54, 4.81; original
+  single-rep sweep2 recorded 4.01). Median is 3.6× over iter-2A-
+  revised 1.27. **One of 5 reps hits 5.22 Mops/s — crosses the 5
+  Mops/s bar that iter-2A-revised had falsified**, though the
+  median (4.62) does not. iter-3A is right at the boundary; with
+  per-slot LFM the 5 Mops/s bar is no longer falsified, just
+  marginal.
 - **Hash-diff battery: 66/66 PASS** under default (no-op N:1:1:N) +
   3/3 PASS under FUSEE_ACTIVATE_N11N=1 (true N:1:1:N path with
   explicit pre-run cleanup). Strict-A linearizability invariant
