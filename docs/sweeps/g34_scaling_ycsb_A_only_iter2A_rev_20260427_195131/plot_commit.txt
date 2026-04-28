@@ -1,0 +1,5 @@
+git_sha=6ca150492b957db3d4654ca6f0b1c3b8baf97425
+branch=feat/cxl-migration
+ts=20260427_195131
+iter=iter2A-rev
+config=FUSEE_PER_HOST_RING=1 FUSEE_SENDER_BATCH_K=4 FUSEE_SENDER_BATCH_T_US=20

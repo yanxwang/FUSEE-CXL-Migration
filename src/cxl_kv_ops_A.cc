@@ -162,6 +162,13 @@ void CxlKvStoreA::enable_same_host_bypass(DramInvalMatrix *mat,
 }
 
 void CxlKvStoreA::stop() {
+  // iter-2A-revised: stop the sender thread BEFORE the replicator.
+  // The sender may still be holding entries waiting for the receiver's
+  // ack_seq advance; the receiver lives on the OTHER host's process so
+  // local stop just signals; but if our process is also a receiver
+  // (which happens for the host's primary client) we want to drain
+  // pending acks before tearing down.
+  stop_per_host_sender();
   if (replicator_.joinable()) {
     stop_.store(true, std::memory_order_relaxed);
     replicator_.join();

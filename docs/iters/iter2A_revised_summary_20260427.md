@@ -4,19 +4,9 @@
 **Plan**: `docs/iters/task_plan_20260427_iter2A_revised_n11n_atomic.md`.
 **Branch**: `feat/cxl-migration` (commit prefix `[iter2A-rev-arch]`).
 
-> **🚫 STATUS (2026-04-27 ~03:00 CDT): PAUSED — CXL hardware
-> unreachable; resume when hardware returns.**
+> **✅ STATUS (2026-04-27 ~20:30 CDT): COMPLETE — empirical phases 5/5b/6/6.5/7/8 all ran after CXL hardware restoration.**
 >
-> g3 + g4 are pingable but the running kernel
-> (`vmlinuz_uintr_6.15`, the PXE-booted custom uintr build) has
-> `CONFIG_CXL_PCI` and `CONFIG_CXL_ACPI` both **not set**, so the
-> kernel never enumerates CXL memory devices: `/sys/bus/cxl/devices`
-> is empty, `cxl list -M` returns `[]`, no `/dev/dax0.0` is created.
-> User confirmed reboot of g3+g4 did not change this state — the
-> CXL hop / expander itself appears unreachable, not just the
-> driver. Without CXL the only thing that runs is the legacy
-> code path on DRAM, which doesn't exercise the iter-2A-revised
-> N:1:1:N path at all.
+> Earlier in the day g3+g4 were unreachable (CXL server fully down). User restored hardware mid-iteration; resume checklist executed top-to-bottom.
 >
 > **What this iter HAS shipped (in tree, all commits push-ready)**:
 > - Phases 1-5 code (architecture rewrite); commit `770660e`
@@ -129,9 +119,33 @@
   Phase 5 (reader path) are wired into this same correct logic;
   the only remaining unknown is the CXL hop's behavior which
   needs the testbed.
-- **Phases 5 (integration battery) / 6 (sweep) / 6.5 (K sweep) / 7
-  (decomp + queue depth) / 8 (plots)**: empirical work BLOCKED on
-  testbed kernel issue (see banner above).
+- **Phase 5 smoke**: ✅ legacy PHR=0 at T=2 = 0.59 Mops/s (regression check OK); new wire PHR=1 at T=2 = 0.78 Mops/s (+32 %). Wire functionally correct at T=2.
+- **Phase 5 scaling smoke** (50K ops, T=1..32, workload A cache=on):
+  | T | PHR=0 | PHR=1 | gain |
+  |--:|------:|------:|-----:|
+  | 1 | 0.34 | 0.40 | +18 % |
+  | 2 | 0.57 | 0.74 | +30 % |
+  | 4 | 0.89 | **1.36** | +53 % |
+  | 8 | 1.18 | 1.21 | +3 % |
+  | 16 | 0.72 | 0.89 | +24 % |
+  | 32 | 0.52 | 0.69 | +33 % |
+  Wire wins at every T; iter-2A wire's 28× T=4 regression is **fixed**.
+- **Phase 5 B regression smoke**: workload C T=4 cache=on under B = 5.62 Mops/s, no functional change vs iter-1A (B path unchanged in this iter).
+- **Phase 6 A-only 80-cell sweep with PHR=1**: 80/80 OK, 0 FAIL, 7 min wall (`logs/g34_iter2A_rev_sweep_20260427_195131/`). vs iter-1A baseline 8 FAILs at T=64 — **structurally unblocked**. Cache=ON peaks (Mops/s @T):
+  | wl | T=1 | T=2 | T=4 | T=8 | T=16 | T=32 | T=64 | T=86 | peak |
+  |----|----:|----:|----:|----:|-----:|-----:|-----:|-----:|-----:|
+  | a | 0.37 | 0.69 | **1.27** | 1.14 | 0.86 | 0.65 | 0.16 | 0.12 | 1.27@T4 |
+  | b | 1.02 | 1.88 | 3.28 | 5.57 | **6.27** | 3.85 | 1.13 | 1.08 | 6.27@T16 |
+  | c | 0.68 | 1.32 | 2.57 | 4.63 | 7.85 | **17.27** | 13.58 | 9.68 | 17.27@T32 |
+  | d | 0.67 | 1.22 | 2.39 | 4.42 | 7.96 | **16.20** | 1.08 | 0.72 | 16.20@T32 |
+  | f | 0.46 | 0.85 | **1.60** | 1.57 | 1.21 | 0.95 | 0.29 | 0.20 | 1.60@T4 |
+
+  Cache=OFF best cells: workload C 22.57 @T=86 ✓ + workload D 28.41 @T=64 — both **pass 20 Mops/s bar**.
+- **Phase 6.5 K batching sweep**: K∈{1..64}×T∈{4,64} cache=on (`logs/g34_iter2A_rev_kbatch_20260427_200105/`). At T=4, K=1..4 essentially identical (~1.29 Mops/s) — K=4 default is fine. At T=64, K=64 best at 0.185 Mops/s vs K=1 at 0.152 (+22 %). K=128 + T_us=50 timeout-path test ran cleanly (sender did not deadlock). **No K change to default needed.**
+- **Phase 7 N:1:1:N decomp** (16 cells, 2 reps, T={2,4,8,16}, PHR={0,1}, FUSEE_LATENCY_DECOMP=1): see `docs/iters/iter2A_rev_decomp/decomp_phase7_summary.md`. Headline:
+  - At T=4 PHR=1: total = 36.7 µs, S3 publish 9.2 µs, S4 ack_wait 17.9 µs. **S3+S4 = 74 % of latency** — same shape as iter-1A. The N:1:1:N wire did NOT shrink S3+S4 to design budget (~3 µs) — actual ~27 µs. Diagnosis: aggregator backpressure (single sender) + sender/receiver single-thread serialisation are the latency floor.
+  - At T ≥ 8: **S1 LFM lock dominates** (35 µs at T=8, 174 µs at T=16). Zipf hot-bucket lock contention — same pattern that protocol C iter-1 fixed via **per-slot LFM**, not yet ported to A.
+- **Phase 8 plots + summary**: 28 Style B plots emitted under `docs/sweeps/g34_scaling_ycsb_A_only_iter2A_rev_20260427_195131/` (14 cache-on + 14 cache-off, per scaling_ycsb_spec §6).
 - **Default behaviour**: `FUSEE_PER_HOST_RING=0` (the env-disabled
   case) leaves the legacy path BYTE-FOR-BYTE unchanged — A's
   legacy PendingRingMatrix dispatch + DramInvalQueue still in tree
@@ -507,17 +521,106 @@ ports to whatever the new testbed is — the in-tree primitives
 (`PerHostSpscRing`, `LocalAggregatorQueue`, `CacheEpochArr`) are
 hardware-agnostic; only `bytes_for()` sizing might need tuning.
 
+## Hypothesis audit (methodology §4.3)
+
+**Plan §6.2 quantitative target**: workload A peak ≥ 5 Mops/s at
+some (T, cache) cell.
+
+**Result**: workload A peak = **1.27 Mops/s** @ T=4 cache=on (or
+1.36 in the smaller smoke). **FALSIFIED** at the 5 Mops/s bar.
+
+**Hypothesis revision**:
+- Original: "N:1:1:N + atomic_store-via-coherence reduces S3+S4
+  to ~3 µs and lifts A peak to ≥ 5 Mops/s."
+- Falsified: S3+S4 stays at ~27 µs because **single sender / single
+  receiver thread per host** is the new latency floor. The bandwidth
+  benefit IS real (PHR=1 completes 80/80 cells while PHR=0 had
+  8 FAILs), but the per-op latency floor is lock + serial-thread.
+- New: at T ≥ 8 the binding constraint shifts to **S1 LFM lock
+  contention** under Zipf hot-bucket access. Multi-flusher + per-
+  slot LFM (the iter-1 C win) are the next levers.
+
+**Gain delivered**:
+- A peak: 0.54 → 1.27 Mops/s = **2.4 × over iter-1A baseline**
+- A: 80/80 cells run cleanly (vs iter-1A 32/40 OK)
+- C cache=off T=86: **22.57 Mops/s ✓ passes 20 Mops/s bar**
+- D cache=off T=64: **28.41 Mops/s** (read-mostly reference)
+
+## Iter-3A candidates (data-driven, ranked)
+
+Per Phase 7 decomp evidence:
+
+### 3A.1 — Per-slot LFM for A (HIGHEST PRIORITY)
+
+**Hypothesis**: iter-1 C win ported to A. At T=8, S1 lock = 35 µs;
+at T=16, S1 = 175 µs. Per-slot LFM (7 slots × per-bucket = lock
+on slot only) cuts hot-bucket serialisation. Expected gain on A:
+~2-3× at T ≥ 8 (matching the C iter-1 pattern).
+
+**Effort**: 2 d (port C iter-1 commit `bdd27c9` + `d427d11` to A).
+
+### 3A.2 — Multi-sender / multi-replicator V2 (MEDIUM PRIORITY)
+
+**Hypothesis**: at low-medium T (T ≤ 8), S3 + S4 = 27 µs is
+dominated by single-sender / single-receiver throughput, not
+broadcast bytes. N senders + N receivers (mirror iter-5
+multi-flusher V2) cut per-op queueing. Expected gain ~2× at
+T = 4-8.
+
+**Effort**: 3 d. Pattern proven (iter-5 V2).
+
+### 3A.3 — Async / batched ACK for A (LOWER PRIORITY)
+
+**Hypothesis**: writer doesn't wait for cross-host ACK; polls
+in background. Drops S4 from 18 µs to ~0. But weakens A's strict
+consistency to "eventually consistent" — may not be acceptable
+for protocol A.
+
+**Effort**: 2 d + design review.
+
+### 3A.4 — B-protocol same N:1:1:N rewire
+
+**Hypothesis**: B (no ACK wait) benefits from the same broadcast
+bytes reduction. Expected: B peak roughly doubles at T ≥ 16.
+
+**Effort**: 1 d (mirror A wiring; no ACK).
+
+### 3A.5 — Variable-KV value size for A
+
+**Hypothesis**: realistic value sizes (256 B+) need iter-4-style
+pool. Expected gain depends on workload.
+
+**Effort**: 2 d.
+
+## Methodology adherence
+
+- §1.2 Diagnose-first: Phase 7 decomp BEFORE proposing iter-3A
+  candidates. ✓
+- §1.3 Hypothesis revision: 5 Mops/s target falsified out-loud
+  (above). New diagnosis written explicitly. ✓
+- §1.5 Ship every phase: all 8 phases ran. ✓
+- §4.3 Falsification is a result: documented as 2.4× gain +
+  iter-3A targets. ✓
+- §6.5 No compounding: A-side wire (this iter) only; B-side rewire
+  + per-slot LFM separated to iter-3A. ✓
+- §9.1 Aggregate-before-CXL — third confirmed application. The
+  N:1:1:N pattern is bandwidth-correct (all 80 cells complete);
+  latency-bound by single-thread serialisation (iter-3A multi-
+  sender/receiver target).
+
 ## Bottom line
 
-iter-2A-revised delivers the **complete architectural rewrite**
-the plan asked for: SPSC per-host ring, MPSC DRAM aggregator,
-sender thread with batch K + timeout, atomic_store-via-coherence
-invalidation, strict-A linearizability preserved by the writer's
-release-store + sender ACK + receiver release-store sequence.
-Default behaviour byte-for-byte unchanged.
+iter-2A-revised delivers a **functioning N:1:1:N implementation**
+of protocol A under `FUSEE_PER_HOST_RING=1`:
+- 4 source-file additions/rewrites + 5 commits in tree
+- Aggregator unit test 4/4 pass (logic correctness)
+- All 80 sweep cells complete (vs iter-1A 8 FAILs)
+- 2.4× A peak gain (0.54 → 1.27 Mops/s)
+- 5 Mops/s target **falsified**; iter-3A pivots to per-slot LFM
+  (top candidate, ~2-3× expected gain)
 
-The empirical work is blocked on a testbed kernel issue
-(CONFIG_CXL_MEM=n in the booted uintr kernel). Code is ready to
-validate; iter-3A's first task is the kernel/PXE fix, then the
-five deferred phases of this iter run unchanged on the existing
-in-tree code.
+Default `FUSEE_PER_HOST_RING=0` byte-for-byte unchanged →
+**zero regression risk** for legacy benchmarks.
+
+iter-3A's first task is per-slot LFM port from C. The N:1:1:N
+foundation stays in tree; per-slot LFM stacks on top.

@@ -347,7 +347,20 @@ Full analysis: `docs/iters/iter2A_summary_20260426.md`.
 
 ## 2026-04-27 — iter-2A-revised N:1:1:N + atomic_store invalidation (per `docs/iters/task_plan_20260427_iter2A_revised_n11n_atomic.md`)
 
-**Status (2026-04-27 ~03:00 CDT): PAUSED** — Phases 1-5 code complete + unit tests 4/4 pass + methodology §9.1 update + summary committed. **Empirical Phases 5b/6/6.5/7 PAUSED awaiting CXL hardware fix.** g3+g4 booted custom `vmlinuz_uintr_6.15` lacks `CONFIG_CXL_PCI`/`CXL_ACPI`; `/dev/dax0.0` does not exist; user confirmed reboot of g3+g4 did not restore CXL — server unreachable beyond just driver issue. **Iter explicitly carried forward as "code complete, empirical pending"; resume when hardware returns** via `docs/iters/iter2A_revised_summary_20260427.md` §"Resume checklist" (8 numbered steps).
+**Status (2026-04-27 ~20:30 CDT): COMPLETE** — Phases 1-8 all delivered. CXL hardware was paused mid-day; user restored by ~19:30, resume checklist executed top-to-bottom. All 80 sweep cells OK + 16-cell decomp + Style B plots + summary update.
+
+**Headline empirical results** (workload A, FUSEE_PER_HOST_RING=1, FUSEE_SENDER_BATCH_K=4, FUSEE_SENDER_BATCH_T_US=20):
+- A peak: **1.27 Mops/s @ T=4 cache=on** (= **2.4× over iter-1A baseline 0.54**)
+- 80/80 cells run cleanly (vs iter-1A had 8 FAILs at T=64)
+- C cache=off T=86 = 22.57 Mops/s ✓ + D cache=off T=64 = 28.41 Mops/s — both **pass 20 Mops/s bar**
+
+**Hypothesis falsified** (methodology §1.3): Plan target was A peak ≥ 5 Mops/s; observed 1.27. The N:1:1:N path is bandwidth-correct (all cells complete) but **latency-bound by single sender/receiver thread serialisation** at low T, and **S1 LFM lock contention** at T ≥ 8 (174 µs at T=16, Zipf hot-bucket). New iter-3A target: **per-slot LFM for A** (port iter-1 C win; 2-3× expected gain).
+
+**Phase 7 decomp at T=4 PHR=1**: S3 publish 9.2 µs + S4 ack_wait 17.9 µs = **74 % of total 36.7 µs** — same shape as iter-1A; the aggregation collapsed bandwidth but did NOT collapse the per-op latency. Aggregator backpressure (single sender) + sender→receiver→sender RTT (single receiver thread) are the latency floor.
+
+**Default `FUSEE_PER_HOST_RING=0` byte-for-byte unchanged** → zero regression risk for legacy benchmarks.
+
+Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`. Decomp: `docs/iters/iter2A_rev_decomp/decomp_phase7_summary.md`. Style B plots: `docs/sweeps/g34_scaling_ycsb_A_only_iter2A_rev_20260427_195131/` (28 plots).
 
 **Architecture rewritten in tree** (default `FUSEE_PER_HOST_RING=0` byte-for-byte unchanged → zero regression risk):
 - `src/cxl_per_host_ring.h` MPSC → **SPSC** (1 sender per src-host, 1 receiver per dst-host); 64-B cacheline-aligned `PerHostInvalEntry`; `AckChannel` per (src,dst).
@@ -363,7 +376,7 @@ Full analysis: `docs/iters/iter2A_summary_20260426.md`.
 
 **Empirically blocked**: Phase 5 integration battery, Phase 6 80-cell sweep, Phase 6.5 K batching sweep, Phase 7 N:1:1:N decomp + queue depth probe + Little's law check.
 
-**Next step (when CXL hardware returns)**: not iter-3A — first finish iter-2A-revised's deferred Phases 5b/6/6.5/7/8. Resume checklist in summary doc. Only after iter-2A-revised actually has empirical data should iter-3A be planned (its candidates depend on Phase 7 decomp output).
+**iter-3A first task** (data-driven from Phase 7 decomp): **per-slot LFM for A** — port C iter-1 commits (`bdd27c9` + `d427d11`) to A. At T=8/16 S1 LFM lock dominates total latency (35/174 µs); per-slot LFM under Zipf is the proven C iter-1 fix. Expected ~2-3× gain on A peak. ~2 days. Followed by multi-sender/multi-replicator V2 (3 d), B-protocol same N:1:1:N rewire (1 d), variable-KV value-size for A (2 d).
 
 Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`.
 
