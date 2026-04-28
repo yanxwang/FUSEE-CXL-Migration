@@ -64,19 +64,28 @@ to make that the case without paying the current 19-90 % overhead.
 - **Verify**: smoke runs at T=4 successfully complete; per-stage probe
   numbers sum to ≥ 90 % of measured wall-clock per op.
 
-### Phase 2 — Co-locate worker_ack_buf on the worker's L1 (`[iter4A-ackbuf]`)
+### Phase 2 — Reduce S1 + S3 amplification under cross-host coherence (`[iter4A-s1s3]`)
 
-Hypothesis from iter-3A summary: ack-spin granularity on the
-worker_ack_buf cacheline is the bottleneck. Currently each worker's
-slot is in `aggregator_->ack_bufs[k][slot]` — physically allocated
-in the host primary's pre-fork mmap, far from the worker's L1.
+**Updated hypothesis** (after iter-3A live decomp under
+ACTIVATE_N11N=1): the ack-spin (S4) is **NOT** the bottleneck — it
+runs in 17 ns once N:1:1:N is properly enabled. The cross-host
+coordination cost has migrated into S1 lock (+1.6 µs vs legacy at
+T=4) and S3 publish (which now subsumes the local atomic_store +
+mfence + aggregator enqueue).
 
-- Move worker_ack_buf to per-worker shm region allocated **after**
-  fork (so each child's shm sits on the same NUMA / L1 as the worker
-  thread that polls it).
-- Update sender_loop_k to write into the per-worker buffer via a
-  pointer table (`std::vector<WorkerAckSlot *> per_worker_ack`).
-- Verify: hash-diff still PASS; T=4 cache=on Mops/s improves.
+- **S1 amplification**: when N:1:1:N is on, the writer's
+  `bucket_lock_table_.entry(b_idx)->write_epoch` cacheline is read
+  by the local atomic_store path (`cache_epoch_arr_->epoch[b]` is
+  separate, but the writer also touches `lock_table_.entry(b_idx)
+  ->write_epoch` at S5/bump_epoch). Investigate whether moving
+  write_epoch out of the lock_entry cacheline helps (currently both
+  the mutex and the epoch field share a 64 B line at
+  `BucketLockEntry`).
+- **S3 publish**: 3.5 µs is dominated by `publish_slot()`'s
+  flush_line + the subsequent `atomic_store cache_epoch_arr` +
+  mfence. Profile each substep with cycle counters; the mfence
+  may be the dominant cost (memory ordering constraint).
+- **Verify**: hash-diff still PASS; T=4 cache=on Mops/s improves.
 
 ### Phase 3 — Tighter batch-timeout adaptation (`[iter4A-batch]`)
 
