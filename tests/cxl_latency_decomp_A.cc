@@ -438,6 +438,11 @@ int main(int argc, char **argv) {
     "lfm_peerscan_avg=%lu lfm_peerscan_p50=%lu lfm_peerscan_p99=%lu "
     "lfm_contwait_avg=%lu lfm_contwait_p50=%lu lfm_contwait_p99=%lu "
     "lfm_entercs_avg=%lu lfm_entercs_p50=%lu lfm_entercs_p99=%lu "
+    "aggr_enq_avg=%lu aggr_enq_p50=%lu aggr_enq_p99=%lu "
+    "sender_batch_avg=%lu sender_batch_p50=%lu sender_batch_p99=%lu "
+    "recv_entry_avg=%lu recv_entry_p50=%lu recv_entry_p99=%lu "
+    "recv_atomic_avg=%lu recv_atomic_p50=%lu recv_atomic_p99=%lu "
+    "l1_slot_avg=%lu l1_slot_p50=%lu l1_slot_p99=%lu "
     "trans_wall_max=%.3fs trans_agg_thpt=%.0f\n",
     num_clients, num_hosts, cache_on ? 1 : 0, agg_writes,
     agg_avg[fusee::kDecompStageLock],    agg_p50[fusee::kDecompStageLock],    agg_p99[fusee::kDecompStageLock],
@@ -450,6 +455,11 @@ int main(int argc, char **argv) {
     agg_avg[fusee::kDecompLfmPeerScan],   agg_p50[fusee::kDecompLfmPeerScan],   agg_p99[fusee::kDecompLfmPeerScan],
     agg_avg[fusee::kDecompLfmContWait],   agg_p50[fusee::kDecompLfmContWait],   agg_p99[fusee::kDecompLfmContWait],
     agg_avg[fusee::kDecompLfmEnterCS],    agg_p50[fusee::kDecompLfmEnterCS],    agg_p99[fusee::kDecompLfmEnterCS],
+    agg_avg[fusee::kDecompStageA_AggrEnq],    agg_p50[fusee::kDecompStageA_AggrEnq],    agg_p99[fusee::kDecompStageA_AggrEnq],
+    agg_avg[fusee::kDecompStageA_SenderBatch], agg_p50[fusee::kDecompStageA_SenderBatch], agg_p99[fusee::kDecompStageA_SenderBatch],
+    agg_avg[fusee::kDecompStageA_RecvEntry],   agg_p50[fusee::kDecompStageA_RecvEntry],   agg_p99[fusee::kDecompStageA_RecvEntry],
+    agg_avg[fusee::kDecompStageA_RecvAtomic],  agg_p50[fusee::kDecompStageA_RecvAtomic],  agg_p99[fusee::kDecompStageA_RecvAtomic],
+    agg_avg[fusee::kDecompStageA_LockL1Scan],  agg_p50[fusee::kDecompStageA_LockL1Scan],  agg_p99[fusee::kDecompStageA_LockL1Scan],
     wall_max_s, agg_thpt);
   (void)kConsensusOpt;
 
