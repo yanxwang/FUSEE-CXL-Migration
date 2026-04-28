@@ -17,8 +17,18 @@ iter-3A delivered all 7 planned phases:
   → 41,993 ns; T=32: 733,650 ns → 151,000 ns) and lifts workload-A
   cache=on throughput 2–2.4× at the same cells (T=16: 83k → 164k;
   T=32: 46k → 109k ops/s/host).
-- **Workload C cache=off T=82 hits 35.13 Mops/s**, comfortably above
-  the 20 Mops/s North-Star bar; D cache=off T=64 = 27.24 Mops/s.
+- **Workload C cache=off T=82 hits 35.13 Mops/s** in the single-rep
+  sweep2 measurement, but a 5-rep stability check at the same cell
+  (extension period, post-sweep) gives median **21.66 Mops/s** (5
+  reps: 21.66, 21.32, 34.90, 21.89, 21.50 Mops/s). The 35M number
+  was a 1-in-5 high-variance outlier; the **stable Mops/s for C
+  cache=off T=82 is ~21.5 Mops/s**, comparable to sweep1's K=1
+  number (21.88). All `trans_wall_max` values are 6–9 ms — at
+  this short wall-clock the measurement is noise-dominated; multi-
+  rep averaging is required to compare K=1 vs K=2 reliably.
+  D cache=off T=64 = 27.24 Mops/s in sweep2 (single rep) — also
+  needs multi-rep verification before claiming reliable improvement
+  over sweep1.
 - **Workload A peak in sweep2 (K=2) = 4.01 Mops/s** @ T=82 cache=off
   (3.2× over iter-2A-revised 1.27). Still below the 5 Mops/s bar
   because A is structurally hot-bucket-producer-bound under Zipf, not
@@ -87,15 +97,19 @@ iter-3A delivered all 7 planned phases:
 | f | on  | 16 | 4.41  | -3 %  | no |
 | f | off | 64 | 4.39  | -3 %  | no |
 
-**Sweep1 → Sweep2 caveat**: the K-channel sender/receiver path is no-op
-under the current `phys_hosts_pr_=1` defaults. Sweep2's K=2 differs
-from sweep1's K=1 only via additional pinned (idle) sender/receiver
-threads and the resulting CPU oversubscription topology — NOT via
-actual K-fold parallelism in cross-host invalidation. The 60 % uplift
-on workload C cache=off therefore most likely reflects the difference
-in how worker threads land on physical cores (T=82 with cores 82–85
-reserved for senders/receivers vs T=84 with only cores 84–85
-reserved); a clean K=1-vs-K=2 attribution is blocked on iter-4A.
+**Sweep1 → Sweep2 caveat**: the K-channel sender/receiver path is
+no-op under the default `phys_hosts_pr_=1`. Sweep2's K=2 differs
+from sweep1's K=1 only via the (idle) sender/receiver-thread CPU
+pinning topology — NOT via actual K-fold parallelism in cross-host
+invalidation. **The 5-rep stability check (post-sweep) on the
+sweep2 peak cell (workloadc T=82 cache=off) shows the original
+35.13 Mops/s was a 1-in-5 outlier**; the stable median is 21.66
+Mops/s, indistinguishable from sweep1's K=1 number. So the
+"sweep1 → sweep2 +60 % on C cache=off" claim is **falsified**
+under multi-rep measurement. The actual sweep2 vs sweep1 deltas
+are within ±10 % once multi-rep averaging is applied; iter-3A's
+real win was the per-slot LFM port (Phase 6 measures it cleanly),
+not the K-channel work (which never ran).
 
 ## K-param sweep (P5.5, workload A cache=on)
 
