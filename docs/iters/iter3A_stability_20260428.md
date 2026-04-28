@@ -109,6 +109,29 @@ median: 3.28 Mops/s, σ ≈ 0.28 — miss 20 Mops/s
 
 ---
 
+## Per-bucket vs per-slot LFM at workloadA cache=on K=1 (single-rep)
+
+```
+              per-bucket    per-slot     ratio
+T=4   :       1.27          1.22         0.96 (per-bucket actually +3%)
+T=8   :       1.16          2.26         1.95 (per-slot +95%)
+T=16  :       0.92          2.07         2.25 (per-slot +125%)
+T=32  :       0.66          2.63         3.98 (per-slot +298%)
+T=64  :       0.15          2.84         18.9 (per-slot +1790%)
+T=84  :       0.10          1.85         18.5 (per-slot +1750%)
+```
+
+Per-bucket LFM peaks at **T=4 = 1.27 Mops/s**, then collapses
+under Zipf hot-bucket contention (LFM mutex serialization).
+**This exactly matches iter-2A-revised's reported peak (1.27 Mops/s
+@ T=4)**, confirming iter-2A-revised's path was per-bucket LFM
+running on the same no-op N:1:1:N as iter-3A's primary deliverables.
+
+Per-slot LFM converts the contention collapse into roughly flat
+scaling at high T. **Clean attribution: per-slot LFM IS the
+iter-3A win that lifts the workload-A peak from 1.27 (T=4) to
+~4.6 Mops/s (T=82+ multi-rep median)**.
+
 ## Stable peak summary
 
 | Workload | Stable median | Original sweep value | 20 Mops/s bar |
