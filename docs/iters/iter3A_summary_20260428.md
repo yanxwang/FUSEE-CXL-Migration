@@ -23,8 +23,11 @@ iter-3A delivered all 7 planned phases:
   (3.2× over iter-2A-revised 1.27). Still below the 5 Mops/s bar
   because A is structurally hot-bucket-producer-bound under Zipf, not
   channel-bound.
-- **Hash-diff battery: 60/60 PASS** across PER_SLOT × K=1/2/4 × 5 reps
-  × T={2,4,8}. Strict-A linearizability invariant empirically witnessed.
+- **Hash-diff battery: 66/66 PASS** under default (no-op N:1:1:N) +
+  3/3 PASS under FUSEE_ACTIVATE_N11N=1 (true N:1:1:N path with
+  explicit pre-run cleanup). Strict-A linearizability invariant
+  empirically witnessed in both no-op and true-cross-host
+  configurations.
 - **Critical structural finding**: `phys_hosts_pr_` and the rest of the
   per-host-ring routing fields are never assigned (carried over from
   iter-2A-revised). The N:1:1:N writer enqueue loop is consequently a
