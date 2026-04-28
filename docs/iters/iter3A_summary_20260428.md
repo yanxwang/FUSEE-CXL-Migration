@@ -229,6 +229,38 @@ iter-4A first task: profile + tune the writer→sender→receiver→sender
 point; co-locating the worker_ack_buf with the worker on the same
 core L1 is the second.
 
+**Decomp under N:1:1:N enabled** (workload A T=4 cache=on, K=2,
+per-slot LFM, 5000 ops, single rep, with explicit cleanup):
+
+| Stage | Avg ns | % of total | vs legacy decomp (PS=0 T=4) |
+|-------|--------|------------|------------------------------|
+| S1 lock          | 7,291 | 52 % | 1.09× (legacy 6,685) |
+| S2 scan          |   881 | 6 %  | -7 % |
+| S3 publish       | 3,548 | 25 % | -60 % (legacy 8,832 — included CXL ack-wait) |
+| S4 epoch/ack-wait|    17 | 0.1 %| **-99.9 %** (legacy 17,731) |
+| S5 unlock        |   964 | 7 %  | -43 % |
+| aggregator_enq   |    18 | 0.1 %| (new probe) |
+| **TOTAL**        | **13,946** | 100 % | -61 % vs legacy decomp T=4 |
+
+Key insight: in the active N:1:1:N path **S4 ack-wait is essentially
+free** (17 ns). The cross-host coordination cost has migrated into
+S3 publish (3.5 µs vs negligible in pre-iter-3A). And the throughput
+(1.26 Mops/s in this single-cell decomp) is competitive with the
+no-op default sweep1 number (1.22 Mops/s). So the **iter-4A
+opportunity is NOT to make ack-wait faster — it is to keep S1 lock
+under control while exposing the cross-host correctness invariant**.
+This contradicts the iter-3A summary's earlier conjecture about
+"ack-spin granularity"; the real hot path is S1 + S3.
+
+iter-4A first task is therefore re-pointed: **investigate why S1
+spikes to 7.3 µs at T=4 even with per-slot LFM** (legacy path's
+T=4 PS=1 decomp showed S1=5.7 µs, so N:1:1:N adds ~1.6 µs to S1).
+Plausible cause: contention on `bucket_lock_table_.entry(b_idx)
+->write_epoch` cacheline that both writer and (any) cross-host
+observer touch.
+
+---
+
 **FUSEE_SENDER_BATCH_T_US sweep** (N:1:1:N enabled, workload A T=4
 cache=on, 10k ops, K=1):
 
