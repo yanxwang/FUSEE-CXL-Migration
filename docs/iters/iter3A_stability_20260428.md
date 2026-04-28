@@ -147,6 +147,23 @@ scaling at high T. **Clean attribution: per-slot LFM IS the
 iter-3A win that lifts the workload-A peak from 1.27 (T=4) to
 ~4.6 Mops/s (T=82+ multi-rep median)**.
 
+## Per-slot LFM win across workloads (T=32 cache=on K=1, single-rep)
+
+```
+              per-bucket    per-slot     Speedup
+workloadb :    4.60          14.41        3.13×  (95R/5U)
+workloadc :   16.54          17.68        1.07×  (100R — no writes contend)
+workloadd :   16.54          16.40        1.00×  (5I/95R — light writes)
+workloadf :    1.01           4.03        3.99×  (50/50 RMW — writes dominate)
+```
+
+Per-slot LFM win is **write-frequency-driven**: workloads with
+significant write share (B, F) see 3-4× speedup at T=32; read-only
+(C) or read-mostly (D) workloads see no benefit because the write
+lock is rarely contended. Generalises the workload-A attribution
+(15-19× at high T) — per-slot LFM is the right port for *any*
+Zipf-distributed write-heavy workload.
+
 ## Stable peak summary
 
 | Workload | Stable median | Original sweep value | 20 Mops/s bar |
