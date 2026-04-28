@@ -17,18 +17,19 @@ iter-3A delivered all 7 planned phases:
   → 41,993 ns; T=32: 733,650 ns → 151,000 ns) and lifts workload-A
   cache=on throughput 2–2.4× at the same cells (T=16: 83k → 164k;
   T=32: 46k → 109k ops/s/host).
-- **Workload C cache=off T=82 hits 35.13 Mops/s** in the single-rep
-  sweep2 measurement, but a 5-rep stability check at the same cell
-  (extension period, post-sweep) gives median **21.66 Mops/s** (5
-  reps: 21.66, 21.32, 34.90, 21.89, 21.50 Mops/s). The 35M number
-  was a 1-in-5 high-variance outlier; the **stable Mops/s for C
-  cache=off T=82 is ~21.5 Mops/s**, comparable to sweep1's K=1
-  number (21.88). All `trans_wall_max` values are 6–9 ms — at
-  this short wall-clock the measurement is noise-dominated; multi-
-  rep averaging is required to compare K=1 vs K=2 reliably.
-  D cache=off T=64 = 27.24 Mops/s in sweep2 (single rep) — also
-  needs multi-rep verification before claiming reliable improvement
-  over sweep1.
+- **Workload C cache=off best stable Mops/s** (extension-period
+  5-rep medians; both above 20 Mops/s bar): K=1 T=84 = **22.51**
+  Mops/s; K=2 T=82 = **21.66** Mops/s. **K=1 is slightly better
+  than K=2** under multi-rep averaging — the K-channel work
+  (Finding-1) does not deliver real cross-host parallelism. Sweep1
+  single-rep was 21.88; sweep2 single-rep 35.13 was a 1-in-5
+  high-variance outlier (5 reps: 21.66, 21.32, 34.90, 21.89, 21.50
+  Mops/s, σ ≈ 5.4 Mops/s; sweep1 5 reps: 22.00, 22.58, 22.51,
+  22.70, 22.33, σ ≈ 0.27 Mops/s — sweep1 is far more stable).
+  D cache=off T=64 = 27.24 Mops/s in sweep2 (single rep, untested
+  for stability). All `trans_wall_max` values are 6–9 ms — at this
+  short wall-clock, measurement is noise-dominated; multi-rep
+  averaging is required to compare K=1 vs K=2.
 - **Workload A peak in sweep2 (K=2) = 4.01 Mops/s** @ T=82 cache=off
   (3.2× over iter-2A-revised 1.27). Still below the 5 Mops/s bar
   because A is structurally hot-bucket-producer-bound under Zipf, not
