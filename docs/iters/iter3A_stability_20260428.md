@@ -109,6 +109,21 @@ median: 3.28 Mops/s, σ ≈ 0.28 — miss 20 Mops/s
 
 ---
 
+## Per-bucket vs per-slot LFM at workloadA cache=off K=1 (single-rep)
+
+```
+              per-bucket    per-slot     ratio
+T=8   :       1.05          1.67         1.59×
+T=16  :       0.66          2.25         3.41×
+T=32  :       0.50          2.67         5.34×
+T=64  :       0.28          3.26         11.6×
+T=84  :       0.25          3.95         15.6×
+```
+
+Same shape as cache=on but more pronounced. Per-slot LFM at T=84
+cache=off lifts throughput 15.6× over per-bucket. The path peaks
+at T=82–84 (multi-rep median 4.55 Mops/s) instead of collapsing.
+
 ## Per-bucket vs per-slot LFM at workloadA cache=on K=1 (single-rep)
 
 ```
