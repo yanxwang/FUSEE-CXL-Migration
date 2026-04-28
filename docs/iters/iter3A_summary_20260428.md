@@ -244,6 +244,23 @@ high values, but the bottleneck below 20 µs is elsewhere (likely the
 ack-spin granularity on the worker_ack_buf cacheline). iter-4A profile
 should target that line.
 
+**K-channel sweep with N:1:1:N enabled** (workload A T=4 cache=on,
+10k ops, batch_t_us=20):
+
+| K | Mops/s |
+|---|--------|
+| 1 | 0.13   |
+| 2 | 0.19 ← +42 % over K=1 |
+| 4 | timed out (60 s) |
+
+When the path is genuinely active, K=2 is the meaningful value —
+real K-channel parallelism gives +42 % vs K=1 at T=4. K=4 hits CPU-
+oversubscription / aggregator MPSC contention. This corroborates
+the K-param sweep's K=2 winner ranking from a different angle:
+that sweep's win was probably a CPU-pinning artifact (since the
+path was no-op'd), but the underlying K=2 design IS the right
+choice once the path runs.
+
 **Cross-comparison with iter-2A-revised**:
 
 | Config | Workload A T=4 cache=on |
