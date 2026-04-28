@@ -31,6 +31,24 @@ The original sweep2 single-rep recorded **35.13 Mops/s**;
 re-measurement reveals it was a 1-in-5 high-variance outlier.
 K=2 is **slightly worse** than K=1 at this cell.
 
+## Workload A cache=off T=84 K=1 (sweep1 A peak)
+
+```
+rep=1 : 4,545,713
+rep=2 : 4,863,397
+rep=3 : 4,441,120
+rep=4 : 3,211,105
+rep=5 : 5,346,525  ← crosses 5 Mops/s bar
+median: 4.55 Mops/s, σ ≈ 0.78 — miss 5 Mops/s by median; 1/5 reps cross
+```
+
+Original sweep1 single-rep: 3.95. iter-3A workload-A K=1 peak
+**reframed to 4.55 Mops/s** under multi-rep median.
+
+Comparison with K=2: both K=1 (median 4.55) and K=2 (median 4.62)
+have 1/5 reps cross 5 Mops/s. Statistically indistinguishable at
+this cell — confirms K-channel routing is no-op.
+
 ## Workload A cache=off T=82 K=2 (sweep2 A peak)
 
 ```
