@@ -26,10 +26,10 @@ iter-3A delivered all 7 planned phases:
   high-variance outlier (5 reps: 21.66, 21.32, 34.90, 21.89, 21.50
   Mops/s, σ ≈ 5.4 Mops/s; sweep1 5 reps: 22.00, 22.58, 22.51,
   22.70, 22.33, σ ≈ 0.27 Mops/s — sweep1 is far more stable).
-  D cache=off T=64 = 27.24 Mops/s in sweep2 (single rep, untested
-  for stability). All `trans_wall_max` values are 6–9 ms — at this
-  short wall-clock, measurement is noise-dominated; multi-rep
-  averaging is required to compare K=1 vs K=2.
+  D cache=off T=64 stable median **26.99 Mops/s** (5 reps; σ ≈ 0.31)
+  is also above 20 Mops/s. All `trans_wall_max` values are 6–9 ms
+  — at this short wall-clock, single-rep measurement is noise-
+  dominated; multi-rep averaging is required to compare K=1 vs K=2.
 - **Workload A peak (5-rep median in extension) = 4.62 Mops/s** @
   T=82 cache=off K=2 (5 reps: 4.46, 4.62, 5.22, 3.54, 4.81; original
   single-rep sweep2 recorded 4.01). Median is 3.6× over iter-2A-
