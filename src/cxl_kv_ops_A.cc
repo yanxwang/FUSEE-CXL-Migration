@@ -127,25 +127,36 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
               phys_hosts, kMaxPhysicalHosts);
       per_host_rings_enabled_ = false;
     }
-    // iter-3A FINDING: phys_hosts_pr_ et al. are intentionally LEFT at
-    // their defaults (1, 0, 1, 0). Assigning them from FUSEE_NUM_HOSTS
-    // activates the cross-host SPSC ring + ack channel exchange in
-    // dispatch_and_wait + sender_loop_k + receiver_loop_k, which dead-
-    // locks under the current sender/receiver synchronization (every
-    // smoke run with non-trivial workload hangs in the writer's ack
-    // spin or the sender's ack-channel poll). The legacy iter-2A-
-    // revised code shipped with the same defect; the symptom there
-    // was "1.27 Mops/s = no cross-host work", not a deadlock, because
-    // the empty enqueue loop made any_enqueued=false and the writer
-    // returned immediately. iter-3A discovers the gap explicitly via
-    // the hash-diff battery (which still PASSES because publish_slot
-    // writes to shared CXL memory directly — both hosts see the same
-    // final bucket array even without invalidation traffic), and
-    // documents the resulting "no-op N:1:1:N" baseline. iter-4A
-    // candidates: (1) fix _pr_ assignment + debug the cross-host
-    // deadlock; (2) abandon N:1:1:N in favour of the legacy
-    // PendingRingMatrix path with per-slot LFM (already shown to
-    // work in the cxl_ycsb_runner without FUSEE_PER_HOST_RING).
+    // iter-3A FINDING-1: phys_hosts_pr_ et al. default to (1, 0, 1, 0).
+    // The K-channel writer enqueue loop in dispatch_and_wait iterates
+    // `dst_h < phys_hosts_pr_` then skips `dst_h == my_phys_host_pr_`,
+    // so when defaults are kept the loop runs 0 times and the writer
+    // returns without touching the cross-host SPSC ring. That is the
+    // historical iter-2A-revised behaviour — fast (no cross-host
+    // traffic) but does not actually invalidate peer caches; relied on
+    // publish_slot writing to shared CXL bytes for peer-host
+    // visibility.
+    //
+    // Setting FUSEE_ACTIVATE_N11N=1 assigns the fields so the
+    // K-channel path runs end-to-end. iter-3A measurement (workload
+    // A T=4 cache=on, 10k ops): 0.97 Mops/s with N:1:1:N enabled
+    // vs 1.62 Mops/s with default (no-op) = 40 % slower. T=1, T=2,
+    // T=8 time out at 180 s with N:1:1:N enabled (ACK budget × ops).
+    // iter-4A first task: profile + speed up the cross-host SPSC
+    // ring exchange so this can be the default.
+    bool activate_n11n =
+        getenv("FUSEE_ACTIVATE_N11N") &&
+        getenv("FUSEE_ACTIVATE_N11N")[0] == '1';
+    if (per_host_rings_enabled_ && phys_hosts >= 1 && activate_n11n) {
+      phys_hosts_pr_      = phys_hosts;
+      clients_per_host_pr_ = (num_hosts > 0 && phys_hosts > 0)
+                                 ? (num_hosts / phys_hosts) : 1;
+      if (clients_per_host_pr_ < 1) clients_per_host_pr_ = 1;
+      my_phys_host_pr_    = (clients_per_host_pr_ > 0)
+                                 ? (host_id / clients_per_host_pr_) : 0;
+      my_cid_in_host_pr_  = (clients_per_host_pr_ > 0)
+                                 ? (host_id % clients_per_host_pr_) : 0;
+    }
   }
 
   if (init_region) {

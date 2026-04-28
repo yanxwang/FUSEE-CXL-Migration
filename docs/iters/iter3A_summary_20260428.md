@@ -28,14 +28,14 @@ iter-3A delivered all 7 planned phases:
 - **Critical structural finding**: `phys_hosts_pr_` and the rest of the
   per-host-ring routing fields are never assigned (carried over from
   iter-2A-revised). The N:1:1:N writer enqueue loop is consequently a
-  no-op; only the local `cache_epoch_arr_.store()` runs cross-host. We
-  attempted to assign these fields and the cross-host SPSC ring + ack
-  channel exchange immediately deadlocks under non-trivial workload —
-  the new path needs sender/receiver synchronization fixes before it
-  can run end-to-end. Sweep1/sweep2/K-param/Phase-6 results are valid
-  for the **"per-slot LFM + same-host atomic_store invalidation"**
-  configuration, **NOT** for true K-channel cross-host invalidation.
-  This is now the dominant iter-4A candidate.
+  no-op; only the local `cache_epoch_arr_.store()` runs cross-host.
+  Sweep1/sweep2/K-param/Phase-6 results are valid for the **"per-slot
+  LFM + same-host atomic_store invalidation"** configuration, **NOT**
+  for true K-channel cross-host invalidation. Adding the
+  `FUSEE_ACTIVATE_N11N=1` env (extension period) activates the path:
+  it runs end-to-end (no deadlock) but adds 40 % at T=4 and 11× at T=1
+  vs the no-op default. iter-4A first task: profile + speed up the
+  writer→sender→receiver→sender→writer round-trip.
 
 ---
 
@@ -187,12 +187,44 @@ shared CXL region directly — the peer eventually reads the new bytes
 on its next CXL load, regardless of whether its `cache_epoch_arr`
 got bumped.
 
-**Activation attempt**: assigning the four fields from
-`FUSEE_NUM_HOSTS` immediately deadlocks every smoke run with non-
-trivial workload. The deadlock is in the cross-host SPSC ring
-publish + ack-channel poll exchange — the writer's ack-spin times
-out, sender's ack-channel poll never advances. We did not get to
-root-cause the synchronization issue under the iter-3A deadline.
+**Activation attempt + measurement** (added in extension period
+after sweep1/sweep2/Phase-6 finished):
+
+After the initial activation appeared to deadlock, the actual
+behaviour turned out to be slow-but-not-deadlocked. Adding a
+`FUSEE_ACTIVATE_N11N` env knob (off by default; iter-3A primary
+deliverables ran with it OFF) and re-running with it ON gives:
+
+| Cell | N:1:1:N **OFF** (default; sweep1) | N:1:1:N **ON** (FUSEE_ACTIVATE_N11N=1) |
+|------|------------------------------------|-----------------------------------------|
+| Workload A T=1 cache=on, 200k ops | 0.347 Mops/s aggregate | 0.030 Mops/s (timed out earlier; ran 200k ops in ~7s load + ~7s trans = 0.029 Mops/s) |
+| Workload A T=4 cache=on, 10k ops  | ~1.62 Mops/s (extrapolated from sweep1 thpt curve) | **0.97 Mops/s** |
+| Workload A T=2/8 cache=on, 10k ops | ~1.0 Mops/s | timed out at 180 s |
+
+So N:1:1:N is **not deadlocked**, just **structurally too slow for
+production**: the writer's per-op ACK budget (200 ms) compounds with
+the sender's per-batch ack-spin to give 100 µs+ per write at T=1.
+At T={1,2,8} this exceeds the 180 s wall-clock budget for 10k ops
+(≈ 18 ms / op effective). At T=4 the K=2 channel split happens to
+match the host count and 10k ops finish in ~10 s.
+
+Concretely the bottleneck is in
+`dispatch_and_wait::ack_spin → ack_bufs[k_route].slots[my].ack_op_id`,
+which polls a DRAM cacheline that is only flipped by the source-
+side sender thread after CXL ACK arrives. The sender flushes
+`ack_seq` to CXL, peer receiver pulls + bumps + flushes back —
+each round trip is roughly 2 × (CXL-write + CXL-read) ≈ 1.2 µs of
+bus time, but the overall T=1 latency is 130 µs/op, suggesting
+the overhead comes from sender batching (with K_actual=1 most of
+the time + the 20 µs FUSEE_SENDER_BATCH_T_US timeout) and from
+worker_ack_buf cacheline ping-ponging on the same-host coherence
+fabric.
+
+iter-4A first task: profile + tune the writer→sender→receiver→sender
+→writer round-trip. Lowering `FUSEE_SENDER_BATCH_T_US` from 20 µs to
+~2 µs (matching the per-op latency target) is the obvious starting
+point; co-locating the worker_ack_buf with the worker on the same
+core L1 is the second.
 
 ### Finding-2: `cxl_latency_decomp_A` instrumented binary cannot run with `FUSEE_PER_HOST_RING=1`
 
