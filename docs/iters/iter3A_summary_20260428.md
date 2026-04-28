@@ -226,6 +226,45 @@ iter-4A first task: profile + tune the writer→sender→receiver→sender
 point; co-locating the worker_ack_buf with the worker on the same
 core L1 is the second.
 
+**FUSEE_SENDER_BATCH_T_US sweep** (N:1:1:N enabled, workload A T=4
+cache=on, 10k ops, K=1):
+
+| batch_t_us | Mops/s |
+|------------|--------|
+| 2          | 0.99   |
+| 5          | 0.98   |
+| 10         | 0.99   |
+| 20 (default) | ~0.97 (ran in earlier 50k-op test) |
+| 100        | 0.11   |
+
+Lowering from 20 µs to 2 µs gives ~1-2 % uplift only — the hypothesis
+that batch timeout dominates is **falsified**. Stretching to 100 µs
+collapses to 0.11 Mops/s, confirming the timeout *is* a soft floor at
+high values, but the bottleneck below 20 µs is elsewhere (likely the
+ack-spin granularity on the worker_ack_buf cacheline). iter-4A profile
+should target that line.
+
+**Cross-comparison with iter-2A-revised**:
+
+| Config | Workload A T=4 cache=on |
+|--------|-------------------------|
+| iter-2A-revised (no-op N:1:1:N, per-bucket LFM) | 1.27 Mops/s peak (T=4 was the peak) |
+| iter-3A sweep1 (no-op N:1:1:N, per-slot LFM)    | **1.22 Mops/s** (T=4 specific) |
+| iter-3A N:1:1:N true + per-slot LFM             | **0.99 Mops/s** |
+
+Counter-intuitive: per-slot LFM gives a slight regression at T=4
+relative to per-bucket because at low T there is no bucket
+contention to relieve, and the per-slot LFM's extra atomic on the
+SlotLockEntry adds a small constant. The per-slot LFM wins at T ≥ 8
+(Phase 6 decomp confirms 3-5× S1 reduction). Activating N:1:1:N then
+adds another -19 % overhead.
+
+Net: at T=4 cache=on, per-bucket-no-N:1:1:N (iter-2A-revised) is the
+fastest configuration **for this specific cell**. The reason iter-3A's
+peak across the matrix is higher (4.01 Mops/s on workload A T=82
+cache=off) is that per-slot LFM's win at high T more than recovers
+the low-T regression — and high-T cells dominate the headline peak.
+
 ### Finding-2: `cxl_latency_decomp_A` instrumented binary cannot run with `FUSEE_PER_HOST_RING=1`
 
 Even after wiring `enable_per_host_ring()` into the decomp_A test
