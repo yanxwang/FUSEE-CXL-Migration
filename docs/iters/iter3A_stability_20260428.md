@@ -85,6 +85,17 @@ rep=5 : 15,212,372 (wall=0.013s)
 median: 15.19 Mops/s, σ ≈ 0.18 — miss 20 Mops/s
 ```
 
+## Workload A cache=on K=1 across T (3 reps each, per-slot LFM)
+
+```
+T=8  : 1.66, 2.23, 2.25 Mops/s — median 2.23, σ ≈ 0.34
+T=16 : 2.29, 2.83, 2.54         — median 2.54, σ ≈ 0.27
+T=32 : 3.02, 3.07, 3.07         — median 3.07, σ ≈ 0.02
+```
+
+Demonstrates that the per-slot LFM benefit grows monotonically with
+T (consistent with Phase 6 decomp showing 3-5× S1 reduction at T≥8).
+
 ## Workload F cache=off T=64 K=2
 
 ```
