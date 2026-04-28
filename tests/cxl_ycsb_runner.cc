@@ -693,6 +693,52 @@ int main(int argc, char **argv) {
   // Stop replicator threads (safe only after ALL peers finish, to avoid
   // tearing down a ring while a peer writer is still enqueueing).
   // Primary client does the cross-host "all done" wait; children exit cleanly.
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  // iter-3A Phase 1: per-host primary (client_id == 0) dumps final
+  // state for cross-host hash-diff battery. Triggered by env
+  // FUSEE_FINAL_STATE_DUMP=<path>. Both hosts' primary clients
+  // produce a dump; orchestrator-side `cmp` checks byte-equality on
+  // the bucket array section.
+  auto dump_final_state = [&](const char *path) {
+    if (!path || !path[0]) return;
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+      fprintf(stderr, "[h%d] FUSEE_FINAL_STATE_DUMP fopen %s failed\n", host_id, path);
+      return;
+    }
+    const char magic[8] = {'F','U','S','D','I','F','F','A'};
+    fwrite(magic, 1, 8, fp);
+    uint32_t hh = (uint32_t)host_id;
+    uint32_t nb = num_buckets;
+    fwrite(&hh, 4, 1, fp);
+    fwrite(&nb, 4, 1, fp);
+    size_t hdr = 4096;
+    size_t locks_sz = fusee::BucketLockTable::bytes_for(num_buckets);
+    size_t after_locks = (hdr + locks_sz + 63) & ~63ULL;
+    fusee::CxlKvBucket *bk_base = reinterpret_cast<fusee::CxlKvBucket *>(
+        (char *)r.base + after_locks);
+    for (uint32_t b = 0; b < num_buckets; b++) {
+      fusee::CxlKvBucket *bk = &bk_base[b];
+      for (int s = 0; s < fusee::kCxlKvSlotsPerBucket; s++) {
+        flush_line(&bk->slots[s].key);
+        flush_line(&bk->slots[s].value);
+      }
+      full_fence();
+      fwrite(bk, sizeof(fusee::CxlKvBucket), 1, fp);
+    }
+    if (cache_epoch_arr) {
+      for (uint32_t b = 0; b < num_buckets; b++) {
+        uint64_t v = cache_epoch_arr->epoch[b].load(std::memory_order_acquire);
+        fwrite(&v, 8, 1, fp);
+      }
+    } else {
+      uint64_t z = 0;
+      for (uint32_t b = 0; b < num_buckets; b++) fwrite(&z, 8, 1, fp);
+    }
+    fclose(fp);
+    fprintf(stderr, "[h%d] FUSEE_FINAL_STATE_DUMP wrote %s\n", host_id, path);
+  };
+#endif
   if (!is_primary_client) {
     // Also wait for all workers to be done before store.stop() (Option A
     // replicator must not disappear while peers still push). Simple barrier:
@@ -703,6 +749,12 @@ int main(int argc, char **argv) {
           __builtin_ia32_pause();
       }
     }
+#if CONSENSUS_OPT == FUSEE_OPT_A
+    // Per-host primary on host 1 (client_id==0) also produces a dump.
+    if (client_id == 0) {
+      dump_final_state(getenv("FUSEE_FINAL_STATE_DUMP"));
+    }
+#endif
     store.stop();
     cxl_region_destroy(&r);
     _exit(0);
@@ -715,6 +767,9 @@ int main(int argc, char **argv) {
         __builtin_ia32_pause();
     }
   }
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  dump_final_state(getenv("FUSEE_FINAL_STATE_DUMP"));
+#endif
   store.stop();
 
   // Reap our fork children.

@@ -112,6 +112,11 @@ class CxlKvStoreA {
   int      host_id_ = -1;
   int      num_hosts_ = 0;
   BucketLockTable   lock_table_;
+  // iter-3A Phase 2: per-slot LFM (port from C iter-1). Allocated
+  // unconditionally at end of region; initialised only when
+  // FUSEE_PER_SLOT_LFM_A=1. Default unchanged.
+  SlotLockTable     slot_lock_table_;
+  bool              per_slot_lfm_a_ = false;
   CxlKvBucket      *buckets_ = nullptr;
   PendingRingMatrix *rings_ = nullptr;
 
@@ -135,12 +140,24 @@ class CxlKvStoreA {
   int my_cid_in_host_pr_   = 0;
   // Sender thread state. Spawned only on each host's primary client
   // (host_id within physical host == 0).
-  std::thread sender_thread_;
+  // iter-3A Phase 4: K-channel sender threads + receiver threads.
+  // Default k_channels_=1 reduces to iter-2A-revised single-channel
+  // behavior; K=2/4 spawn K threads each with `bucket_id % K` routing.
+  std::thread sender_threads_[kMaxKChannels];
+  std::thread receiver_threads_[kMaxKChannels];
   std::atomic<bool> sender_started_{false};
+  std::atomic<bool> receiver_started_{false};
+  std::atomic<bool> per_host_recv_stop_{false};
+  uint32_t k_channels_ = 1;     // 1, 2, or 4
   uint32_t sender_batch_k_ = 4;
   uint64_t sender_batch_t_ns_ = 20000ULL;  // 20 µs
-  int sender_core_ = -1;     // <0 = no pinning
-  int receiver_core_ = -1;
+  int sender_core_ = -1;     // base core for sender_threads_[0]
+  int receiver_core_ = -1;   // base core for receiver_threads_[0]
+  int sender_core_base_ = -1;
+  int receiver_core_base_ = -1;
+  // iter-3A Phase 1 probe: K_actual histogram (bucketed by integer K).
+  // Indexed 0..64; 64+ saturates. Updated only by sender thread.
+  uint64_t sender_k_actual_hist_[65] = {0};
  public:
   // iter-2A-revised wiring API. Call after attach() on every client;
   // primary client (cid_in_host == 0) attaches with init_region=true
@@ -159,7 +176,13 @@ class CxlKvStoreA {
   uint64_t cache_epoch_load(uint32_t bucket_idx) const;
 
  private:
-  void sender_loop();
+  void sender_loop_k(uint32_t k_id);
+  // iter-3A Phase 4: per-channel receiver loop. Drains
+  // rings[*][me][k_id] only and publishes acks[*][me][k_id]. Spawned
+  // K times by enable_per_host_ring on the host's primary client.
+  void receiver_loop_k(uint32_t k_id);
+  // Stop K receiver threads (primary only). Idempotent.
+  void stop_per_host_receivers();
   // Per-worker slot index for worker_ack_buf. Set in
   // enable_per_host_ring. <0 if not configured.
   int my_worker_slot_pr_ = -1;

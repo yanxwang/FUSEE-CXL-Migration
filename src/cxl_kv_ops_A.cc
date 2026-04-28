@@ -55,7 +55,10 @@ size_t CxlKvStoreA::bytes_for(uint32_t num_buckets) {
   // iter-1A: always reserve PerHostOutMatrix region tail; the structure
   // is small (~4 MB) and only consumed when FUSEE_PER_HOST_RING=1.
   size_t after_pending = align_up(after_buckets + pending_ring_matrix_bytes(), 64);
-  return after_pending + per_host_out_matrix_bytes();
+  size_t after_perhost = align_up(after_pending + per_host_out_matrix_bytes(), 64);
+  // iter-3A Phase 2: SlotLockTable always reserved at tail; consumed
+  // only when FUSEE_PER_SLOT_LFM_A=1. ~17 GiB at num_buckets=65536.
+  return after_perhost + SlotLockTable::bytes_for(num_buckets);
 }
 
 static inline uint64_t now_ns() {
@@ -95,6 +98,17 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
   size_t after_pending =
       align_up(after_buckets + pending_ring_matrix_bytes(), 64);
   per_host_rings_ = reinterpret_cast<PerHostOutMatrix *>(base + after_pending);
+  // iter-3A Phase 2: SlotLockTable region. Read FUSEE_PER_SLOT_LFM_A env
+  // and initialise the per-slot LFM mutex table only when enabled.
+  size_t after_perhost = align_up(after_pending + per_host_out_matrix_bytes(), 64);
+  void *slot_lock_base = base + after_perhost;
+  {
+    const char *e = getenv("FUSEE_PER_SLOT_LFM_A");
+    per_slot_lfm_a_ = (e && e[0] == '1');
+    if (per_slot_lfm_a_) {
+      slot_lock_table_.attach(slot_lock_base, num_buckets, init_region);
+    }
+  }
   {
     const char *e = getenv("FUSEE_PER_HOST_RING");
     per_host_rings_enabled_ = (e && e[0] == '1');
@@ -169,6 +183,7 @@ void CxlKvStoreA::stop() {
   // (which happens for the host's primary client) we want to drain
   // pending acks before tearing down.
   stop_per_host_sender();
+  stop_per_host_receivers();
   if (replicator_.joinable()) {
     stop_.store(true, std::memory_order_relaxed);
     replicator_.join();
@@ -213,6 +228,23 @@ int CxlKvStoreA::enable_per_host_ring(LocalAggregatorRegion *aggr_region,
   sender_core_      = sender_core;
   receiver_core_    = receiver_core;
   per_host_rings_enabled_ = true;
+
+  // iter-3A Phase 4: K-channel sharding. K = 1 (default, legacy
+  // iter-2A-revised) | 2 | 4. Same value MUST be used across all
+  // hosts (controls SPSC ring + ack channel layout in CXL).
+  k_channels_ = 1;
+  if (const char *e = getenv("FUSEE_K_CHANNELS")) {
+    int v = atoi(e);
+    if (v == 1 || v == 2 || v == 4) k_channels_ = (uint32_t)v;
+  }
+  sender_core_base_ = -1;
+  receiver_core_base_ = -1;
+  if (const char *e = getenv("FUSEE_SENDER_CORE_BASE")) {
+    int v = atoi(e); if (v >= 0) sender_core_base_ = v;
+  }
+  if (const char *e = getenv("FUSEE_RECEIVER_CORE_BASE")) {
+    int v = atoi(e); if (v >= 0) receiver_core_base_ = v;
+  }
   // Worker slot used by this client; total clients across all hosts
   // are addressed in worker_ack_buf via the (host-local) cid index.
   // host_id_ is the global worker id; my_cid_in_host_pr_ is the
@@ -226,11 +258,24 @@ int CxlKvStoreA::enable_per_host_ring(LocalAggregatorRegion *aggr_region,
     per_host_rings_enabled_ = false;
     return -1;
   }
-  // Primary client of this physical host spawns the sender thread.
+  // Primary client of this physical host spawns the K sender + K
+  // receiver threads. iter-3A Phase 4: K threads instead of 1; each
+  // owns channel `k_id`. Receivers drain rings[*][me][k_id] and
+  // publish acks[*][me][k_id] — by-channel routing keeps a bucket's
+  // updates serialised on a single (sender, receiver) pair.
   if (my_cid_in_host_pr_ == 0) {
-    bool expected = false;
-    if (sender_started_.compare_exchange_strong(expected, true)) {
-      sender_thread_ = std::thread([this]() { this->sender_loop(); });
+    bool expected_s = false;
+    if (sender_started_.compare_exchange_strong(expected_s, true)) {
+      for (uint32_t k = 0; k < k_channels_; k++) {
+        sender_threads_[k] = std::thread([this, k]() { this->sender_loop_k(k); });
+      }
+    }
+    bool expected_r = false;
+    if (receiver_started_.compare_exchange_strong(expected_r, true)) {
+      per_host_recv_stop_.store(false, std::memory_order_relaxed);
+      for (uint32_t k = 0; k < k_channels_; k++) {
+        receiver_threads_[k] = std::thread([this, k]() { this->receiver_loop_k(k); });
+      }
     }
   }
   return 0;
@@ -239,18 +284,100 @@ int CxlKvStoreA::enable_per_host_ring(LocalAggregatorRegion *aggr_region,
 void CxlKvStoreA::stop_per_host_sender() {
   if (!aggregator_) return;
   if (!sender_started_.load()) return;
-  aggregator_->queue.hdr.stop.store(1, std::memory_order_release);
-  if (sender_thread_.joinable()) sender_thread_.join();
+  // Signal stop on all channel headers.
+  for (uint32_t k = 0; k < k_channels_; k++) {
+    aggregator_->queues[k].hdr.stop.store(1, std::memory_order_release);
+  }
+  for (uint32_t k = 0; k < k_channels_; k++) {
+    if (sender_threads_[k].joinable()) sender_threads_[k].join();
+  }
   sender_started_.store(false);
 }
 
-void CxlKvStoreA::sender_loop() {
-  if (!aggregator_ || !per_host_rings_) return;
-  LocalAggregatorQueue *q = &aggregator_->queue;
+void CxlKvStoreA::stop_per_host_receivers() {
+  if (!receiver_started_.load()) return;
+  per_host_recv_stop_.store(true, std::memory_order_release);
+  for (uint32_t k = 0; k < k_channels_; k++) {
+    if (receiver_threads_[k].joinable()) receiver_threads_[k].join();
+  }
+  receiver_started_.store(false);
+}
 
-  // Optional CPU pinning.
-  if (sender_core_ >= 0) {
-    cpu_set_t set; CPU_ZERO(&set); CPU_SET(sender_core_, &set);
+void CxlKvStoreA::receiver_loop_k(uint32_t k_id) {
+  if (!per_host_rings_ || !cache_epoch_arr_) return;
+  if (k_id >= kMaxKChannels) return;
+
+  // CPU pinning: receiver_core_base_ + k_id when set; else
+  // receiver_core_ for legacy k_id == 0 only.
+  int pin_core = -1;
+  if (receiver_core_base_ >= 0) pin_core = receiver_core_base_ + (int)k_id;
+  else if (k_id == 0 && receiver_core_ >= 0) pin_core = receiver_core_;
+  if (pin_core >= 0) {
+    cpu_set_t set; CPU_ZERO(&set); CPU_SET(pin_core, &set);
+    pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+  }
+
+  while (!per_host_recv_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int src_host = 0; src_host < phys_hosts_pr_; src_host++) {
+      if (src_host == my_phys_host_pr_) continue;
+      PerHostSpscRing *r =
+          &per_host_rings_->rings[src_host][my_phys_host_pr_][k_id];
+      flush_line((void *)&r->tail);
+      full_fence();
+      uint64_t tail = r->tail.load(std::memory_order_acquire);
+      uint64_t head = r->head;
+      while (head < tail) {
+        DECOMP_DECL(__re_t0);
+        PerHostInvalEntry *e =
+            &r->entries[head % kPerHostSpscDepth];
+        flush_line((void *)e);
+        full_fence();
+        uint64_t op_id = e->src_worker_op_id;
+        if (op_id == 0) break;  // sender hasn't published yet
+        uint64_t bucket_hit = e->bucket_idx;
+        uint64_t new_epoch  = e->new_epoch;
+        DECOMP_DECL(__ra_t0);
+        if (bucket_hit < (uint64_t)num_buckets_) {
+          cache_epoch_arr_->epoch[bucket_hit].store(
+              new_epoch, std::memory_order_release);
+        }
+        DECOMP_DECL(__ra_t1);
+        DECOMP_REC(kDecompStageA_RecvAtomic, __ra_t0, __ra_t1);
+        e->src_worker_op_id = 0;
+        compiler_barrier();
+        flush_line((void *)e);
+        head++;
+        replicated_ops_.fetch_add(1, std::memory_order_relaxed);
+        did_work = true;
+        DECOMP_DECL(__re_t1);
+        DECOMP_REC(kDecompStageA_RecvEntry, __re_t0, __re_t1);
+      }
+      r->head = head;
+      // Advance ack channel for this (src_host, me, k_id).
+      AckChannel *ach =
+          &per_host_rings_->acks[src_host][my_phys_host_pr_][k_id];
+      ach->seq.store(head, std::memory_order_release);
+      flush_line((void *)&ach->seq);
+      store_fence();
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
+}
+
+void CxlKvStoreA::sender_loop_k(uint32_t k_id) {
+  if (!aggregator_ || !per_host_rings_) return;
+  if (k_id >= kMaxKChannels) return;
+  LocalAggregatorQueue *q = &aggregator_->queues[k_id];
+
+  // Optional CPU pinning. Each k_id picks core (sender_core_base_ + k_id)
+  // when sender_core_base_ >= 0; or sender_core_ for the legacy single-thread
+  // case (k_id == 0 only).
+  int pin_core = -1;
+  if (sender_core_base_ >= 0) pin_core = sender_core_base_ + (int)k_id;
+  else if (k_id == 0 && sender_core_ >= 0) pin_core = sender_core_;
+  if (pin_core >= 0) {
+    cpu_set_t set; CPU_ZERO(&set); CPU_SET(pin_core, &set);
     pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
   }
 
@@ -305,7 +432,8 @@ void CxlKvStoreA::sender_loop() {
       bool aged = ((now - oldest_age_ns[dst]) >= sender_batch_t_ns_);
       if (!full && !aged) continue;
 
-      PerHostSpscRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst];
+      // iter-3A: route through k_id channel. K=1 → [k=0] (legacy).
+      PerHostSpscRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst][k_id];
       uint64_t tail_pos = r->tail.load(std::memory_order_relaxed);
       // Write each entry to the CXL ring slot.
       for (uint32_t i = 0; i < bc; i++) {
@@ -330,8 +458,11 @@ void CxlKvStoreA::sender_loop() {
       flush_line((void *)&r->tail);
       store_fence();
 
+      // iter-3A Phase 1 probe: per-batch sender cycle time.
+      DECOMP_DECL(__sb_t0);
+
       // Step S-4: wait for receiver to ack this batch.
-      AckChannel *ach = &per_host_rings_->acks[my_phys_host_pr_][dst];
+      AckChannel *ach = &per_host_rings_->acks[my_phys_host_pr_][dst][k_id];
       for (;;) {
         flush_line((void *)&ach->seq);
         full_fence();
@@ -339,15 +470,20 @@ void CxlKvStoreA::sender_loop() {
         __builtin_ia32_pause();
       }
 
-      // Step S-5: ACK each worker that contributed an entry.
+      // Step S-5: ACK each worker that contributed an entry. Worker
+      // spins on ack_bufs[k_id].slots[my_slot] under per-channel routing.
       for (uint32_t i = 0; i < bc; i++) {
         uint32_t slot = pending[dst][i].src_worker_slot;
         uint64_t op   = pending[dst][i].src_worker_op_id;
         if (slot < kAggrMaxWorkers) {
-          aggregator_->ack_buf.slots[slot].ack_op_id.store(
+          aggregator_->ack_bufs[k_id].slots[slot].ack_op_id.store(
               op, std::memory_order_release);
         }
       }
+      DECOMP_DECL(__sb_t1);
+      DECOMP_REC(kDecompStageA_SenderBatch, __sb_t0, __sb_t1);
+      // iter-3A K_actual histogram (sender-thread-only counter).
+      sender_k_actual_hist_[bc <= 64 ? bc : 64]++;
       batch_count[dst] = 0;
       did_work = true;
     }
@@ -397,12 +533,17 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
     // for the cross-host ack.
     full_fence();
 
-    // Step 6: enqueue cross-host invalidation request (one per
-    // dst_host) into the local aggregator queue.
+    // Step 6: enqueue cross-host invalidation request into the local
+    // aggregator queue for THIS bucket's channel (k = bucket_id % K).
+    // iter-3A Phase 4: per-bucket channel routing keeps same-bucket
+    // updates ordered (single channel) while parallelising across
+    // buckets.
+    uint32_t k_route = (k_channels_ > 1) ? (b_idx % k_channels_) : 0;
+    DECOMP_DECL(__ae_t0);
     bool any_enqueued = false;
     for (int dst_h = 0; dst_h < phys_hosts_pr_; dst_h++) {
       if (dst_h == my_phys_host_pr_) continue;
-      int rc = aggr_enqueue(&aggregator_->queue, b_idx, new_epoch,
+      int rc = aggr_enqueue(&aggregator_->queues[k_route], b_idx, new_epoch,
                             (uint32_t)dst_h,
                             (uint32_t)my_worker_slot_pr_, op_id);
       if (rc == 0) any_enqueued = true;
@@ -410,15 +551,17 @@ int CxlKvStoreA::dispatch_and_wait(uint32_t b_idx, uint32_t s_idx,
       // surface as ack timeout. In H=2 there is exactly 1 dst_host so
       // a single failure means we can't proceed.
     }
+    DECOMP_DECL(__ae_t1);
+    DECOMP_REC(kDecompStageA_AggrEnq, __ae_t0, __ae_t1);
     DECOMP_DECL(__dispatch_t1);  // S3 ends, S4 begins
 
-    // Step 7: spin on worker_ack_buf[my_worker_slot_pr_].ack_op_id ==
-    // op_id. The sender writes this when the receiver's ack arrives.
+    // Step 7: spin on worker_ack_buf[k_route].slots[my_worker_slot_pr_].
+    // Sender_k thread writes this when the receiver's ack arrives.
     bool timed_out = false;
     if (any_enqueued && my_worker_slot_pr_ >= 0 &&
         my_worker_slot_pr_ < kAggrMaxWorkers) {
       const uint64_t kAckBudgetNs = 200000000ULL;  // 200 ms
-      auto &slot = aggregator_->ack_buf.slots[my_worker_slot_pr_];
+      auto &slot = aggregator_->ack_bufs[k_route].slots[my_worker_slot_pr_];
       uint64_t start = now_ns();
       for (;;) {
         if (slot.ack_op_id.load(std::memory_order_acquire) == op_id) break;
@@ -656,11 +799,70 @@ int CxlKvStoreA::update(uint64_t key, uint64_t value) {
   }
   if (key == kEmptyKey) return -1;
   uint32_t idx = bucket_idx(key);
+
+  // iter-3A Phase 2: per-slot LFM path. Unlocked pre-scan to find the
+  // target slot, then lock JUST that slot. Re-verify under lock to
+  // catch a racing writer that flipped the slot's key. Same pattern as
+  // C iter-1 (`docs/iters/protocol_c_retrospective.md` iter-1).
+  CxlKvBucket *b = &buckets_[idx];
+  if (per_slot_lfm_a_) {
+    DECOMP_DECL(__dt0);
+    // L1 slot_scan (unlocked).
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) flush_line(&b->slots[s].key);
+    full_fence();
+    int match = -1;
+    for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+      if (b->slots[s].key == key) { match = s; break; }
+    }
+    if (match < 0) return -1;
+    DECOMP_REC(kDecompStageA_LockL1Scan, __dt0, __dt0);  // probe-only
+    DECOMP_DECL(__dt0a);
+    slot_lock_table_.lock_slot(idx, match);
+    DECOMP_DECL(__dt1);
+    // Under-lock re-verify — if key moved (delete+insert race), retry once.
+    flush_line(&b->slots[match].key);
+    full_fence();
+    if (b->slots[match].key != key) {
+      slot_lock_table_.unlock_slot(idx, match);
+      // Fall through to retry via outer loop logic — but to keep things
+      // simple here, just return -1 (caller's YCSB run treats as miss).
+      return -1;
+    }
+    uint64_t log_idx = 0;
+    bool logged = false;
+    if (oplog_) {
+      log_idx = oplog_->begin(OpLogKind::Update, key, idx, (uint64_t)match,
+                              b->slots[match].value, value);
+      logged = true;
+    }
+    b->slots[match].value = value;
+    flush_line(&b->slots[match].value);
+    DECOMP_DECL(__dt2);
+    int rc = dispatch_and_wait(idx, (uint32_t)match, value);
+    DECOMP_DECL(__dt4);
+    // Per-slot path uses BucketLockEntry's write_epoch for reader seqlock
+    // (shared field; SlotLockEntry has its own copy but readers read from
+    // BucketLockEntry — keeping legacy reader path unchanged).
+    bump_epoch(lock_table_.entry(idx));
+    if (logged) oplog_->commit(log_idx);
+    if (cache_enabled_) {
+      cache_epoch_[idx].store(std::numeric_limits<uint64_t>::max(),
+                              std::memory_order_release);
+    }
+    slot_lock_table_.unlock_slot(idx, match);
+    DECOMP_DECL(__dt5);
+    DECOMP_REC(kDecompStageLock,    __dt0a, __dt1);
+    DECOMP_REC(kDecompStageScan,    __dt1, __dt2);
+    DECOMP_REC(kDecompStageUnlock,  __dt4, __dt5);
+    DECOMP_REC(kDecompStageTotal,   __dt0, __dt5);
+    return rc;
+  }
+
+  // ---- legacy per-bucket LFM path ----
   DECOMP_DECL(__dt0);
   lock_table_.lock(idx, host_id_, num_hosts_);
   DECOMP_DECL(__dt1);
 
-  CxlKvBucket *b = &buckets_[idx];
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) flush_line(&b->slots[s].key);
   full_fence();
 
@@ -875,61 +1077,13 @@ void CxlKvStoreA::replicator_loop() {
   while (!stop_.load(std::memory_order_relaxed)) {
     bool did_work = false;
 
-    // iter-2A-revised path: when per-host ring is enabled AND this is
-    // the host's primary client (cid_in_host == 0), drain the per-host
-    // SPSC ring rings[*][my_phys_host_pr_] and atomic_store invalidations
-    // into the shared cache_epoch_arr (x86 coherence fans out to all
-    // local clients without needing DramInvalQueue pushes).
-    if (per_host_rings_enabled_ && per_host_rings_ &&
-        cache_epoch_arr_ && my_cid_in_host_pr_ == 0) {
-      for (int src_host = 0; src_host < phys_hosts_pr_; src_host++) {
-        if (src_host == my_phys_host_pr_) continue;
-        PerHostSpscRing *r =
-            &per_host_rings_->rings[src_host][my_phys_host_pr_];
-        // Pull tail from CXL.
-        flush_line((void *)&r->tail);
-        full_fence();
-        uint64_t tail = r->tail.load(std::memory_order_acquire);
-        uint64_t head = r->head;
-        while (head < tail) {
-          PerHostInvalEntry *e =
-              &r->entries[head % kPerHostSpscDepth];
-          flush_line((void *)e);
-          full_fence();
-          uint64_t op_id = e->src_worker_op_id;
-          if (op_id == 0) break;  // sender hasn't published yet
-          uint64_t bucket_hit = e->bucket_idx;
-          uint64_t new_epoch  = e->new_epoch;
-          // R-3: atomic_store the new epoch into the shared
-          // cache_epoch_arr. x86 coherence makes this immediately
-          // visible to all local client processes (acquire-load on
-          // their reader path returns the new value).
-          if (bucket_hit < (uint64_t)num_buckets_) {
-            cache_epoch_arr_->epoch[bucket_hit].store(
-                new_epoch, std::memory_order_release);
-          }
-          // R-6: free the ring slot (clear op_id sentinel).
-          e->src_worker_op_id = 0;
-          compiler_barrier();
-          flush_line((void *)e);
-          head++;
-          replicated_ops_.fetch_add(1, std::memory_order_relaxed);
-          did_work = true;
-        }
-        r->head = head;
-        // R-4 + R-5: mfence + publish AckChannel[src][me].seq.
-        // Single ack_seq flush per drain pass amortises the CXL write
-        // across the K entries we just acked.
-        if (head > r->head - 0) {  // unconditional; receiver advanced anyway
-          AckChannel *ach =
-              &per_host_rings_->acks[src_host][my_phys_host_pr_];
-          ach->seq.store(head, std::memory_order_release);
-          flush_line((void *)&ach->seq);
-          store_fence();
-        }
-      }
-    }
-
+    // iter-3A Phase 4: per-host SPSC ring drain has moved to
+    // dedicated K receiver threads (receiver_loop_k). When
+    // per_host_rings_enabled_, those K threads own rings[*][me][k]
+    // + acks[*][me][k]. The legacy in-replicator drain block was
+    // removed to avoid double-draining; if some future configuration
+    // disables the receiver pool, attach must spawn a single legacy
+    // receiver via receiver_loop_k(0).
 
     // CXL rings: consume from cross-host peers only. With bypass off we
     // consume from all peers (original Phase 4 behavior).

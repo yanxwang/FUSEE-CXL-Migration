@@ -31,6 +31,11 @@ namespace fusee {
 
 constexpr int kMaxPhysicalHosts = 4;
 constexpr int kPerHostSpscDepth = 256;  // power of two, per-(src,dst) ring
+// iter-3A Phase 4: K-channel sharding cap. K is set at runtime via
+// FUSEE_K_CHANNELS env (default 2 in iter-3A; 1 = legacy iter-2A-revised
+// behavior). Memory is allocated for kMaxKChannels always; only [0..K-1]
+// is used at runtime.
+constexpr int kMaxKChannels = 4;
 
 // 64-B per entry, full cacheline owned by exactly one ring slot.
 //   bucket_idx: which CXL bucket the receiver should refresh
@@ -79,11 +84,12 @@ struct alignas(64) AckChannel {
   char _pad[64 - sizeof(std::atomic<uint64_t>)];
 };
 
-// CXL-resident matrix: every (src, dst) pair has a ring + ack channel.
-// At H = 2 only off-diagonal cells are used.
+// CXL-resident matrix: every (src, dst) pair has K rings + K ack channels
+// (one per logical channel). At H=2 + K=2 only the off-diagonal × 2
+// cells are used.
 struct PerHostOutMatrix {
-  PerHostSpscRing rings[kMaxPhysicalHosts][kMaxPhysicalHosts];
-  AckChannel      acks[kMaxPhysicalHosts][kMaxPhysicalHosts];
+  PerHostSpscRing rings[kMaxPhysicalHosts][kMaxPhysicalHosts][kMaxKChannels];
+  AckChannel      acks[kMaxPhysicalHosts][kMaxPhysicalHosts][kMaxKChannels];
 };
 
 inline size_t per_host_out_matrix_bytes() {

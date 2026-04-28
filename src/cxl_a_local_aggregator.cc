@@ -17,13 +17,16 @@ int aggr_region_init(LocalAggregatorRegion *r) {
   if (!r) return -1;
   std::memset(r, 0, sizeof(*r));
   std::atomic_thread_fence(std::memory_order_release);
-  r->queue.hdr.init_done.store(1, std::memory_order_release);
+  // Publish init_done on every channel's header.
+  for (int k = 0; k < kMaxKChannelsAggr; k++) {
+    r->queues[k].hdr.init_done.store(1, std::memory_order_release);
+  }
   return 0;
 }
 
 int aggr_region_attach(LocalAggregatorRegion *r) {
   if (!r) return -1;
-  while (r->queue.hdr.init_done.load(std::memory_order_acquire) == 0) {
+  while (r->queues[0].hdr.init_done.load(std::memory_order_acquire) == 0) {
     sched_yield();
   }
   return 0;

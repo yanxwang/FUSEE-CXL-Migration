@@ -33,7 +33,13 @@ enum DecompStage {
   kDecompLfmPeerScan   = 7,  // peer-scan over b[j] j!=id done (fast path)
   kDecompLfmContWait   = 8,  // contention wait (retry loop / b-drain)
   kDecompLfmEnterCS    = 9,  // x/y negotiation done, entering CS
-  kDecompStageCount    = 10,
+  // iter-3A additions: protocol-A N:1:1:N path probes
+  kDecompStageA_AggrEnq    = 10,  // S3 sub: aggregator enqueue (incl. backpressure)
+  kDecompStageA_SenderBatch = 11, // sender per-batch cycle time
+  kDecompStageA_RecvEntry   = 12, // receiver per-entry cycle (CXL load + apply + atomic_store + ack)
+  kDecompStageA_RecvAtomic  = 13, // receiver R3 atomic_store cache_epoch_arr (isolated)
+  kDecompStageA_LockL1Scan  = 14, // L1: slot_scan (iter-3A Phase 6 anatomy)
+  kDecompStageCount    = 15,
 };
 
 struct DecompProbe {

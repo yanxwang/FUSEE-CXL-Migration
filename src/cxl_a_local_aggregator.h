@@ -78,12 +78,19 @@ struct WorkerAckBuf {
   WorkerAckSlot slots[kAggrMaxWorkers];
 };
 
-// Per-host wrapper that the runner allocates as a single MAP_SHARED|
-// MAP_ANONYMOUS region pre-fork. All clients inherit the same virtual
-// address; sender thread reads it via the same address.
+// iter-3A Phase 4: K-channel sharding. The runner allocates K queues +
+// K ack buffers per host (pre-fork mmap). The writer hashes
+// `bucket_id % K` to pick a channel. Each channel has its own sender
+// thread (drains queues[k]) + receiver counterpart on the peer host.
+// Memory is sized for kMaxKChannelsAggr always; only [0..K-1] used.
+constexpr int kMaxKChannelsAggr = 4;
+
+// Per-host wrapper. K queues + K worker_ack_bufs. K=1 reduces to
+// iter-2A-revised behavior (only [0] used). Code that doesn't yet
+// understand K addresses .queues[0] / .ack_bufs[0] explicitly.
 struct LocalAggregatorRegion {
-  LocalAggregatorQueue queue;
-  WorkerAckBuf         ack_buf;
+  LocalAggregatorQueue queues[kMaxKChannelsAggr];
+  WorkerAckBuf         ack_bufs[kMaxKChannelsAggr];
 };
 
 inline size_t local_aggregator_region_bytes() {
