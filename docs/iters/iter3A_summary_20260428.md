@@ -87,6 +87,30 @@ iter-3A delivered all 7 planned phases:
 | f | on  | 16 | 4.54  | n/a | no |
 | f | off | 84 | 4.51  | n/a | no |
 
+## Multi-rep stability of sweep2 peak cells (extension period)
+
+5-rep medians at peak cells (all cache=off, K=2 except where noted):
+
+| Workload | T | Cache | Single-rep | 5-rep median | Std (Mops/s) | Pass 20 bar? |
+|----------|---|-------|------------|--------------|--------------|--------------|
+| a | 82 | off | 4.01 | **4.62** (3.54-5.22) | 0.65 | no (median); 1/5 reps cross |
+| b | 32 | on | 15.28 | **15.19** (14.79-15.21) | 0.18 | no |
+| c | 82 | off | 35.13 | **21.66** (21.32-34.90) | 5.40 | YES (24.3 mean, 21.66 median) |
+| c | 84 | off | 21.88 | **22.51** (22.00-22.70) | 0.27 | YES (sweep1 K=1 — actually slightly **better** than K=2) |
+| d | 64 | off | 27.24 | **26.99** (26.88-27.56) | 0.31 | YES |
+| f | 64 | off |  2.97 |  **3.28** (2.75-3.47) | 0.28 | no |
+
+**Stable iter-3A peaks** (multi-rep medians):
+- YCSB-C: 22.5 Mops/s (sweep1 K=1 T=84 cache=off)
+- YCSB-D: 27.0 Mops/s (sweep2 K=2 T=64 cache=off)
+- YCSB-A: 4.6 Mops/s (sweep2 K=2 T=82 cache=off)
+- YCSB-B: 15.2 Mops/s (sweep2 K=2 T=32 cache=on)
+- YCSB-F:  3.3 Mops/s (sweep2 K=2 T=64 cache=off)
+
+**Verdicts** (vs 20 Mops/s North-Star bar): C ✓, D ✓ — **YCSB-C target
+ACHIEVED**. A, B, F still below; A is closest at 4.6 Mops/s (3.6× over
+iter-2A-revised) and 1/5 reps actually crossed the 5 Mops/s bar.
+
 ## Sweep2 results (K=2 + per-slot LFM, T_top=82)
 
 | Workload | Cache | T_peak | Mops/s | Δ vs sweep1 | 20 Mops/s bar? |
