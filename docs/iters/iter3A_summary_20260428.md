@@ -298,7 +298,15 @@ point; co-locating the worker_ack_buf with the worker on the same
 core L1 is the second.
 
 **Decomp under N:1:1:N enabled** (workload A T=4 cache=on, K=2,
-per-slot LFM, 5000 ops, single rep, with explicit cleanup):
+per-slot LFM, 5000 ops, **3 reps**):
+
+3-rep stability:
+- Rep 1: S1=7,221 S3=3,619 S4=17 total=13,973 ns thpt=1.15 Mops/s
+- Rep 2: S1=8,704 S3=3,749 S4=17 total=15,776 ns thpt=1.21 Mops/s
+- Rep 3: S1=7,164 S3=3,497 S4=17 total=13,779 ns thpt=1.21 Mops/s
+- **Median: S1=7,221 S3=3,619 S4=17 total=13,973 ns**
+
+Stable bottleneck attribution (single-rep table below uses median row):
 
 | Stage | Avg ns | % of total | vs legacy decomp (PS=0 T=4) |
 |-------|--------|------------|------------------------------|
