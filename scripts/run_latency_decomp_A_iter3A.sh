@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# iter-3A Phase 6 — full per-stage decomposition for protocol A.
+# iter-3A Phase 6 — per-stage decomposition for protocol A.
 #
-# Sweeps T x K (cache=on, workload A) and emits one DECOMP_A line per
-# cell. Output goes to logs/iter3A_decomp_<stamp>/SUMMARY.log.
+# iter-3A FINDING: cxl_latency_decomp_A hangs when FUSEE_PER_HOST_RING=1
+# is set (the SPSC ring + ack-channel cross-host exchange deadlocks for
+# decomp_A's fork model). Using PER_HOST_RING=0 here gives a clean
+# per-bucket vs per-slot LFM stage comparison via legacy path. K=N/A
+# (K-channel routing is no-op without PER_HOST_RING).
 #
 # Env tunables:
 #   THREADS="2 4 8 16 32"         (Phase 6 grid)
-#   K_CHANNELS="1 2"              (multi-channel comparison)
+#   PER_SLOTS="0 1"               (per-slot LFM comparison)
 #   REPS=2                        (per-cell reps)
 #   WORKLOADS="workloada"
 #   CACHE_MODES="on"
@@ -14,7 +17,7 @@
 #   TIMEOUT_S=600
 set -u
 : "${THREADS:=2 4 8 16 32}"
-: "${K_CHANNELS:=1 2}"
+: "${PER_SLOTS:=0 1}"
 : "${REPS:=2}"
 : "${WORKLOADS:=workloada}"
 : "${CACHE_MODES:=on}"
@@ -38,20 +41,18 @@ agg="$OUT/SUMMARY.log"
 } | tee -a "$agg"
 
 ok=0; fail=0
-for K in $K_CHANNELS; do
-  topT=$( case $K in 1) echo 84;; 2) echo 82;; 4) echo 78;; *) echo 64;; esac )
+for PS in $PER_SLOTS; do
   for cache in $CACHE_MODES; do
     for wl in $WORKLOADS; do
       for T in $THREADS; do
         for rep in $(seq 1 $REPS); do
-          tag="${wl}_K${K}_T${T}_cache${cache}_r${rep}"
+          tag="${wl}_PS${PS}_T${T}_cache${cache}_r${rep}"
           run_dir="$OUT/$tag"; mkdir -p "$run_dir"
           cookie=$(date +%s%N)
           cenv=""; [ "$cache" = on ] && cenv="FUSEE_CACHE=1 "
-          # Wire Phase 4 envs. K=1 keeps single-channel path.
-          cenv+="FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 "
-          cenv+="FUSEE_K_CHANNELS=$K FUSEE_SENDER_BATCH_K=4 FUSEE_SENDER_BATCH_T_US=20 "
-          cenv+="FUSEE_SENDER_CORE_BASE=$T FUSEE_RECEIVER_CORE_BASE=$((T + K)) "
+          # Legacy path (per_host_ring NOT set) so decomp_A doesn't hang;
+          # PS toggles per-slot LFM port.
+          cenv+="FUSEE_PER_SLOT_LFM_A=$PS "
           bin="/root/FUSEE_CXL/build-cxl/tests/cxl_latency_decomp_A"
           load="/root/FUSEE_CXL/setup_workloads/${wl}.spec_load"
           trans="/root/FUSEE_CXL/setup_workloads/${wl}.spec_trans"

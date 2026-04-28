@@ -30,19 +30,25 @@ echo "# iter-3A K-param sweep stamp=$stamp" | tee -a "$agg"
 echo "# workloads=$WORKLOADS" | tee -a "$agg"
 
 for K in 1 2 4; do
-  for T in 64 ${KTOP[$K]}; do
+  topT="${KTOP[$K]}"
+  for T in 64 "$topT"; do
     for wl in $WORKLOADS; do
-      env_extra="FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 \
-FUSEE_K_CHANNELS=$K FUSEE_SENDER_BATCH_K=4 FUSEE_SENDER_BATCH_T_US=20"
-      OPTS="A" \
-      WORKLOADS="$wl" \
-      THREADS="$T" \
-      CACHE_MODES="on" \
-      TIMEOUT_S=$TIMEOUT_S \
-      A_SKIP_AT=999 \
-      OUT_ROOT="$OUT_ROOT/K${K}_T${T}_${wl}" \
-      $env_extra \
-      bash $(dirname "$0")/run_g34_scaling_sweep.sh 2>&1 | tee -a "$agg"
+      # Per-K CPU pinning: senders at cores [T..T+K-1]; receivers at [T+K..T+2K-1].
+      env OPTS="A" \
+          WORKLOADS="$wl" \
+          THREADS="$T" \
+          CACHE_MODES="on" \
+          TIMEOUT_S=$TIMEOUT_S \
+          A_SKIP_AT=999 \
+          OUT_ROOT="$OUT_ROOT/K${K}_T${T}_${wl}" \
+          FUSEE_PER_HOST_RING=1 \
+          FUSEE_PER_SLOT_LFM_A=1 \
+          FUSEE_K_CHANNELS="$K" \
+          FUSEE_SENDER_BATCH_K=4 \
+          FUSEE_SENDER_BATCH_T_US=20 \
+          FUSEE_SENDER_CORE_BASE="$T" \
+          FUSEE_RECEIVER_CORE_BASE="$((T + K))" \
+          bash $(dirname "$0")/run_g34_scaling_sweep.sh 2>&1 | tee -a "$agg"
     done
   done
 done

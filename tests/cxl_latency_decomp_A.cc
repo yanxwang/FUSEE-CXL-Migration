@@ -32,6 +32,9 @@
 #include "cxl_latency_decomp_probe.h"
 #include "cxl_mm.h"
 #include "cxl_hashtable.h"
+#include "cxl_a_local_aggregator.h"
+#include "cxl_a_cache_epoch_arr.h"
+#include "cxl_per_host_ring.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -55,7 +58,10 @@ namespace {
 
 constexpr int kMaxClientsPerHost = 128;
 constexpr int kMaxHostsLoc = 4;
-constexpr size_t kYcsbStatsOffsetFromEnd = 2UL * 1024 * 1024;  // 2 MB
+// iter-3A: kDecompStageCount grew 10 → 15 (5 N:1:1:N probes added).
+// DecompShared inflated to ~2.0008 MB, just past the previous 2 MB
+// reservation; bump to 4 MB to keep memset from overrunning the mmap end.
+constexpr size_t kYcsbStatsOffsetFromEnd = 4UL * 1024 * 1024;  // 4 MB
 
 struct DecompStageStats {
   cacheline_u64 count;
@@ -222,6 +228,38 @@ int main(int argc, char **argv) {
     store_fence();
   }
 
+  // iter-3A Phase 6 — mmap the DRAM aggregator + cache_epoch_arr BEFORE
+  // fork so children inherit the same pages (MAP_SHARED|MAP_ANONYMOUS).
+  // enable_per_host_ring is called per-child after attach.
+  fusee::LocalAggregatorRegion *aggr_region = nullptr;
+  fusee::CacheEpochArr *cache_epoch_arr = nullptr;
+  bool per_host_ring_env =
+      getenv("FUSEE_PER_HOST_RING") && getenv("FUSEE_PER_HOST_RING")[0] == '1';
+  uint32_t per_host_batch_k = 4;
+  uint64_t per_host_batch_t_ns = 20000ULL;
+  if (per_host_ring_env) {
+    void *mm = mmap(nullptr, fusee::local_aggregator_region_bytes(),
+                    PROT_READ | PROT_WRITE,
+                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (mm == MAP_FAILED) { fprintf(stderr, "mmap aggr failed\n"); return 1; }
+    aggr_region = reinterpret_cast<fusee::LocalAggregatorRegion *>(mm);
+    fusee::aggr_region_init(aggr_region);
+    void *mm2 = mmap(nullptr, sizeof(fusee::CacheEpochArr),
+                     PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (mm2 == MAP_FAILED) { fprintf(stderr, "mmap epoch failed\n"); return 1; }
+    cache_epoch_arr = reinterpret_cast<fusee::CacheEpochArr *>(mm2);
+    fusee::cache_epoch_arr_init(cache_epoch_arr, num_buckets);
+    if (const char *k = getenv("FUSEE_SENDER_BATCH_K")) {
+      int v = atoi(k);
+      if (v >= 1 && v <= (int)fusee::kPerHostSpscDepth) per_host_batch_k = (uint32_t)v;
+    }
+    if (const char *t = getenv("FUSEE_SENDER_BATCH_T_US")) {
+      int v = atoi(t);
+      if (v >= 1) per_host_batch_t_ns = (uint64_t)v * 1000ULL;
+    }
+  }
+
   // Fork num_clients-1 children. Parent has client_id=0.
   std::vector<pid_t> children;
   int client_id = 0;
@@ -268,6 +306,21 @@ int main(int argc, char **argv) {
   }
   bool cache_on = getenv("FUSEE_CACHE") && getenv("FUSEE_CACHE")[0] == '1';
   if (cache_on) store.enable_dram_cache(true);
+
+  // iter-3A Phase 6: wire enable_per_host_ring so K-channel routing is
+  // active here, matching cxl_ycsb_runner. The aggregator + epoch regions
+  // were mmap'd as MAP_SHARED|MAP_ANONYMOUS before the fork above, so
+  // every child inherits the same pages.
+  if (per_host_ring_env && aggr_region && cache_epoch_arr) {
+    int ncores = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    int sender_core = std::min(num_clients, ncores - 2);
+    int recv_core   = std::min(num_clients + 1, ncores - 1);
+    if (sender_core < 0) sender_core = 0;
+    if (recv_core < 0) recv_core = 0;
+    store.enable_per_host_ring(aggr_region, cache_epoch_arr,
+                               per_host_batch_k, per_host_batch_t_ns,
+                               sender_core, recv_core);
+  }
 
   auto do_op = [&](const Op &o) {
     uint64_t v = o.key ^ 0xCAFEBABEULL;

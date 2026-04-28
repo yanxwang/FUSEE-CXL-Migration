@@ -380,6 +380,30 @@ Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`. Decomp: `docs/it
 
 Full analysis: `docs/iters/iter2A_revised_summary_20260427.md`.
 
+## 2026-04-28 — iter-3A per-slot LFM + K-channel (per `docs/iters/task_plan_20260428_iter3A_per_slot_lfm_multi_thread.md`)
+
+All 7 planned phases delivered. Key outcomes:
+
+- **Per-slot LFM port (P2) is the iter-3A win.** Phase 6 decomp shows
+  S1 lock latency drops 3-5× at T≥8 (T=32: 734 µs → 150 µs); workload-A
+  cache=on throughput 2-2.4× higher (T=32: 46k → 109k ops/s/host).
+- **Workload C cache=off T=82 K=2 hits 35.13 Mops/s** (75 % above
+  20 Mops/s bar). YCSB-C migration target **achieved**.
+- **Workload A peak 4.01 Mops/s** (sweep2 K=2 T=82 cache=off; 3.2× over
+  iter-2A-revised 1.27). 5 Mops/s target still falsified — A is
+  structurally hot-bucket-producer-bound under Zipf.
+- **Hash-diff battery 60/60 PASS** across PER_SLOT × K=1/2/4 × 5 reps
+  × T={2,4,8}.
+- **Critical structural finding**: `phys_hosts_pr_` and friends are
+  never assigned in attach() (latent from iter-2A-revised). The
+  N:1:1:N writer enqueue + ack-spin loop is consequently a no-op.
+  Activating the fields immediately deadlocks the cross-host SPSC
+  ring + ack-channel exchange. Sweep1/sweep2/K-param/Phase-6 results
+  reflect "per-slot LFM + same-host atomic_store invalidation",
+  **NOT** true K-channel cross-host invalidation. iter-4A first task.
+
+Full analysis: `docs/iters/iter3A_summary_20260428.md`.
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

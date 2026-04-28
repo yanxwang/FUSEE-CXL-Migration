@@ -127,6 +127,25 @@ int CxlKvStoreA::attach(void *region_base, size_t region_bytes,
               phys_hosts, kMaxPhysicalHosts);
       per_host_rings_enabled_ = false;
     }
+    // iter-3A FINDING: phys_hosts_pr_ et al. are intentionally LEFT at
+    // their defaults (1, 0, 1, 0). Assigning them from FUSEE_NUM_HOSTS
+    // activates the cross-host SPSC ring + ack channel exchange in
+    // dispatch_and_wait + sender_loop_k + receiver_loop_k, which dead-
+    // locks under the current sender/receiver synchronization (every
+    // smoke run with non-trivial workload hangs in the writer's ack
+    // spin or the sender's ack-channel poll). The legacy iter-2A-
+    // revised code shipped with the same defect; the symptom there
+    // was "1.27 Mops/s = no cross-host work", not a deadlock, because
+    // the empty enqueue loop made any_enqueued=false and the writer
+    // returned immediately. iter-3A discovers the gap explicitly via
+    // the hash-diff battery (which still PASSES because publish_slot
+    // writes to shared CXL memory directly — both hosts see the same
+    // final bucket array even without invalidation traffic), and
+    // documents the resulting "no-op N:1:1:N" baseline. iter-4A
+    // candidates: (1) fix _pr_ assignment + debug the cross-host
+    // deadlock; (2) abandon N:1:1:N in favour of the legacy
+    // PendingRingMatrix path with per-slot LFM (already shown to
+    // work in the cxl_ycsb_runner without FUSEE_PER_HOST_RING).
   }
 
   if (init_region) {
