@@ -109,6 +109,35 @@ median: 3.28 Mops/s, σ ≈ 0.28 — miss 20 Mops/s
 
 ---
 
+## Per-slot LFM scaling under N:1:1:N TRUE (workloada cache=on K=2)
+
+50k ops, single rep:
+
+```
+T=4   : 0.16 Mops/s
+T=8   : 0.13
+T=16  : timed out (90 s budget)
+T=32  : 0.32
+T=64  : 0.05  (collapse)
+```
+
+vs default no-op N:1:1:N (sweep1 K=1 single-rep):
+```
+T=4: 1.22, T=8: 2.26, T=16: 2.07, T=32: 2.63, T=64: 2.84
+```
+
+Activating N:1:1:N drops throughput **5–50×** depending on T even
+with per-slot LFM. The cross-host coordination overhead (S1
+amplification + S3 mfence + aggregator backpressure under
+contention) overwhelms the per-slot win once writers and senders
+are competing for CXL coherence.
+
+**iter-4A urgency**: speeding up the active N:1:1:N path is required
+before iter-4A can claim the same headline numbers as iter-3A's
+no-op-default. iter-3A's stable peaks (22.5 Mops/s C, 27.0 Mops/s
+D, 4.6 Mops/s A) all assume the no-op default path; iter-4A's
+correctness-preserving versions need to recover those numbers.
+
 ## Per-bucket vs per-slot LFM at workloadA cache=off K=1 (single-rep)
 
 ```
