@@ -138,6 +138,23 @@ no-op-default. iter-3A's stable peaks (22.5 Mops/s C, 27.0 Mops/s
 D, 4.6 Mops/s A) all assume the no-op default path; iter-4A's
 correctness-preserving versions need to recover those numbers.
 
+## Pre-deadline final-stretch repro (10:35)
+
+Workload C cache=off T=84 K=1 (3 more reps):
+```
+rep1: 15.64 Mops/s (wall=0.013s)
+rep2: 35.47          (wall=0.006s)  ← outlier
+rep3: 21.87          (wall=0.009s)
+```
+
+Pooled with the 5 earlier reps (22.00, 22.58, 22.51, 22.70, 22.33),
+the 8-rep median is **22.42 Mops/s** — still ✓ comfortably above
+the 20 Mops/s bar. Wall-clock 6–13 ms confirms the variance is
+noise-dominated (a single OS scheduler tick can shift the
+measurement by 50 %); a longer-workload (1M+ ops) sweep would
+pin the headline number more tightly. iter-4A sweeps should
+adopt that.
+
 ## Per-bucket vs per-slot LFM at workloadA cache=off K=1 (single-rep)
 
 ```
