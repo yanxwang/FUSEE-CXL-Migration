@@ -157,6 +157,31 @@ as "the CPU-pinning topology that reserves 4 cores for senders/
 receivers happens to leave the most useful core count free for
 workers at T=64."
 
+## Per-slot LFM win attribution (post-sweep verification)
+
+To cleanly attribute the iter-3A win, ran workload-A cache=on K=1
+across T grid with PER_SLOT_LFM_A toggled (single-rep at each cell):
+
+| T | per-bucket LFM (Mops/s) | per-slot LFM (Mops/s) | per-slot speedup |
+|---|-------------------------|------------------------|-------------------|
+| 4 | 1.27 | 1.22 | 0.96× (per-bucket marginally faster) |
+| 8 | 1.16 | 2.26 | 1.95× |
+| 16 | 0.92 | 2.07 | 2.25× |
+| 32 | 0.66 | 2.63 | 3.98× |
+| 64 | 0.15 | 2.84 | **18.9×** |
+| 84 | 0.10 | 1.85 | **18.5×** |
+
+Per-bucket LFM peaks at T=4 = 1.27 Mops/s — **exactly reproduces
+iter-2A-revised's reported peak**, confirming both iters ran on
+the same no-op N:1:1:N path. Past T=8, per-bucket LFM collapses
+under Zipf hot-bucket contention (LFM mutex serialization). Per-
+slot LFM holds steady. **Per-slot LFM IS the iter-3A win**: it
+converts the contention collapse into roughly-flat T-scaling and
+lifts the workload-A cache=off peak from 1.27 (T=4) to 4.6
+Mops/s (T=82+ multi-rep median).
+
+---
+
 ## Phase 6 decomp (workload A cache=on, legacy path, FUSEE_LATENCY_DECOMP=1)
 
 Per-stage breakdown in nanoseconds; columns are mean across the run.
