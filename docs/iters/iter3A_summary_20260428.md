@@ -397,6 +397,77 @@ the per-slot LFM cannot help with (a Zipf-popular key still hits
 
 ---
 
+## Reproduction recipe
+
+All commands assume `~/FUSEE_CXL/` synced + built on g3 + g4 at
+commit `a5dc520` (HEAD of iter-3A as of 2026-04-28T07:02 CDT).
+
+**Pre-run cleanup** (every cell — required after any prior failed run):
+```bash
+ssh g3 'pkill -9 -f cxl_ycsb_runner 2>/dev/null; pkill -9 -f cxl_latency 2>/dev/null'
+ssh g4 'pkill -9 -f cxl_ycsb_runner 2>/dev/null; pkill -9 -f cxl_latency 2>/dev/null'
+```
+
+**iter-3A primary numbers** (no-op N:1:1:N; matches all sweeps):
+```bash
+# Workload A T=82 cache=off K=2 - the workload-A peak (4.01 Mops/s)
+cookie=$(date +%s%N)
+ssh g3 "FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 FUSEE_K_CHANNELS=2 \
+        FUSEE_RUN_COOKIE=$cookie FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=82 \
+        FUSEE_SENDER_CORE_BASE=82 FUSEE_RECEIVER_CORE_BASE=84 \
+        ~/FUSEE_CXL/build-cxl/tests/cxl_ycsb_runner_A /dev/dax0.0 \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_load \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_trans 65536 200000" &
+ssh g4 "FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 FUSEE_K_CHANNELS=2 \
+        FUSEE_RUN_COOKIE=$cookie FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=82 \
+        FUSEE_SENDER_CORE_BASE=82 FUSEE_RECEIVER_CORE_BASE=84 \
+        ~/FUSEE_CXL/build-cxl/tests/cxl_ycsb_runner_A /dev/dax0.0 \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_load \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_trans 65536 200000" &
+wait
+# Expect: trans_agg_thpt ~ 4.0M
+```
+
+**iter-3A N:1:1:N true** (extension period numbers; per-cell smoke
+under FUSEE_ACTIVATE_N11N=1):
+```bash
+# Workload A T=4 cache=on - 1.26 Mops/s w/ Phase-6 decomp
+cookie=$(date +%s%N)
+ssh g3 "FUSEE_CACHE=1 FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 FUSEE_K_CHANNELS=2 \
+        FUSEE_ACTIVATE_N11N=1 FUSEE_RUN_COOKIE=$cookie FUSEE_NUM_HOSTS=2 \
+        FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=4 \
+        ~/FUSEE_CXL/build-cxl/tests/cxl_latency_decomp_A /dev/dax0.0 \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_load \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_trans 65536 5000" &
+ssh g4 "FUSEE_CACHE=1 FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 FUSEE_K_CHANNELS=2 \
+        FUSEE_ACTIVATE_N11N=1 FUSEE_RUN_COOKIE=$cookie FUSEE_NUM_HOSTS=2 \
+        FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=4 \
+        ~/FUSEE_CXL/build-cxl/tests/cxl_latency_decomp_A /dev/dax0.0 \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_load \
+        ~/FUSEE_CXL/setup_workloads/workloada.spec_trans 65536 5000" &
+wait
+# Expect: DECOMP_A ... stage_total_avg ~ 14000 ns ... trans_agg_thpt ~ 1.26M
+```
+
+**Hash-diff battery**:
+```bash
+bash scripts/iter3A_hash_diff_battery.sh 1 2  # PER_SLOT=1 K_CHAN=2
+# Expect: 15/15 PASS
+```
+
+**Full sweep1 reproduction** (~20 min):
+```bash
+OPTS="A" WORKLOADS="workloada workloadb workloadc workloadd workloadf" \
+THREADS="1 2 4 8 16 32 64 84" CACHE_MODES="on off" TIMEOUT_S=600 A_SKIP_AT=999 \
+FUSEE_PER_HOST_RING=1 FUSEE_PER_SLOT_LFM_A=1 \
+FUSEE_SENDER_BATCH_K=4 FUSEE_SENDER_BATCH_T_US=20 \
+OUT_ROOT=$HOME/FUSEE/logs/g34_iter3A_sweep1_repro_$(date +%Y%m%d_%H%M%S) \
+bash scripts/run_g34_scaling_sweep.sh
+# Expect: 80/80 OK, peak ~ 21.88 Mops/s on workloadc cache=off T=84
+```
+
+---
+
 ## Methodology cross-ref (§9.1.1 Aggregate-before-CXL corollaries)
 
 iter-3A is the **fifth** documented Aggregate-before-CXL application
