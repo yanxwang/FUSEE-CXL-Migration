@@ -314,8 +314,8 @@ forwarding 避免 cross-host LFM contention。
 | I2 | **Sharding rule: key K's writer always lives on `owner_host(K)`**. Cross-host write requests are **forwarded** through N:1:1:N to the owner host before execution. Cross-host LFM lock between writers is forbidden. | 偏差例: 任何 host 直接 acquire CXL bucket lock 写 K → cacheline pingpong on b[]/ready[]/done[] in high T, throughput collapse. |
 | I3 | **Same-host workers share a single cache pool via MAP_SHARED.** Directory.sharers maps to host-level (H bits, not N=N_workers bits). Same-host invalidation is a single physical store on the shared cache, not per-worker IPC. | 偏差例: 每个 worker process 各自维护 private cache → directory.sharers 维度爆炸 + invalidate 流量 ×N_workers + same-host worker-worker 协调成本. |
 | I4 | **Lazy stale flag, NOT physical delete on invalidate.** Cache entry stays in DRAM with `stale=1` flag set; fast-path reader does `if entry && !entry.stale` (1 byte same-cacheline check, ≈ 0 ns overhead). Eviction is a separate background concern, decoupled from invalidation. | 偏差例: invalidation receiver 物理 free entry 内存 → invalidation 关键路径 latency ↑, batched invalidation 难做. |
-| I5 | **Two-level directory** for variable-length KV path: `bucket_directory[bucket_idx]` (粗) tracks bucket-layout cache sharers; `kv_directory[kv_id]` (细) tracks KV-value cache sharers. UPDATE same-size invalidates only `kv_directory`; INSERT/DELETE invalidates `bucket_directory`. | 偏差例: 单层 directory → UPDATE 让 reader 重拉整 bucket cache (浪费), 或 INSERT 漏 invalidate KV cache (correctness). |
-| I6 | **In-place value update preferred** when new value size ≤ old block size class. Only when size class changes does UPDATE fall back to allocate-new-block path (and invalidate both directory layers). | 偏差例: 所有 UPDATE 都重新分配 block + 改 slot.pointer → 同 bucket 内所有 UPDATE 都强制 bucket cache invalidation, 即 false sharing on bucket. |
+| I5 | **Single-level directory: per-bucket only**. KV value blocks are **immutable** (CoW: every UPDATE allocates a new block, slot.pointer atomic CAS is the commit point). Reader follows pointer indirection naturally gets atomic snapshot of value bytes. KV-level directory tracking is therefore unnecessary. | 偏差例: 把 KV blocks 设计成 mutable + in-place update → 立即引发 reviewer attack (crash consistency, concurrent reader semantics, two code paths). 见本节末尾 "I5/I6 修订理由" 子节. |
+| I6 | **All UPDATE paths use Copy-on-Write (allocate-new-block)**, NOT in-place. Same-size and size-changing UPDATE go through identical path: alloc new KV block from blockpool → write value bytes to new block → `flush + sfence` → atomic CAS `slot.pointer` → old block enters lazy GC. This matches FUSEE original design and standard practice for persistent KV stores. | 偏差例: in-place update on shared CXL → > 8B value 缺乏原子性 → partial-write race; reviewer attack #1. 见 "I5/I6 修订理由". |
 | I7 | **Directory home = owner host DRAM only.** No CXL replica, no cross-host directory query path. Reader does not query directory; reader self-tracks "I'm in sharers" via local flag set during `cache_register` ACK. | 偏差例: directory 放 CXL → 每次 directory update 付 1-2 µs CXL store, hot directory entry 在 hot bucket 上的 cacheline pingpong. |
 | I8 | **Directory updates use host-local atomics or spinlock on shared mem (PROCESS_SHARED), NOT LFM.** LFM is reserved for genuinely cross-host CXL state. | 偏差例: 拿 LFM 保护本机 DRAM directory → 把 cross-host coordination 工具用在不需要的地方, 引入跨主机 cacheline 流量给本来不跨主机的字段. |
 | I9 | **Read fast path = local cache lookup + stale check (no `acquire-load` on shared atomic, no CXL load).** Read slow path on cache miss = register with directory (mandatory N:1:1:N message + ACK) **before** filling cache. | 偏差例: reader 先 fill cache 后 register (race window: writer 已经 invalidate 完所有当前 sharers 但 reader 还没在 sharers 里 → reader 永远不被通知 stale). |
@@ -343,18 +343,38 @@ CXL `/dev/dax0.0` mmap'd region 包含:
 
 ```
 [0]              ShardingTable                       ← const, attach() 时初始化
-[align 64]       BucketDirectory[num_buckets]        ← per-bucket sharers + state (粗粒度 directory)
-[align 64]       KvDirectory[num_kv_slots]           ← per-KV sharers + state (细粒度 directory)
-[align 64]       BucketCachePool                     ← bucket metadata cache (lazy stale flag)
-[align 64]       KvValueCachePool                    ← KV value bytes cache (lazy stale flag, LRU evict)
-[align 64]       LocalSelfFlags                      ← per-cache-entry "我在 sharers 里" flag (reader self-tracked)
+[align 64]       BucketDirectory[num_buckets]        ← per-bucket sharers + state (唯一 directory layer)
+[align 64]       KvCachePool                         ← (key → cached value bytes) hashmap, lazy stale flag, LRU evict
+[align 64]       LocalSelfFlags                      ← per-bucket "我在 sharers 里" flag (reader self-tracked)
 ```
 
-**Directory entry 大小**:
-- BucketDirectoryEntry: 16 B (state 1 B + sharer_bitmap H/8 B + spinlock 1 B + version 4 B + pad)
-- KvDirectoryEntry: 16 B (同 layout)
+**Directory entry 大小** (only one type, per-bucket):
 
-**Cache entry**: hashmap (key → entry pointer); entry 含 (key, value_bytes_or_pointer, stale flag, LRU epoch, in_sharers flag).
+```c
+struct BucketDirectoryEntry {       // 16 B total
+  uint8_t   state;                  // 1 B  : I=0, S=1, M=2 (transient)
+  uint8_t   sharer_bitmap;          // 1 B  : 8 hosts max (g34 H=2 uses 2 bits)
+  uint8_t   spinlock;               // 1 B  : host-local PROCESS_SHARED spinlock
+  uint8_t   pad1;                   // 1 B
+  uint32_t  version;                // 4 B  : ABA防护 + observability
+  uint64_t  pad2;                   // 8 B  : alignment + future fields
+};
+```
+
+总大小: num_buckets × 16 B = 1 MB / host @ 65k buckets. 极小.
+
+**Cache entry**: hashmap (key → entry pointer); entry 含 (key, **immutable** value bytes pointer, stale flag, LRU epoch, in_sharers flag). Value bytes 本身不在 cache entry 内 — 是 CXL KvBlockpool 上的 immutable block 的本地 DRAM 副本; 因为 CoW, 这副本被 invalidate 后下次 cache miss 走 register-then-fill path 自然指向新 block.
+
+### I5/I6 修订理由 (post-Q1 review)
+
+iter-4A 早期 spec 草稿有过 "in-place update preferred + 2-layer directory" 设计. 经回顾 FUSEE 原版 + Reviewer 角度 attack analysis 后, 此设计**被否决**:
+
+- **FUSEE 原版选 CoW**: `Client::kv_insert/update/delete` 都是 allocate-new-block + RDMA-CAS slot pointer (`src/client.cc`). 跟 LSM, BwTree, Bigtable, 大多数 OLTP DB 的 MVCC 一致.
+- **In-place 在 reviewer 角度有 6 个 attack vector** (crash consistency, concurrent reader, variable-length, fragmentation, 两套 code path, why differ from FUSEE original). CoW 全免疫.
+- **CXL clflushopt + sfence 不为 > 8B value 提供原子性**, in-place > 8B 在 partial-write race 下 broken.
+- **CoW 让 KV blocks immutable** → reader 通过 pointer indirection 看到 atomic snapshot, **不需要 KV-level directory tracking** → directory 简化为单层 (per-bucket).
+
+Spillover hybrid (small inline + large external pointer) 是 classic 设计 (ext4 inode, Redis embstr, Memcached slab, PostgreSQL TOAST, RocksDB BlobDB) 但带来 "两套 path = 两套 correctness reasoning" 的复杂度, **iter-4A 不采用**. CoW unique path 的 simplicity 胜过节省的 latency.
 
 ### IV — Read path
 
@@ -400,50 +420,55 @@ execute_write_locally(key, new_value):
   # 假设我是 owner host 上的 worker
   bucket_idx = hash(key) % num_buckets
   
-  # 1. 拿 bucket-layout 互斥 (本机内, host-local atomic 即可)
-  acquire_local_spinlock(BucketDirectory[bucket_idx].lock)
+  # 1. 拿 bucket directory 互斥 (本机内, host-local spinlock)
+  acquire(BucketDirectory[bucket_idx].spinlock)
   
-  # 2. 解析 slot - 同时 read CXL bucket 找 slot
-  slot_idx, kv_id = lookup_slot_from_cache_or_cxl(bucket_idx, key)
-  if not slot_idx:  # 是 INSERT
-    handle_insert(...); return
+  # 2. 决定 op 类型 - 通过 cache 或 CXL 读 bucket 看 slot 状态
+  bucket = bucket_cache.lookup_or_fetch(bucket_idx)
+  slot_idx = find_slot(bucket, key)
   
-  # 3. UPDATE: 决定 in-place vs new-block
-  if value_size_class(new_value) == value_size_class(old_value):
-    # in-place 路径 - 仅 invalidate kv_directory
-    release(BucketDirectory[bucket_idx].lock)
-    acquire(KvDirectory[kv_id].lock)
-    
-    # 4. invalidate sharers via N:1:1:N (sync wait)
-    sharers = KvDirectory[kv_id].sharers \\ {self_host}
-    if sharers != empty:
-      send_invalidate(kv_id, target_hosts=sharers)
-      wait_for_all_acks()    # 这是 strict-A linearizability point
-    
-    # 5. write CXL KV block in-place (pointer 不变)
-    overwrite_kv_block(kv_id, new_value)  # write + clflushopt + sfence
-    
-    # 6. 更新 directory
-    KvDirectory[kv_id].sharers = {self_host}
-    KvDirectory[kv_id].state = M
-    
-    release(KvDirectory[kv_id].lock)
-  else:
-    # new-block 路径 (size class 变了, rare)
-    handle_size_change_update(...)  # 同时 invalidate bucket_dir + kv_dir, 改 slot.pointer
+  # 3. CoW: 一律 allocate new KV block (in-place 不用)
+  new_block_addr = kv_blockpool.alloc(size_class(new_value))
+  write_value_to_block(new_block_addr, new_value)
+  flush_line + sfence (durable on CXL)
   
-  # 7. 更新本地 cache
+  # 4. invalidate sharers via N:1:1:N (sync wait ACK)
+  sharers = BucketDirectory[bucket_idx].sharer_bitmap \\ {self_host}
+  if sharers != empty:
+    send_invalidate(bucket_idx, target_hosts=sharers)
+    wait_for_all_acks()                         # ★ strict-A commit barrier
+  
+  # 5. atomic CAS slot.pointer to new_block_addr (★ commit point)
+  CAS(bucket.slots[slot_idx].pointer, old_addr, new_block_addr)
+  flush_line + sfence
+  
+  # 6. 更新 directory state
+  BucketDirectory[bucket_idx].sharer_bitmap = {self_host}
+  BucketDirectory[bucket_idx].state = M
+  BucketDirectory[bucket_idx].version += 1
+  release(BucketDirectory[bucket_idx].spinlock)
+  
+  # 7. 更新本地 cache (本 host 自己的 cache 也要更新)
   cache_pool.update(key, new_value, stale=false)
+  
+  # 8. 老 block 进 lazy GC (异步 fiber 收集, 等所有 reader 不再 reference 后释放)
+  gc_queue.push(old_block_addr)
+  
   return SUCCESS
 ```
+
+**INSERT/DELETE 几乎相同**, 区别仅在 step 2-3:
+- INSERT: 找空 slot (slot.key=empty), step 3 alloc new block, step 5 同时写 slot.key + slot.pointer (单 cacheline 内, atomic 16B 通过 SSE2 store)
+- DELETE: 找 matching slot, step 3 跳过 (无 new block), step 5 atomic store slot.key=empty (8B atomic), 老 block 直接 GC
+
+注意: INSERT 找空 slot + DELETE 改 slot.key=empty 改的是 **bucket layout**. 跨 host CAS 在同 slot 上有 ABA risk → 这种情况仍需 CXL LFM lock 跨 host 互斥 (与 UPDATE 不同). I2 的 sharding rule 把这种互斥也消除了 — owner host 内部 single host atomic CAS 即可，跨 host 不存在 INSERT/DELETE 同 bucket 竞争.
 
 ### VI — Synchronization primitives 使用规则
 
 | 数据结构 | 物理位置 | 同步原语 | 理由 |
 |---|---|---|---|
-| BucketLockTable (CXL 上) | CXL | LFM (`shm_mutex_t`) | 跨 host 互斥, 只用于 INSERT/DELETE 修改 bucket layout (这种 op 本身就是 cross-host coordinated, OK to pay LFM cost) |
-| BucketDirectory (DRAM, MAP_SHARED) | DRAM | `pthread_spinlock_t` PROCESS_SHARED | 只本 host worker 间互斥 |
-| KvDirectory (DRAM, MAP_SHARED) | DRAM | `pthread_spinlock_t` PROCESS_SHARED | 同上 |
+| BucketLockTable (CXL 上) | CXL | LFM (`shm_mutex_t`) | **post-sharding 几乎不用** — 仅在 sharding 表初始化失败 fallback 时 (degraded mode) 跨 host 互斥. iter-4A 正常路径不取 |
+| BucketDirectory (DRAM, MAP_SHARED) | DRAM | `pthread_spinlock_t` PROCESS_SHARED | 只本 host worker 间互斥 — owner host 上多 worker 同时改 sharers |
 | Cache pool entry | DRAM | per-bucket spinlock OR lock-free hashmap | hot path, 不能 contention |
 | SPSC ring head/tail | CXL | std::atomic + clflushopt | SP/SC, 单 producer 单 consumer 不用锁, 仅用 atomic exchange 推进 |
 | KvBlockpool free list | CXL | LFM (`shm_mutex_t`) | 跨 host 分配, 罕见 op |
@@ -459,7 +484,7 @@ execute_write_locally(key, new_value):
 2. **AP2: 用 cross-host LFM 保护 same-key writer-writer 互斥** — 违反 I2。Sharding 后 writer 都在 owner host, 用 host-local lock 即可。
 3. **AP3: per-worker cache pool (MAP_PRIVATE)** — 违反 I3。同 host 共享 cache pool, directory 维度跟 host 数。
 4. **AP4: invalidation 路径上物理 free entry 内存** — 违反 I4。Lazy stale flag。
-5. **AP5: 单层 directory 让 UPDATE 也 invalidate bucket cache** — 违反 I5/I6。变长 KV 必须两层 directory。
+5. **AP5: 用 in-place value update 替代 CoW** — 违反 I6。In-place 在 CXL persistent memory + > 8B value 下没有原子性保证, 且引入 reviewer attack vectors (crash consistency, concurrent reader semantics, 两套 path).
 6. **AP6: 把 directory 放 CXL** — 违反 I7. Directory home in DRAM, no CXL replica.
 7. **AP7: 用 LFM 保护 directory** — 违反 I8. host-local atomic enough.
 8. **AP8: reader 直接读 directory.sharers 决定读哪份 cache** — 违反 I9. reader self-tracks, 不查 directory.
@@ -494,3 +519,149 @@ iter-4A 任何 sweep / benchmark 必须报告:
 4. **Directory hit rate**: invalidation 流量 = ops × avg_sharers_per_key, 必须报告 sharers 分布 (mean, p99); broadcast (sharers==H) 比例 < 5% (否则 directory 不起作用了, 等同 broadcast).
 5. **Forward routing measured**: cross-host write 比例 + forward latency p50/p99; same-host write 比例 + forward overhead 0 (sanity check).
 
+
+### X — Enforcement mechanisms (如何让 spec 真正成为约束)
+
+iter-3A 的教训表明 spec 写出来不等于 spec 被遵守 — Finding-1 的 routing
+field default value 整整两个 iter 没人发现. 为防止再次出现 silent design
+drift, iter-4A 之后启用以下 5 层 enforcement, 从软到硬:
+
+#### E1 — Soft: cross-reference from CLAUDE.md (auto-load every session)
+
+`CLAUDE.md` 加一节 "Protocol A v2 spec compliance":
+
+> Any change to `src/cxl_kv_ops_A*.{h,cc}`, `src/cxl_directory*`, or
+> `src/cxl_sharding*` files MUST first read `docs/design_goals.md
+> §Protocol A v2` in full. Commit messages for those files must
+> reference invariant numbers (I1-I12) or anti-pattern numbers
+> (AP1-AP15) that the change relates to.
+
+效果: future Claude session 自动加载 CLAUDE.md → 看到这条 → 主动读 spec.
+
+#### E2 — Code-level static / runtime enforcement
+
+把 invariant 写成 build-time `static_assert` 或 attach-time runtime
+abort:
+
+| Invariant / AP | Enforcement code location |
+|---|---|
+| I3 (cache pool MAP_SHARED) | `cxl_cache_pool.cc::init` 内 `runtime_check(mmap_flags & MAP_SHARED)` else `abort` |
+| I8 (host-local lock for directory) | `BucketDirectoryEntry::spinlock` typedef = `host_local_spinlock_t`; 跟 `shm_mutex_t` 是不同 type 编译期就拒绝 |
+| I12 (no OpLog write in iter-4A) | `OpLog::begin/commit` 加 `[[deprecated("Forbidden in iter-4A per design_goals.md I12")]]` 或运行时 abort |
+| AP13 (routing field defaults) | `attach()` 末尾 `if (per_host_rings_enabled_ && phys_hosts_pr_ == 1 && atoi(getenv("FUSEE_NUM_HOSTS"))!=1) abort("AP13 detected")` |
+| AP14 (silent broadcast) | `invalidate_sharers()` 内 `if (sharers_count == H && !explicit_broadcast_flag) abort("AP14 silent broadcast")` |
+| AP15 (cache fill before register ACK) | reader cache fill API 加 require `register_acked` flag, false 时 abort |
+
+效果: 不读 spec 也写错代码, 进程在 attach 阶段 crash, build 阶段 fail.
+
+#### E3 — Test-level enforcement (CI gate)
+
+新增 `tests/protocol_a_v2_invariant_check.cc`. 每个 PR 改 protocol A
+代码必须通过:
+
+- **I1 check**: `cxl_region size > local_dram_kv_size` (CXL 必须能放下完整数据)
+- **I2 check**: 注入跨 host write op, 检查 forward path counter 增加
+- **I3 check**: `procfs /proc/self/maps` 验证 cache pool 有 `s` (shared) flag
+- **I9 race test**: stress test reader cache fill, 验证 register ACK 必在 cache insert 前 (用 helgrind / TSan)
+- **I10 race test**: writer commit 后立即从 peer host 读, 必须看到新 value (strict-A 实测 fixture)
+- **AP13 check**: 启动后立即 SIGABRT 测试, 在 phys_hosts_pr_==1 但 NUM_HOSTS!=1 时
+
+CI 失败 = PR 不允许 merge.
+
+#### E4 — Sweep validation gates (per §IX, 强化版)
+
+iter-4A 之后任何 scaling_ycsb sweep 的 `SUMMARY.log` 顶部必须包含 5 行
+"validation gates passed":
+
+```
+# Validation gates per design_goals.md §Protocol A v2:
+# G1 hash-diff: 5 reps × T={2,4,8,16} × workloadA 100K UPDATE = 20/20 PASS
+# G2 multi-rep stability: σ ≤ median × 5% on every headline cell  
+# G3 N:1:1:N actual activation: avg dispatch_loop_iter_per_op = X.X (must > 0)
+# G4 directory hit rate: avg sharers per write = X.X (broadcast bound = H = N)
+# G5 forward routing: cross-host write fraction = X%, forward p50/p99 = X/X µs
+```
+
+任何 gate 缺失 / fail = sweep 结果 invalid, 必须重跑. 这一条直接防御
+iter-3A "silent no-op N:1:1:N 路径未被发现" 的失败模式.
+
+#### E5 — Spec-change 流程
+
+**任何对本节 (`docs/design_goals.md §Protocol A v2`) 的修改必须由 user
+explicit approve.** Claude 在 PR 里看到要改 spec invariant/AP 时:
+
+1. STOP, 不要先动代码
+2. 输出 "我建议改 invariant Iₓ 为 Y, 因为 …" 给 user
+3. 等 user 明确 confirm
+4. 才能修改 spec + 实现
+
+**绝对禁止 silent spec drift** — 即"先写代码 + 再改 spec 让实现合规".
+这种模式在 iter-3A 实际发生过 (`cxl_architecture_plan.md` 的 single-copy
+设计悄悄越界, 没人发现是违反 progress.md:410). 必须靠流程拦住.
+
+### XI — PR review checklist (任何 protocol A 改动 PR 描述里 paste)
+
+```
+## Protocol A v2 spec compliance (design_goals.md §Protocol A v2)
+
+For each invariant, check ✓ if change is consistent, ✗ if change
+violates (and explain why violation is acceptable / spec needs update).
+
+- [ ] I1 (CXL = authoritative; DRAM = cache only)
+- [ ] I2 (Sharding: writer on owner_host)
+- [ ] I3 (Same-host MAP_SHARED cache, sharers tracked at host level)
+- [ ] I4 (Lazy stale flag, not physical delete on invalidate)
+- [ ] I5 (Single-level directory: per-bucket only)
+- [ ] I6 (Copy-on-write, not in-place update)
+- [ ] I7 (Directory home in DRAM only, no CXL replica)
+- [ ] I8 (Directory lock = host-local, NOT LFM)
+- [ ] I9 (Reader fast path = local cache + stale check; slow path = register-then-fill)
+- [ ] I10 (Write commit point = after all sharer ACK + CXL durable)
+- [ ] I11 (Cross-host write via N:1:1:N forward, not LFM)
+- [ ] I12 (No OpLog write in iter-4A)
+
+For each anti-pattern, check ✓ if NOT triggered:
+
+- [ ] AP1-AP15 (review each — spec §VII for full list)
+
+Validation gates run on this branch:
+- [ ] G1 hash-diff battery: __ / 20 PASS
+- [ ] G2 stability check: σ/median = __%
+- [ ] G3 N:1:1:N activation: avg loop_iter = __
+- [ ] G4 directory hit rate: __ avg sharers
+- [ ] G5 forward routing: __% cross-host
+
+If any invariant violated or gate failed, paste user approval (link to
+chat / commit) showing user explicitly approved the deviation.
+```
+
+### XII — Outstanding open questions (待 user confirm)
+
+下面这几条 spec 草稿期间留的 default, 需要 user 明确 confirm 或 override
+后才能 unblock iter-4A Phase 1 implementation:
+
+| # | 问题 | 当前 default |
+|---|---|---|
+| O1 | Sharding hash function | `(hash(key) >> 31) & 1` (high bit of FNV-1a hash) |
+| O2 | Directory entry size | 16 B per BucketDirectoryEntry, fields per §III |
+| O3 | Forward op response | Option B — response carries value bytes for small values (≤ 48 B), Option A fallback for large. inline u64 / kv=256 都走 Option B |
+| O4 | Crash recovery | Deferred to future iter (跟 replication 一起设计) |
+| O5 | Size class allocator for KV blockpool | 用 cxl_kv_blockpool 现有 size class 划分; UPDATE 同 size class fast path (但仍 alloc new block 走 CoW), cross-class fall back 同 path |
+
+---
+
+## 元规则: 这份 spec 跟 CLAUDE.md / progress.md 的关系
+
+`docs/fusee_cxl_progress.md:410` 的 "preserve original FUSEE design as
+much as possible; only replace RDMA transport with CXL" **优先级最高** —
+它是 user 在 2026-04-20 立的 project-level 约束. iter-3A 后我们识别出
+当前协议 A 已偏离这条约束 (multi-replica → single CXL copy), 但 iter-4A
+v2 设计出于 (i) reviewer-attack-免疫, (ii) sharding-based writer 互斥
+消除等 architectural 收益, **保持 single-CXL-copy 模型** + 用 directory
++ MAP_SHARED cache 提供"DRAM 多副本 cache"的实际效果, 在功能等价层面
+逼近 multi-replica.
+
+如果 user 后续判断这种"功能等价"不够 — 仍坚持要回到 multi-DRAM-replica +
+RDMA-style fan-out — 那 iter-4A 整个设计要重新评估, 可能需要回退到 sub
+集合（先做 sharding 不做 directory cache, 类似 RDMA-FUSEE 的 client-side
+index cache）. 此选择应 user-driven, 不应 implementation-driven.
