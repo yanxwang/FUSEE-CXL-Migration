@@ -314,7 +314,7 @@ forwarding 避免 cross-host LFM contention。
 | I2 | **Sharding rule: key K's writer always lives on `owner_host(K)`**. Cross-host write requests are **forwarded** through N:1:1:N to the owner host before execution. Cross-host LFM lock between writers is forbidden. | 偏差例: 任何 host 直接 acquire CXL bucket lock 写 K → cacheline pingpong on b[]/ready[]/done[] in high T, throughput collapse. |
 | I3 | **Same-host workers share a single cache pool via MAP_SHARED.** Directory.sharers maps to host-level (H bits, not N=N_workers bits). Same-host invalidation is a single physical store on the shared cache, not per-worker IPC. | 偏差例: 每个 worker process 各自维护 private cache → directory.sharers 维度爆炸 + invalidate 流量 ×N_workers + same-host worker-worker 协调成本. |
 | I4 | **Lazy stale flag, NOT physical delete on invalidate.** Cache entry stays in DRAM with `stale=1` flag set; fast-path reader does `if entry && !entry.stale` (1 byte same-cacheline check, ≈ 0 ns overhead). Eviction is a separate background concern, decoupled from invalidation. | 偏差例: invalidation receiver 物理 free entry 内存 → invalidation 关键路径 latency ↑, batched invalidation 难做. |
-| I5 | **Single-level directory: per-bucket only**. KV value blocks are **immutable** (CoW: every UPDATE allocates a new block, slot.pointer atomic CAS is the commit point). Reader follows pointer indirection naturally gets atomic snapshot of value bytes. KV-level directory tracking is therefore unnecessary. | 偏差例: 把 KV blocks 设计成 mutable + in-place update → 立即引发 reviewer attack (crash consistency, concurrent reader semantics, two code paths). 见本节末尾 "I5/I6 修订理由" 子节. |
+| I5 | **Single-level per-slot directory**. Each (bucket_idx, slot_idx) pair has one DirectoryEntry. KV value blocks are **immutable** (CoW: UPDATE allocates new block, slot.pointer CAS is the commit point) → no separate KV-level directory needed. Per-slot granularity (vs per-bucket) avoids false sharing — INSERT on slot[3] does not invalidate sharers caching slot[5]. Storage: 65k × 7 × 16B = 7.3 MB / host. | 偏差例: per-bucket directory → 一个 op 让 cache bucket 内所有 slot 的 sharers 全 invalidate (~7× false sharing on 7-slot bucket); 偏差例: KV blocks mutable + in-place update → 立即引发 reviewer attack 链 (见 "I5/I6 修订理由"). |
 | I6 | **All UPDATE paths use Copy-on-Write (allocate-new-block)**, NOT in-place. Same-size and size-changing UPDATE go through identical path: alloc new KV block from blockpool → write value bytes to new block → `flush + sfence` → atomic CAS `slot.pointer` → old block enters lazy GC. This matches FUSEE original design and standard practice for persistent KV stores. | 偏差例: in-place update on shared CXL → > 8B value 缺乏原子性 → partial-write race; reviewer attack #1. 见 "I5/I6 修订理由". |
 | I7 | **Directory home = owner host DRAM only.** No CXL replica, no cross-host directory query path. Reader does not query directory; reader self-tracks "I'm in sharers" via local flag set during `cache_register` ACK. | 偏差例: directory 放 CXL → 每次 directory update 付 1-2 µs CXL store, hot directory entry 在 hot bucket 上的 cacheline pingpong. |
 | I8 | **Directory updates use host-local atomics or spinlock on shared mem (PROCESS_SHARED), NOT LFM.** LFM is reserved for genuinely cross-host CXL state. | 偏差例: 拿 LFM 保护本机 DRAM directory → 把 cross-host coordination 工具用在不需要的地方, 引入跨主机 cacheline 流量给本来不跨主机的字段. |
@@ -342,26 +342,28 @@ CXL `/dev/dax0.0` mmap'd region 包含:
 ### III — DRAM 物理布局 (per host, MAP_SHARED across same-host workers)
 
 ```
-[0]              ShardingTable                       ← const, attach() 时初始化
-[align 64]       BucketDirectory[num_buckets]        ← per-bucket sharers + state (唯一 directory layer)
-[align 64]       KvCachePool                         ← (key → cached value bytes) hashmap, lazy stale flag, LRU evict
-[align 64]       LocalSelfFlags                      ← per-bucket "我在 sharers 里" flag (reader self-tracked)
+[0]              ShardingTable                                 ← const, attach() 时初始化
+[align 64]       SlotDirectory[num_buckets][slots_per_bucket]   ← per-slot sharers + state (唯一 directory layer)
+[align 64]       KvCachePool                                    ← (key → cached value bytes) hashmap, lazy stale flag, LRU evict
+[align 64]       LocalSelfFlags                                 ← per-slot "我在 sharers 里" flag (reader self-tracked)
 ```
 
-**Directory entry 大小** (only one type, per-bucket):
+**Directory entry 大小** (only one type, per-slot):
 
 ```c
-struct BucketDirectoryEntry {       // 16 B total
-  uint8_t   state;                  // 1 B  : I=0, S=1, M=2 (transient)
-  uint8_t   sharer_bitmap;          // 1 B  : 8 hosts max (g34 H=2 uses 2 bits)
-  uint8_t   spinlock;               // 1 B  : host-local PROCESS_SHARED spinlock
-  uint8_t   pad1;                   // 1 B
-  uint32_t  version;                // 4 B  : ABA防护 + observability
-  uint64_t  pad2;                   // 8 B  : alignment + future fields
+struct SlotDirectoryEntry {        // 16 B total
+  uint8_t   state;                 // 1 B  : I=0, S=1, M=2 (transient)
+  uint8_t   sharer_bitmap;         // 1 B  : 8 hosts max (g34 H=2 uses 2 bits)
+  uint8_t   spinlock;              // 1 B  : host-local PROCESS_SHARED spinlock
+  uint8_t   pad1;                  // 1 B
+  uint32_t  version;               // 4 B  : ABA防护 + observability
+  uint64_t  pad2;                  // 8 B  : alignment + future fields
 };
 ```
 
-总大小: num_buckets × 16 B = 1 MB / host @ 65k buckets. 极小.
+总大小: num_buckets × slots_per_bucket × 16 B = 65k × 7 × 16 B = **7.3 MB / host** @ 65k buckets, 7 slots/bucket. 仍然小.
+
+**为什么 per-slot 而不是 per-bucket**: per-bucket directory 让 INSERT/UPDATE/DELETE 一个 slot 的 op 让 cache bucket 内所有 slot 的 sharers 全 invalidate (false sharing). YCSB 实际 op 几乎都是单 slot 操作，per-slot 削掉 ~7× 的 false invalidation traffic. 存储 cost 7×, 仍 < 10 MB / host.
 
 **Cache entry**: hashmap (key → entry pointer); entry 含 (key, **immutable** value bytes pointer, stale flag, LRU epoch, in_sharers flag). Value bytes 本身不在 cache entry 内 — 是 CXL KvBlockpool 上的 immutable block 的本地 DRAM 副本; 因为 CoW, 这副本被 invalidate 后下次 cache miss 走 register-then-fill path 自然指向新 block.
 
@@ -520,84 +522,107 @@ iter-4A 任何 sweep / benchmark 必须报告:
 5. **Forward routing measured**: cross-host write 比例 + forward latency p50/p99; same-host write 比例 + forward overhead 0 (sanity check).
 
 
-### X — Enforcement mechanisms (如何让 spec 真正成为约束)
+### X — Enforcement mechanisms
 
-iter-3A 的教训表明 spec 写出来不等于 spec 被遵守 — Finding-1 的 routing
-field default value 整整两个 iter 没人发现. 为防止再次出现 silent design
-drift, iter-4A 之后启用以下 5 层 enforcement, 从软到硬:
+> 严肃看待: spec 写出来不等于被遵守. iter-3A 的 Finding-1 整整两 iter
+> 才发现, 因为靠 "Claude 应该读 spec" 这种声明式约束没用.
+>
+> 下面分两类: **Hard enforcement** (违反就 fail, 不依赖人/Claude 自觉)
+> 和 **Process discipline** (依赖人/Claude follow, 但带反馈机制).
+>
+> 声明式条款 (e.g. "应该这样做") 不进 enforcement, 只算 documentation
+> intent.
 
-#### E1 — Soft: cross-reference from CLAUDE.md (auto-load every session)
+#### Hard enforcement (违反就 fail / 不能 merge / 不能 ship)
 
-`CLAUDE.md` 加一节 "Protocol A v2 spec compliance":
+**H1 — Compile-time / runtime asserts**
 
-> Any change to `src/cxl_kv_ops_A*.{h,cc}`, `src/cxl_directory*`, or
-> `src/cxl_sharding*` files MUST first read `docs/design_goals.md
-> §Protocol A v2` in full. Commit messages for those files must
-> reference invariant numbers (I1-I12) or anti-pattern numbers
-> (AP1-AP15) that the change relates to.
+Spec 里每条 invariant/AP 必须评估能否转成 assert; 能转的就转, 不能转
+的在 spec 里**显式标注** "advisory only" 跟 "hard-enforced" 区分.
 
-效果: future Claude session 自动加载 CLAUDE.md → 看到这条 → 主动读 spec.
+| Invariant / AP | Assert / abort 形式 | Coverage |
+|---|---|---|
+| I3 (cache MAP_SHARED) | `cache_pool::init` 检查 mmap flag, else `abort` | hard |
+| I8 (directory lock = host-local) | `SlotDirectoryEntry::spinlock` 用 distinct type `host_local_spinlock_t`, 不能赋 `shm_mutex_t*` (编译期 reject) | hard |
+| I12 (no OpLog) | OpLog write API `[[deprecated]]` + runtime `abort` if called | hard |
+| AP13 (routing field defaults) | `attach()` 末尾 `if (per_host_rings_enabled_ && phys_hosts_pr_==1 && atoi(getenv("FUSEE_NUM_HOSTS"))!=1) abort("AP13")` | hard |
+| AP14 (silent broadcast) | `invalidate_sharers()` 内 `if (sharers_count==H && !explicit_broadcast) abort("AP14")` | hard |
+| AP15 (cache fill before register ACK) | reader cache_fill API 必须传 `register_acked=true` flag, false 时 abort | hard |
+| I1, I2, I5, I6, I9, I10, I11 | **结构性约束, 无单点 assert 可表达** | **advisory — 靠 H2/H3/P1/P2 覆盖** |
 
-#### E2 — Code-level static / runtime enforcement
+**H2 — CI invariant tests** (`tests/protocol_a_v2_invariant_check.cc`)
 
-把 invariant 写成 build-time `static_assert` 或 attach-time runtime
-abort:
+每个改 protocol A 文件的 PR 必须通过:
+- I1 storage check: cxl_region size > local_dram footprint
+- I2 forward injection: 注入跨 host write 验证 forward counter ↑
+- I3 mmap flag check: procfs 验证 cache pool MAP_SHARED
+- I9 / I10 race tests (TSan / helgrind): register-before-fill, write-then-peer-read
+- AP13 trip wire: 启动 SIGABRT test 在 phys_hosts_pr_==1 但 NUM_HOSTS!=1 时
 
-| Invariant / AP | Enforcement code location |
-|---|---|
-| I3 (cache pool MAP_SHARED) | `cxl_cache_pool.cc::init` 内 `runtime_check(mmap_flags & MAP_SHARED)` else `abort` |
-| I8 (host-local lock for directory) | `BucketDirectoryEntry::spinlock` typedef = `host_local_spinlock_t`; 跟 `shm_mutex_t` 是不同 type 编译期就拒绝 |
-| I12 (no OpLog write in iter-4A) | `OpLog::begin/commit` 加 `[[deprecated("Forbidden in iter-4A per design_goals.md I12")]]` 或运行时 abort |
-| AP13 (routing field defaults) | `attach()` 末尾 `if (per_host_rings_enabled_ && phys_hosts_pr_ == 1 && atoi(getenv("FUSEE_NUM_HOSTS"))!=1) abort("AP13 detected")` |
-| AP14 (silent broadcast) | `invalidate_sharers()` 内 `if (sharers_count == H && !explicit_broadcast_flag) abort("AP14 silent broadcast")` |
-| AP15 (cache fill before register ACK) | reader cache fill API 加 require `register_acked` flag, false 时 abort |
+CI fail = PR 不能 merge.
 
-效果: 不读 spec 也写错代码, 进程在 attach 阶段 crash, build 阶段 fail.
+**H3 — Sweep validation gates with hard fail**
 
-#### E3 — Test-level enforcement (CI gate)
-
-新增 `tests/protocol_a_v2_invariant_check.cc`. 每个 PR 改 protocol A
-代码必须通过:
-
-- **I1 check**: `cxl_region size > local_dram_kv_size` (CXL 必须能放下完整数据)
-- **I2 check**: 注入跨 host write op, 检查 forward path counter 增加
-- **I3 check**: `procfs /proc/self/maps` 验证 cache pool 有 `s` (shared) flag
-- **I9 race test**: stress test reader cache fill, 验证 register ACK 必在 cache insert 前 (用 helgrind / TSan)
-- **I10 race test**: writer commit 后立即从 peer host 读, 必须看到新 value (strict-A 实测 fixture)
-- **AP13 check**: 启动后立即 SIGABRT 测试, 在 phys_hosts_pr_==1 但 NUM_HOSTS!=1 时
-
-CI 失败 = PR 不允许 merge.
-
-#### E4 — Sweep validation gates (per §IX, 强化版)
-
-iter-4A 之后任何 scaling_ycsb sweep 的 `SUMMARY.log` 顶部必须包含 5 行
-"validation gates passed":
+iter-4A 之后所有 sweep 的 `SUMMARY.log` 必须有 5 行 gate result. **gate
+缺失或失败让 sweep script 直接 abort, 数据不写出来** (而非只标 invalid):
 
 ```
-# Validation gates per design_goals.md §Protocol A v2:
-# G1 hash-diff: 5 reps × T={2,4,8,16} × workloadA 100K UPDATE = 20/20 PASS
-# G2 multi-rep stability: σ ≤ median × 5% on every headline cell  
-# G3 N:1:1:N actual activation: avg dispatch_loop_iter_per_op = X.X (must > 0)
-# G4 directory hit rate: avg sharers per write = X.X (broadcast bound = H = N)
-# G5 forward routing: cross-host write fraction = X%, forward p50/p99 = X/X µs
+# G1 hash-diff: __/20 PASS  (must = 20)
+# G2 stability σ/median: __% (must ≤ 5%)
+# G3 N:1:1:N activation: avg dispatch_loop_iter = __ (must > 0)
+# G4 directory hit rate: avg sharers/write = __
+# G5 forward routing: cross-host write % = __, p50/p99 forward = __/__ µs
 ```
 
-任何 gate 缺失 / fail = sweep 结果 invalid, 必须重跑. 这一条直接防御
-iter-3A "silent no-op N:1:1:N 路径未被发现" 的失败模式.
+直接防御 iter-3A "silent no-op 路径没人发现" 的失败模式 — 有 trip-wire,
+不是 advisory.
 
-#### E5 — Spec-change 流程
+**H4 — Pre-commit grep hook**
 
-**任何对本节 (`docs/design_goals.md §Protocol A v2`) 的修改必须由 user
-explicit approve.** Claude 在 PR 里看到要改 spec invariant/AP 时:
+`.git/hooks/pre-commit` 检查: 改 `src/cxl_kv_ops_A*.{h,cc}` /
+`src/cxl_directory*` / `src/cxl_sharding*` / `src/cxl_cache_pool*` 文件
+的 commit message 必须 grep 到 `\b[Ii][1-9][0-2]?\b` 或 `\bAP[0-9]+\b`
+(invariant 编号或 AP 编号), 否则 reject commit.
 
-1. STOP, 不要先动代码
-2. 输出 "我建议改 invariant Iₓ 为 Y, 因为 …" 给 user
-3. 等 user 明确 confirm
-4. 才能修改 spec + 实现
+强制 commit author 显式说"这次改动跟 I3/I8/AP13 有关", 不能写"random
+fix" 蒙混.
 
-**绝对禁止 silent spec drift** — 即"先写代码 + 再改 spec 让实现合规".
-这种模式在 iter-3A 实际发生过 (`cxl_architecture_plan.md` 的 single-copy
-设计悄悄越界, 没人发现是违反 progress.md:410). 必须靠流程拦住.
+#### Process discipline (依赖人/Claude follow, 但有反馈)
+
+**P1 — Reviewer Attack Process (RAP) for any design proposal**
+
+见 §XIII. **任何提议新 design choice / optimization 的输出必须包含 RAP
+analysis subsection**, 否则 user 直接 reject proposal. 这是 user-side
+强制 — 由 user 看 proposal 时检查格式, 不依赖 Claude 自觉. RAP 强制
+设计提案者 stress-test 自己的提议, 把 reviewer attack 内化为决策流程.
+
+**P2 — Iter retrospective spec-drift audit**
+
+每个 iter 结束写 retrospective doc 时**必须**包含 "spec drift check"
+section: 逐条 grep 当前 protocol A 实现, 反查每个 I/AP 是否在实现中
+对应到具体 code location. 找不到对应或对应错的, 立即 user-escalate.
+
+iter-3A 的 Finding-1 在这个 audit 流程下能在 iter 结束时发现 (audit
+应该问: "I2 sharding 的 owner_host 路由在哪个文件? 跟 phys_hosts_pr_
+是同一个变量吗? phys_hosts_pr_ 在 attach() 里赋值了吗?" — 走一遍这流程
+立刻发现 Finding-1).
+
+**P3 — User-side audit on design proposal**
+
+User 看 Claude 的 design proposal 时**应该**逐条问 "是否违反 I/AP".
+这把 enforcement 从 Claude-side (不可靠 — 我自己上一轮就没主动逐条 check)
+转移到 User-side (可靠 — user 会主动问).
+
+User 的 audit checklist 在 §XI (PR review checklist), 但 design proposal
+阶段就要 inline review, 不等到 PR.
+
+#### 哪些原 enforcement 删除 (诚实 reality check)
+
+- **原 E1 (CLAUDE.md cross-reference "应该读 spec")**: **删除**, 无强制
+  力. CLAUDE.md auto-load ≠ Claude 真的逐条对照 spec. iter-4A 不指望靠
+  这个 enforce.
+- **原 E5 (Spec change 走 user)**: **降级为 P3** documentation discipline,
+  靠 user 主动 enforce, 不靠 Claude 主动 escalate.
 
 ### XI — PR review checklist (任何 protocol A 改动 PR 描述里 paste)
 
@@ -611,7 +636,7 @@ violates (and explain why violation is acceptable / spec needs update).
 - [ ] I2 (Sharding: writer on owner_host)
 - [ ] I3 (Same-host MAP_SHARED cache, sharers tracked at host level)
 - [ ] I4 (Lazy stale flag, not physical delete on invalidate)
-- [ ] I5 (Single-level directory: per-bucket only)
+- [ ] I5 (Single-level per-slot directory, not per-bucket)
 - [ ] I6 (Copy-on-write, not in-place update)
 - [ ] I7 (Directory home in DRAM only, no CXL replica)
 - [ ] I8 (Directory lock = host-local, NOT LFM)
@@ -665,3 +690,158 @@ v2 设计出于 (i) reviewer-attack-免疫, (ii) sharding-based writer 互斥
 RDMA-style fan-out — 那 iter-4A 整个设计要重新评估, 可能需要回退到 sub
 集合（先做 sharding 不做 directory cache, 类似 RDMA-FUSEE 的 client-side
 index cache）. 此选择应 user-driven, 不应 implementation-driven.
+
+
+### XIII — Reviewer Attack Process (RAP) — design 决策的 mandatory 模板
+
+> Inspired by user observation: "用 reviewer 会如何攻击 design 来反思
+> design choice 效果不错". 这是 metacognitive tool, 强制设计提案者
+> stress-test 自己的提议, 把"顶会 reviewer 角度"内化为标准决策流程.
+
+#### 何时触发 RAP
+
+任何下列场景 Claude 输出 design 提议时**必须**包含 RAP analysis
+subsection:
+
+- 提出新 architecture choice
+- 提出 optimization (改 algorithm, 改 data structure, 改 sync 原语)
+- 选 default value (e.g. timeout, batch size, threshold)
+- 在两个 implementation alternative 间做选择
+- 修改本 spec (任何 I/AP 变更)
+- 决定接受/拒绝某个 user 提议
+
+如果 Claude 跳过 RAP 直接给 implementation 建议, **user 直接 reject
+proposal** 让重出.
+
+#### RAP 6 步格式 (mandatory output)
+
+```
+STATE
+─────
+[一句话提议: "我建议 X, 因为 Y"]
+
+ATTACK VECTORS (≥ 6, 必须从下面 6 类各选 1+)
+──────────────────────────────────────────
+1. PERFORMANCE attack:
+   - 真有改善吗? 跟 baseline (e.g. FUSEE 原版 / 当前 implementation) 比?
+   - Worst case 是什么? p99/p999 怎么样?
+   - Resource cost: memory, CPU, CXL bandwidth?
+
+2. CORRECTNESS attack:
+   - Crash consistency? Concurrent reader/writer race?
+   - 在所有 invariant (I1-I12) 下都 hold?
+   - 重试 / GC / 异步 fiber 引入的 ordering 问题?
+
+3. GENERALITY attack:
+   - 什么 workload 失效? Edge cases?
+   - 假设 (e.g. value size 固定, key 分布 uniform) 在实际 workload 下成立吗?
+   - Variable-length, skewed access, hot key 下表现?
+
+4. COMPLEXITY attack:
+   - 几条 code path? 几套 correctness reasoning?
+   - 多了多少 LOC? 多少 new abstraction?
+   - 后续维护 cost? Debug 难度?
+
+5. PRIOR ART / 跟现有系统对比 attack:
+   - FUSEE 原版怎么做的? LSM / BwTree / state-of-art 怎么做的?
+   - 为什么我们的不同? Ablation 在哪?
+   - 有 published 的反例吗?
+
+6. IMPLEMENTATION FEASIBILITY attack:
+   - 项目 budget 内能落?
+   - 依赖什么 (硬件, OS, 库)? 不可用怎么办?
+   - 测试可行性: 怎么 verify 设计成立?
+
+ABLATION CHECK
+──────────────
+[这优化跑过 baseline 对照吗? 收益可归因到具体 mechanism 吗?
+ 还是只是"看上去应该快"? 如果还没数据, 提议先做 ablation 再决策.]
+
+PRIOR ART CHECK  
+───────────────
+[有 published 工作做过类似事吗? 成功 / 失败原因? 我们的 setting 哪里
+ 不同, 为什么 prior art 的失败模式在这里不会重现?
+ 如果完全没 prior art, 显式承认 "no prior art known".]
+
+VERDICT
+───────
+对每个 attack 给 1-2 句 response:
+- 哪些 attack 能回应 (具体说明 why)
+- 哪些 attack 是 fatal (无法回应 → REJECT or MODIFY proposal)
+- 哪些 attack 是 acceptable cost (清楚说明 cost 范围)
+
+DECISION
+────────
+ACCEPT | MODIFY (说明改成什么) | REJECT
++ concrete reason linked to verdict
+```
+
+#### 完整范例 (in-place vs CoW, 上一轮真实 RAP)
+
+```
+STATE
+─────
+我建议 UPDATE 走 in-place value update 当 size class 同, fall back to
+CoW 当 size class 变.
+
+ATTACK VECTORS
+──────────────
+1. PERFORMANCE: in-place 省一次 alloc, 但 CoW 的 alloc 是 size-class
+   pool 拿一个 free slot (~50 ns), 节省其实 marginal.
+2. CORRECTNESS: > 8B value 在 CXL persistent memory 下没原子性. clflushopt
+   + sfence 保证 cacheline visibility, 不保证 mid-write atomicity. Crash
+   会导致 partial-write. **Fatal under strict-A + CXL persistence**.
+3. GENERALITY: variable-length value 必须 fall back to CoW; 两套 path.
+   Workload value-size skew 下 in-place fast path 比例不可预测.
+4. COMPLEXITY: 两套 code path = 两套 correctness reasoning + 两套 test
+   matrix. iter-4A spec scope 下 LOC ↑ ~40%.
+5. PRIOR ART: FUSEE 原版选 CoW (Client::kv_update RDMA WRITE new block
+   then CAS pointer). LSM/BwTree/Bigtable/PostgreSQL MVCC 全选 CoW.
+   Memcached/Redis 选 in-place 但都纯 in-memory cache 无 persistence
+   要求. **No published persistent KV that chose in-place over CoW**.
+6. IMPLEMENTATION: 两 path 实现 + test 1.4× 工作量, 项目 budget 紧.
+
+ABLATION CHECK
+──────────────
+没跑 in-place vs CoW micro-bench 数据. PRIOR ART 表明 CoW 在 KV size
+≤ 1KB 时性能不输 in-place. 没数据支持 in-place gain claim.
+
+PRIOR ART CHECK
+───────────────
+FUSEE/LSM/BwTree/Bigtable/PostgreSQL 全 CoW. Memcached/Redis 是 cache
+不持久. 没 prior art 在 persistent KV 上选 in-place over CoW.
+
+VERDICT
+───────
+- Attack 2 (CORRECTNESS) FATAL: CXL persistent + > 8B value 无原子性是
+  硬伤, 改不了.
+- Attack 5 (PRIOR ART) FATAL: 无任何 published 工作 support, reviewer
+  问 "why differ from FUSEE original?" 时无法回答.
+- Attack 1 (PERFORMANCE) 不成立: 没 ablation 数据 support gain.
+- Attack 3, 4, 6 是 cost, 不 fatal but bad value.
+
+DECISION
+────────
+REJECT in-place. ADOPT CoW only as the unique UPDATE path. Matches
+FUSEE original (preserve-original 硬约束 progress.md:410), eliminates
+correctness risk, simpler, immune to all 6 reviewer attacks.
+```
+
+这个 RAP 让上一轮 in-place vs CoW 的决策**有可审计的 reasoning trace**.
+没有 RAP, 决策依据 invisible, 容易 silent 错。
+
+#### RAP 失败模式
+
+RAP 不是万能。常见失败:
+
+- **Attack 列得不充分** (只 list 2-3 个轻 attack 跳过 6 类): user 看到立即 reject 让重出
+- **Attack 列了但 verdict 摇摆** (没明确判 fatal/acceptable): user 要求每条 attack 必须 binary 判定
+- **PRIOR ART 写 "no prior art"** 但实际有 (Claude 偷懒): user 反向 attack "你查过 X paper 没"
+- **Ablation 写 "可以以后跑"**: user 要求要么现在跑要么 proposal hold
+
+#### 反馈 loop
+
+每个 iter retrospective (P2) 必须包含 "RAP retrospective" section: 列
+当 iter 走过 RAP 的 design choice, 实际 implementation 跑出来后 attack
+预测中哪些被验证 / 哪些没. 这建立 attack quality calibration —
+"crash consistency attack 在 CXL persistent 下确实 fatal" 这种 lesson 内化.
