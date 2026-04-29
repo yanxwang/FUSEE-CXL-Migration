@@ -670,249 +670,673 @@ NT store 不是 atomic:
 
 reader 通过 (3) 的 atomic publish 才能"看到"新 block, 即使 (1) 的 NT store 内部 non-atomic 也无所谓 — reader 在 (3) 之前永远不读 new block.
 
-### VI-B — Per-operation primitive sequence (mandatory implementation reference)
+#### Quick decision card (1-page reference for implementer)
 
-每个 op 的 step-by-step primitive. 实现 protocol A v2 时拿这表对应,
-不要 invent.
+```
+═══════════════════════════════════════════════════════════════
+  PICKING STORE PRIMITIVE FOR CXL WRITES (Protocol A v2)
+═══════════════════════════════════════════════════════════════
 
-#### Reader fast path (cache hit, ~50 ns total)
+Q1: 是 atomic-required publish (CAS / atomic flag store)?
+    YES → lock cmpxchg / __atomic_store(release) + clflushopt + sfence
+                                                                [STOP]
+
+Q2: 数据 < 256 B?
+    YES → memcpy / plain store + clflushopt(per cacheline) + sfence
+                                                                [STOP]
+
+Q3: 写完后 owner 自己在 CXL 同地址再读这片字节?
+    YES → memcpy / plain store + clflushopt + sfence
+    NO  → _mm512_stream_si512 (NT store) + sfence
+        (iter-4A KV block ≥ 256 B 走 NT — owner 走 cache_pool DRAM
+         不再访问 CXL 上这块 KV bytes)
+
+═══════════════════════════════════════════════════════════════
+  PICKING LOAD PRIMITIVE
+═══════════════════════════════════════════════════════════════
+
+Q1: 数据在 DRAM (host-local 或 MAP_SHARED 同 host)?
+    YES → plain load (atomic load if shared atomic)             [STOP]
+
+Q2: 数据在 CXL 且**对端 host 可能改过**?
+    YES → clflushopt(p) + mfence + plain load
+        (CACHELINE_LOAD pattern, ~700 ns/cacheline)
+
+Q3: 数据在 CXL 但**只有 self host 在改**?
+    可选 → 仍建议 clflushopt + mfence + load (defensive)
+         OR plain load (if 你能证明 self host 是唯一 writer 且 self
+            host 自己 cache 副本仍 fresh)
+═══════════════════════════════════════════════════════════════
+  FENCE 选择
+═══════════════════════════════════════════════════════════════
+
+| 上下文 | fence |
+|---|---|
+| 跟在 store / clflushopt / NT store 后, 让对端见 | sfence |
+| 跟在 clflushopt 后, 自己 issue load 之前 | mfence (注 1) |
+| 纯 read sequence ordering | lfence 通常不需要 (x86 强序) |
+| compiler 不重排 | __asm__ volatile("":::"memory") |
+
+注 1: 严格说 clflushopt 之后 lfence 即可让 invalidate 对自己后续 load
+       生效, 但 mfence 更稳 (覆盖 store + load), 实测 latency 几乎一样.
+       iter-4A 默认用 mfence after clflushopt before load.
+
+═══════════════════════════════════════════════════════════════
+  CACHE 选择
+═══════════════════════════════════════════════════════════════
+
+iter-4A 只用 clflushopt. 不用 clflush (太慢), 不用 clwb (留 stale 副本
+反而让对端 host clflushopt+load 跑不必要的 backing-store read).
+═══════════════════════════════════════════════════════════════
+```
+
+### VI-B — Implementation cheat sheet (all read/write scenarios, copy-paste ready)
+
+每段 code 直接抄. 每行已标注 primitive type / memory location / 是否需要 fence|flush. 实现 protocol A v2 时不允许 invent — 拿这表对应.
+
+下面 22 个 scenario 覆盖 protocol A v2 全部读写 + message passing + cache 管理路径. **在这 22 个之外的任何 CXL 读写，触发 RAP §XIII**.
+
+#### Scenario 1: Reader fast path (cache hit) — ~50 ns
 
 ```c
-// Step 1: hashmap lookup (DRAM, MAP_SHARED across same-host workers)
-KvCacheEntry *entry = cache_pool.lookup(key);   // plain load on hashmap node, hardware coherent
+// CONTEXT: any host, any worker. Most common path (~95% of reads on hot data).
+// PHYSICAL: DRAM only. NO CXL access. NO fence. NO flush.
 
-// Step 2: stale check (DRAM, same cacheline as entry)
-if (entry && !entry->stale) {                   // plain load (1 byte, L1 hot)
-                                                // entry->stale 是 atomic<bool> 但 x86 plain load OK
-    return entry->value_bytes;                  // plain memcpy, value bytes 跟 entry struct 同 alloc 区
+ShardingEntry shard = sharding_table[hash(key)];          // plain load (DRAM, const)
+
+KvCacheEntry *entry = cache_pool.lookup(key);             // plain load chain (DRAM hashmap)
+
+if (entry && !entry->stale) {                             // plain load 1 byte (L1 hot, same cacheline)
+    memcpy(out, entry->value_bytes, entry->value_size);   // plain memcpy (DRAM)
+    cache_pool.touch_lru(entry);                          // atomic counter inc (DRAM)
+    return SUCCESS;
 }
 goto slow_path;
 ```
 
-**No CXL access. No fence. No flush.** 这是为什么 fast path ~50 ns.
-
-#### Reader slow path - cross-host miss (~3 µs)
+#### Scenario 2: Reader slow path — same-host miss (owner == self) — ~1 µs
 
 ```c
-// Step 1: identify owner
-host_id_t owner = sharding_table[hash(key)].owner;       // plain load (DRAM, const after init)
+// CONTEXT: cache miss, key's owner_host == self_host.
+// PHYSICAL: register via local directory (DRAM); fetch from CXL.
 
-// Step 2: enqueue cache_register_request to owner via N:1:1:N
-//   producer side (this worker → host's sender thread MPSC queue)
-LocalAggregatorQueue *q = &aggregator_->queues[k_route];
-uint64_t pos = q->hdr.tail.fetch_add(1, std::memory_order_acq_rel);   // DRAM atomic CAS-style
-AggrEntry *e = &q->entries[pos % depth];
-                                                          // wait for slot free (lazy spin on op_id==0)
-e->op_type = OP_CACHE_REGISTER;                           // plain store (DRAM)
-e->key = key;
-e->src_worker_slot = my_slot;
-std::atomic_thread_fence(std::memory_order_release);      // compiler+CPU release
-e->op_id = unique_op_id;                                  // plain store (DRAM, last to flip — release ordering)
-                                                          // NO clflushopt: aggregator queue is DRAM, hardware coherent
+ShardingEntry shard = sharding_table[hash(key)];          // plain load (DRAM)
+// shard.owner == self_host
 
-// Step 3: spin on local ack buffer (DRAM, hardware coherent)
-while (ack_buf->slots[my_slot].ack_op_id.load(std::memory_order_acquire) != my_op_id)
-    __builtin_ia32_pause();                               // atomic load acquire (DRAM)
+uint32_t bucket_idx = hash(key) % num_buckets;
+SlotDirectoryEntry *de = NULL;
+int slot_idx = -1;
 
-// Step 4: response message contains value bytes (small KV) or nack-fallback
-if (response.payload_size <= INLINE_PAYLOAD_MAX) {
-    memcpy(local_value, response.payload, payload_size); // plain memcpy
-} else {
-    // fallback: response is a CXL pointer; we go fetch the block
-    flush_line(slot_pointer_target);                     // clflushopt
-    full_fence();                                         // mfence
-    memcpy(local_value, slot_pointer_target, value_size); // plain memcpy from CXL (now coherent because we flushed)
+// Step A: scan bucket from CXL with explicit coherence
+flush_line(&buckets_[bucket_idx]);                        // clflushopt (CXL evict L3 stale)
+flush_line((char*)&buckets_[bucket_idx] + 64);            // clflushopt 2nd cacheline (bucket = 128 B)
+full_fence();                                             // mfence
+CxlKvBucket b_snap = buckets_[bucket_idx];                // plain load (post-flush, coherent)
+
+for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (b_snap.slots[s].key == key) { slot_idx = s; break; }
 }
+if (slot_idx < 0) return KEY_NOT_FOUND;
 
-// Step 5: write into local cache (DRAM)
-cache_pool.insert(key, local_value, stale=false);        // plain stores; LRU update is atomic counter
+// Step B: register self in directory (host-local)
+de = &SlotDirectory[bucket_idx][slot_idx];
+pthread_spin_lock(&de->spinlock);                         // DRAM spinlock (PROCESS_SHARED)
+de->sharer_bitmap |= (1 << self_host);                    // plain store (DRAM byte, host-local atomic)
+de->state = SLOT_STATE_S;
+de->version++;
+pthread_spin_unlock(&de->spinlock);
+
+// Step C: fetch KV block from CXL
+void *block_addr = (void*)b_snap.slots[slot_idx].pointer;
+size_t block_size = size_class_to_bytes(b_snap.slots[slot_idx].size_class);
+
+for (size_t off = 0; off < block_size; off += 64)
+    flush_line((char*)block_addr + off);                  // clflushopt each cacheline (CXL)
+full_fence();                                             // mfence
+
+memcpy(local_value, block_addr, block_size);              // plain memcpy from CXL (now coherent)
+
+// Step D: insert into local cache + set self flag
+cache_pool.insert(key, local_value, block_size, stale=false);   // DRAM stores
+__atomic_store_n(&local_self_flags[bucket_idx][slot_idx],
+                 1, __ATOMIC_RELEASE);                    // atomic byte store (DRAM)
+
+return SUCCESS;
 ```
 
-**N:1:1:N sender 把 message 推到 CXL ring 是 sender thread 内部的事**,
-worker 等 ack_buf 即可. Sender 那一边的 primitive 见下面 §"Sender thread".
-
-#### Writer (owner host) UPDATE — single host atomic CAS path
+#### Scenario 3: Reader slow path — cross-host miss (owner != self) — ~2-3 µs
 
 ```c
-// Step 1: directory entry spinlock acquire (DRAM, host-local)
-SlotDirectoryEntry *de = &SlotDirectory[bucket_idx][slot_idx];
-spinlock_acquire(&de->spinlock);                          // DRAM atomic test-and-set, hardware coherent
+// CONTEXT: cache miss, owner_host is a peer.
+// PHYSICAL: send cache_register via N:1:1:N; response carries value bytes
+//           (Option B for small KV) or fallback CXL pointer.
 
-// Step 2: lookup current slot from cache or CXL
-//   2a (cache hit): plain load
-//   2b (cache miss): clflushopt + mfence + plain load on bucket cacheline
+ShardingEntry shard = sharding_table[hash(key)];          // plain load (DRAM)
+host_id_t owner = shard.owner;                            // owner != self_host
+
+// Step A: enqueue cache_register_request to MPSC aggregator (DRAM)
+LocalAggregatorQueue *q = &aggregator_->queues[k_route];
+
+uint64_t pos = __atomic_fetch_add(&q->hdr.tail, 1,
+                                  __ATOMIC_ACQ_REL);      // atomic fetch_add (DRAM)
+AggrEntry *e = &q->entries[pos % kAggrQueueDepth];
+
+// wait slot free (lazy spin)
+while (__atomic_load_n(&e->op_id, __ATOMIC_ACQUIRE) != 0)
+    __builtin_ia32_pause();                               // atomic load acquire (DRAM)
+
+uint64_t op_id = generate_op_id(self_host, my_worker_slot);
+
+e->op_type        = OP_CACHE_REGISTER;                    // plain store (DRAM)
+e->key            = key;
+e->dst_host       = owner;
+e->src_worker_slot= my_worker_slot;
+std::atomic_thread_fence(std::memory_order_release);      // compiler+CPU release fence
+__atomic_store_n(&e->op_id, op_id, __ATOMIC_RELEASE);     // atomic store last (DRAM, release pattern)
+// NO clflushopt — DRAM hardware coherent across same-host workers / sender thread
+
+// Step B: spin on worker_ack_buf (DRAM)
+WorkerAckSlot *ack = &aggregator_->ack_bufs[k_route].slots[my_worker_slot];
+while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
+    __builtin_ia32_pause();                               // atomic load acquire (DRAM)
+
+// Step C: response is in `ack->response_payload` (sender thread copied it from CXL ring)
+size_t payload_size = ack->response_size;
+
+if (payload_size <= INLINE_PAYLOAD_MAX) {                 // Option B: value carried in response
+    memcpy(local_value, ack->response_payload, payload_size); // plain memcpy (DRAM)
+} else {                                                   // Option A fallback: CXL pointer
+    void *block_addr = ack->response_pointer;
+    for (size_t off = 0; off < payload_size; off += 64)
+        flush_line((char*)block_addr + off);              // clflushopt (CXL)
+    full_fence();                                         // mfence
+    memcpy(local_value, block_addr, payload_size);        // plain memcpy from CXL
+}
+
+// Step D: insert into local cache
+cache_pool.insert(key, local_value, payload_size, stale=false);  // DRAM
+return SUCCESS;
+```
+
+#### Scenario 4: Writer UPDATE — owner == self host — ~3-5 µs
+
+```c
+// CONTEXT: same-host write. Most common write path under sharding.
+// PHYSICAL: directory lock (DRAM) + invalidate sharers via N:1:1:N + atomic CAS slot.pointer (CXL).
+
+uint32_t bucket_idx = hash(key) % num_buckets;
+
+// Step A: read current bucket layout from CXL (find slot for this key)
 flush_line(&buckets_[bucket_idx]);                        // clflushopt (CXL)
-flush_line((char*)&buckets_[bucket_idx] + 64);            // 2nd cacheline if bucket spans 128B
+flush_line((char*)&buckets_[bucket_idx] + 64);            // clflushopt 2nd cacheline
 full_fence();                                             // mfence
-CxlKvBucket bucket_snapshot = buckets_[bucket_idx];       // plain load (now coherent post-flush)
-uint64_t old_pointer = bucket_snapshot.slots[slot_idx].pointer;
+CxlKvBucket b_snap = buckets_[bucket_idx];                // plain load (post-flush)
 
-// Step 3: alloc new KV block from per-owner-host blockpool
-void *new_block = blockpool_alloc(size_class(new_value)); // host-local, DRAM atomic on free list
+int slot_idx = scan_for_key(b_snap, key);
+if (slot_idx < 0) return KEY_NOT_FOUND;
 
-// Step 4: write value bytes to new block on CXL
-//   primitive 选择 (见 §VI-A.bis 详细 decision rule):
-//   - value < 256 B: plain store + clflushopt + sfence (单 cacheline NT 不划算)
-//   - value ≥ 256 B: NT store + sfence (owner 后续走 cache_pool 不再读这片 CXL → 不污染 cache 是赢)
-//   注意: NT store 不是 atomic, 但 reader 在 step 6 atomic CAS slot.pointer
-//        publish 之前永远看不到新 block, 所以 NT 内部 non-atomic 无所谓.
-if (size >= 256) {
-    for (size_t off = 0; off < size; off += 64) {
-        _mm512_stream_si512((__m512i*)(new_block + off), value_chunk);  // NT store, bypass L1/L2/L3, fill WC buffer
+uint64_t old_pointer = b_snap.slots[slot_idx].pointer;
+SlotDirectoryEntry *de = &SlotDirectory[bucket_idx][slot_idx];
+
+// Step B: directory entry lock (DRAM, host-local)
+pthread_spin_lock(&de->spinlock);                         // DRAM PROCESS_SHARED spinlock
+
+// Step C: alloc new KV block (per-owner-host pool, host-local DRAM metadata)
+size_class_t sc = size_class(new_value_size);
+void *new_block = blockpool_alloc(sc);                    // host-local DRAM atomic on free list
+
+// Step D: write value bytes to new block (CXL) — primitive depends on size
+if (new_value_size >= 256) {
+    // ≥ 256 B: NT store + sfence (avoid cache pollution)
+    for (size_t off = 0; off < new_value_size; off += 64) {
+        __m512i v = _mm512_loadu_si512((__m512i*)((char*)new_value + off));
+        _mm512_stream_si512((__m512i*)((char*)new_block + off), v);  // NT store (CXL via WC buffer)
     }
-    store_fence();                                        // sfence: drain WC buffer to CXL backing
+    store_fence();                                        // sfence (drain WC to CXL)
 } else {
-    memcpy(new_block, new_value, size);                   // plain stores into L1
-    for (size_t off = 0; off < size; off += 64)
-        flush_line(new_block + off);                      // clflushopt: evict L1 dirty line to CXL
-    store_fence();                                        // sfence: order clflushopts vs subsequent stores
+    // < 256 B: plain store + clflushopt per cacheline + sfence
+    memcpy(new_block, new_value, new_value_size);         // plain stores (CPU L1)
+    size_t flushed = 0;
+    for (size_t off = 0; off < new_value_size; off += 64) {
+        flush_line((char*)new_block + off);               // clflushopt each cacheline
+    }
+    store_fence();                                        // sfence
 }
-// Now new block is durable on CXL backing.
 
-// Step 5: invalidate sharers via N:1:1:N
-sharer_set = de->sharer_bitmap & ~(1 << self_host);
+// Step E: invalidate other-host sharers via N:1:1:N (sync ACK wait)
+uint8_t sharer_set = de->sharer_bitmap & ~(1 << self_host);
 if (sharer_set != 0) {
-    send_invalidate_to_hosts(bucket_idx, slot_idx, sharer_set);  // sender thread handles CXL flush
-    wait_for_all_acks(invalidate_op_id);                  // spin on local ack_buf (DRAM atomic load)
+    uint64_t inval_op_id = enqueue_invalidate(bucket_idx, slot_idx, sharer_set);
+    // Sender thread will publish to peer host(s); receiver applies; AckChannel returns.
+    // We spin on local worker_ack_buf:
+    WorkerAckSlot *ack = &aggregator_->ack_bufs[k_route].slots[my_worker_slot];
+    while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != inval_op_id)
+        __builtin_ia32_pause();                           // atomic load acquire (DRAM)
 }
+// ★ STRICT-A LINEARIZABILITY POINT: all peer caches invalidated.
 
-// Step 6: atomic CAS slot.pointer (★ COMMIT POINT)
-//   x86 lock cmpxchg on 8B aligned CXL address; sharding 保证 single host writer 所以 hardware atomic OK
+// Step F: atomic CAS slot.pointer (★ COMMIT POINT)
+//   sharding ensures single-host-writer; lock cmpxchgq is hardware atomic single-host.
 bool cas_ok = __atomic_compare_exchange_n(
     &buckets_[bucket_idx].slots[slot_idx].pointer,
     &old_pointer, (uint64_t)new_block,
-    false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
-flush_line(&buckets_[bucket_idx].slots[slot_idx]);        // clflushopt (CXL — let peer hosts see)
+    /*weak=*/ false,
+    __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);                  // lock cmpxchgq (CXL, single-host atomic)
+if (!cas_ok) { /* should not happen under sharding; abort */ }
+
+flush_line(&buckets_[bucket_idx].slots[slot_idx]);        // clflushopt (CXL — peer hosts can see)
 store_fence();                                            // sfence
 
-// Step 7: directory state update (DRAM, host-local)
-de->sharer_bitmap = (1 << self_host);                     // plain store (host-local atomic byte)
+// Step G: directory state update (DRAM, host-local)
+de->sharer_bitmap = (1 << self_host);                     // plain store (DRAM)
 de->state = SLOT_STATE_M;
 de->version++;
-spinlock_release(&de->spinlock);
 
-// Step 8: update local cache (DRAM)
-cache_pool.update(key, new_value, stale=false);
+pthread_spin_unlock(&de->spinlock);
 
-// Step 9: queue old block for lazy GC (DRAM, host-local)
-gc_queue.push(old_pointer);
+// Step H: update local cache_pool (DRAM)
+cache_pool.update(key, new_value, new_value_size, stale=false);  // DRAM stores
+
+// Step I: queue old block for lazy GC (DRAM, host-local list)
+gc_queue.push((void*)old_pointer);
+
+return SUCCESS;
 ```
 
-#### Writer INSERT (different from UPDATE only at step 2-3-6)
+#### Scenario 5: Writer INSERT — owner == self host — ~3-5 µs
 
 ```c
-// Step 2: scan bucket for empty slot via cache+CXL
-// Step 3: alloc new block; write value (same as UPDATE step 4)
-// Step 6 (16B atomic publish — SSE2 path):
-//   slot.value/pointer is 8B + slot.key is 8B → 16B aligned.
-__m128i new_slot = _mm_set_epi64x(new_block_pointer, key);
-_mm_store_si128((__m128i*)&buckets_[bucket_idx].slots[slot_idx], new_slot);  // 16B SSE2 atomic store
-flush_line(&buckets_[bucket_idx].slots[slot_idx]);        // clflushopt
+// CONTEXT: same-host insert. Differs from UPDATE in: scan for empty slot,
+//          publish slot.key + slot.pointer together (16B atomic or 2-step).
+
+uint32_t bucket_idx = hash(key) % num_buckets;
+flush_line(&buckets_[bucket_idx]);                        // clflushopt
+flush_line((char*)&buckets_[bucket_idx] + 64);            // clflushopt
+full_fence();                                             // mfence
+CxlKvBucket b_snap = buckets_[bucket_idx];                // plain load
+
+int empty_idx = -1;
+for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (b_snap.slots[s].key == key) return KEY_EXISTS;
+    if (empty_idx < 0 && b_snap.slots[s].key == EMPTY_KEY) empty_idx = s;
+}
+if (empty_idx < 0) return BUCKET_FULL;
+
+SlotDirectoryEntry *de = &SlotDirectory[bucket_idx][empty_idx];
+pthread_spin_lock(&de->spinlock);                         // DRAM
+
+void *new_block = blockpool_alloc(size_class(value_size));// DRAM atomic
+// write value bytes — same as Scenario 4 Step D (NT vs plain by size)
+if (value_size >= 256) {
+    /* NT store loop + sfence */
+} else {
+    /* memcpy + clflushopt loop + sfence */
+}
+
+// invalidate sharers on the empty slot's directory (someone may have cached the empty slot's stale state)
+uint8_t sharer_set = de->sharer_bitmap & ~(1 << self_host);
+if (sharer_set != 0) {
+    uint64_t op_id = enqueue_invalidate(bucket_idx, empty_idx, sharer_set);
+    while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
+        __builtin_ia32_pause();
+}
+
+// publish slot — 2 options:
+
+// Option 5a (simple, recommended): publish_slot pattern (value first, then key)
+buckets_[bucket_idx].slots[empty_idx].pointer = (uint64_t)new_block;  // plain store (CXL)
+flush_line(&buckets_[bucket_idx].slots[empty_idx]);       // clflushopt
 store_fence();                                            // sfence
-//
-// 注意: 16B atomic 要求严格 16-byte 对齐 + reader 也用 movdqa 读. 简化做法:
-// 用 publish_slot pattern (value 先 + flush + sfence + key 后 + flush + sfence).
-// reader 在 step 2 看到 (key=new, pointer=garbage) 的概率被 sfence 之间的窗口排除.
+__atomic_store_n(&buckets_[bucket_idx].slots[empty_idx].key,
+                 key, __ATOMIC_RELEASE);                  // atomic 8B store (CXL)
+flush_line(&buckets_[bucket_idx].slots[empty_idx]);       // clflushopt
+store_fence();                                            // sfence
+
+// Option 5b (faster, requires 16B alignment): SSE2 16B atomic publish
+__m128i new_slot = _mm_set_epi64x((int64_t)new_block, (int64_t)key);
+_mm_store_si128((__m128i*)&buckets_[bucket_idx].slots[empty_idx], new_slot);  // 16B atomic
+flush_line(&buckets_[bucket_idx].slots[empty_idx]);       // clflushopt
+store_fence();                                            // sfence
+// Note: requires reader to use _mm_load_si128 to see atomic 16B; since reader uses
+// plain load + key check, Option 5a is safer default.
+
+// directory state update
+de->sharer_bitmap = (1 << self_host);                     // DRAM
+de->state = SLOT_STATE_M;
+de->version++;
+pthread_spin_unlock(&de->spinlock);
+
+cache_pool.insert(key, new_value, value_size, stale=false);    // DRAM
+return SUCCESS;
 ```
 
-#### Writer DELETE (slot.key = empty)
+#### Scenario 6: Writer DELETE — owner == self host — ~2-4 µs
 
 ```c
-// Same as INSERT but step 6 just stores empty marker:
+// CONTEXT: same-host delete. Set slot.key = EMPTY_KEY; old block to GC immediately.
+
+uint32_t bucket_idx = hash(key) % num_buckets;
+flush_line(&buckets_[bucket_idx]);                        // clflushopt
+flush_line((char*)&buckets_[bucket_idx] + 64);            // clflushopt
+full_fence();                                             // mfence
+CxlKvBucket b_snap = buckets_[bucket_idx];                // plain load
+
+int slot_idx = scan_for_key(b_snap, key);
+if (slot_idx < 0) return KEY_NOT_FOUND;
+
+SlotDirectoryEntry *de = &SlotDirectory[bucket_idx][slot_idx];
+pthread_spin_lock(&de->spinlock);                         // DRAM
+
+uint64_t old_pointer = b_snap.slots[slot_idx].pointer;
+
+// invalidate sharers
+uint8_t sharer_set = de->sharer_bitmap & ~(1 << self_host);
+if (sharer_set != 0) {
+    uint64_t op_id = enqueue_invalidate(bucket_idx, slot_idx, sharer_set);
+    while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
+        __builtin_ia32_pause();
+}
+
+// atomic store empty marker (commit point)
 __atomic_store_n(&buckets_[bucket_idx].slots[slot_idx].key,
-                 EMPTY_KEY, __ATOMIC_RELEASE);            // 8B atomic store
+                 EMPTY_KEY, __ATOMIC_RELEASE);            // atomic 8B store (CXL)
 flush_line(&buckets_[bucket_idx].slots[slot_idx]);        // clflushopt
 store_fence();                                            // sfence
-// Old block goes to GC queue immediately (no pointer to it remains).
+
+de->sharer_bitmap = 0;                                    // DRAM
+de->state = SLOT_STATE_I;
+de->version++;
+pthread_spin_unlock(&de->spinlock);
+
+cache_pool.invalidate(key);                               // DRAM
+gc_queue.push((void*)old_pointer);                        // DRAM
+return SUCCESS;
 ```
 
-#### Sender thread (1 thread / host / channel) - drain MPSC → publish CXL ring
+#### Scenario 7: Cross-host write forward (owner != self) — owner-side handler
 
 ```c
-// Read producer-side MPSC tail (DRAM)
-uint64_t mpsc_tail = q->hdr.tail.load(std::memory_order_acquire);
-// Drain entries (op_id != 0 means published)
+// CONTEXT: Self-host worker decided owner is peer; forward op to peer.
+// On peer (owner) host, a worker picks up the forwarded op and executes Scenario 4/5/6.
+
+// Forwarder (self host worker):
+host_id_t owner = sharding_table[hash(key)].owner;
+
+LocalAggregatorQueue *q = &aggregator_->queues[k_route];
+uint64_t pos = __atomic_fetch_add(&q->hdr.tail, 1, __ATOMIC_ACQ_REL);  // DRAM atomic
+AggrEntry *e = &q->entries[pos % depth];
+while (__atomic_load_n(&e->op_id, __ATOMIC_ACQUIRE) != 0)
+    __builtin_ia32_pause();
+e->op_type = OP_WRITE_FORWARD;                            // plain store (DRAM)
+e->dst_host = owner;
+e->key = key;
+memcpy(e->payload, value, value_size);                    // plain memcpy (DRAM)
+e->payload_size = value_size;
+e->src_worker_slot = my_slot;
+std::atomic_thread_fence(std::memory_order_release);
+__atomic_store_n(&e->op_id, op_id, __ATOMIC_RELEASE);     // atomic store last
+
+// Wait for forward response (success status)
+while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
+    __builtin_ia32_pause();
+return ack->response_status;
+
+// Owner-side worker (a free worker dequeues from "incoming forwards" queue and
+// runs Scenario 4/5/6 then sends response via reverse N:1:1:N):
+// (This is the same code as Scenario 4/5/6 just running in a forward-handler thread)
+```
+
+#### Scenario 8: Cache evict (LRU pressure) — host-local — ~200 ns
+
+```c
+// CONTEXT: cache pool reached size limit; LRU thread picks oldest entry to evict.
+// PHYSICAL: drop entry from local cache + send cache_evict to owner.
+
+KvCacheEntry *e = lru_pick_victim();                      // DRAM
+uint32_t bucket_idx = e->bucket_idx;
+int slot_idx = e->slot_idx;
+host_id_t owner = sharding_table[hash(e->key)].owner;
+
+// remove from local cache (mark stale or remove from hashmap)
+e->stale = 1;                                             // atomic byte store (DRAM)
+__atomic_store_n(&local_self_flags[bucket_idx][slot_idx], 0, __ATOMIC_RELEASE);
+
+if (owner == self_host) {
+    // local: directly modify directory
+    SlotDirectoryEntry *de = &SlotDirectory[bucket_idx][slot_idx];
+    pthread_spin_lock(&de->spinlock);                     // DRAM
+    de->sharer_bitmap &= ~(1 << self_host);               // DRAM
+    de->version++;
+    pthread_spin_unlock(&de->spinlock);
+} else {
+    // remote: send cache_evict via N:1:1:N (fire-and-forget; no ACK needed)
+    LocalAggregatorQueue *q = &aggregator_->queues[k_route];
+    uint64_t pos = __atomic_fetch_add(&q->hdr.tail, 1, __ATOMIC_ACQ_REL);
+    AggrEntry *ae = &q->entries[pos % depth];
+    while (__atomic_load_n(&ae->op_id, __ATOMIC_ACQUIRE) != 0) __builtin_ia32_pause();
+    ae->op_type = OP_CACHE_EVICT;                         // DRAM
+    ae->dst_host = owner;
+    ae->bucket_idx = bucket_idx;
+    ae->slot_idx = slot_idx;
+    ae->src_worker_slot = my_slot;
+    std::atomic_thread_fence(std::memory_order_release);
+    __atomic_store_n(&ae->op_id, op_id, __ATOMIC_RELEASE);
+    // No spin on ack — fire-and-forget
+}
+
+cache_pool.remove(e->key);                                // DRAM hashmap remove
+blockpool_free_local_dram_entry(e);                       // DRAM (entry struct itself is DRAM)
+```
+
+#### Scenario 9: Sender thread — drain DRAM MPSC → publish CXL SPSC ring
+
+```c
+// CONTEXT: 1 thread per host per channel. Drains the K aggregator queue,
+//          batches per-dst entries, publishes to CXL SPSC ring with single sfence per batch.
+
+LocalAggregatorQueue *q = &aggregator_->queues[k_id];
+
+uint64_t mpsc_tail = __atomic_load_n(&q->hdr.tail, __ATOMIC_ACQUIRE);  // DRAM
+uint64_t head = q->hdr.head;                              // plain load (single-consumer)
+
+// Local pending batch buffers (DRAM)
+PerHostInvalEntry pending[kMaxPhysicalHosts][kBatchMax];
+uint32_t batch_count[kMaxPhysicalHosts] = {0};
+
 while (head < mpsc_tail) {
-    AggrEntry *e = &q->entries[head % depth];
-    uint64_t op_id = __atomic_load_n(&e->op_id, __ATOMIC_ACQUIRE);
-    if (op_id == 0) break;                                 // not yet published
-    
-    // Aggregate up to K entries per dst host, batch-publish to CXL SPSC ring
-    PerHostInvalEntry *ring_e = &per_host_rings_->rings[me][dst][k_id].entries[ring_tail % depth];
-    
-    // Wait for ring slot free (consumer-side cleared)
-    while (true) {
-        flush_line(ring_e);                                // clflushopt (CXL)
-        full_fence();                                      // mfence
-        if (ring_e->src_worker_op_id == 0) break;
-    }
-    
-    ring_e->bucket_idx = e->bucket_idx;                    // plain store (CXL but not yet visible)
-    ring_e->new_epoch  = e->new_epoch;
-    ring_e->src_worker_slot  = e->src_worker_slot;
-    compiler_barrier();
-    ring_e->src_worker_op_id = op_id;                      // plain store last (release pattern)
-    compiler_barrier();
-    flush_line(ring_e);                                    // clflushopt (CXL push to backing)
-    e->op_id = 0;                                          // free DRAM aggregator slot
+    AggrEntry *ae = &q->entries[head % kAggrQueueDepth];
+    uint64_t op_id = __atomic_load_n(&ae->op_id, __ATOMIC_ACQUIRE);  // atomic load (DRAM)
+    if (op_id == 0) break;                                // not yet published by producer
+    int dst = ae->dst_host;
+    if (batch_count[dst] >= kBatchMax) break;             // batch full
+    pending[dst][batch_count[dst]] = (PerHostInvalEntry){
+        .bucket_idx = ae->bucket_idx,
+        .slot_idx = ae->slot_idx,
+        .op_type = ae->op_type,
+        .src_worker_slot = ae->src_worker_slot,
+        .src_worker_op_id = op_id
+    };
+    batch_count[dst]++;
+    __atomic_store_n(&ae->op_id, 0, __ATOMIC_RELEASE);    // free DRAM aggregator slot
     head++;
 }
-// Per-batch tail update + flush
-ring->tail.store(ring_tail, std::memory_order_release);    // atomic tail store
-flush_line(&ring->tail);                                   // clflushopt CXL
-store_fence();                                             // sfence
+q->hdr.head = head;                                       // plain store (single-consumer)
+
+// For each dst with pending: publish batch to CXL ring
+for (int dst = 0; dst < phys_hosts_pr_; dst++) {
+    if (dst == my_phys_host_pr_ || batch_count[dst] == 0) continue;
+    PerHostSpscRing *r = &per_host_rings_->rings[my_phys_host_pr_][dst][k_id];
+    uint64_t tail_pos = __atomic_load_n(&r->tail, __ATOMIC_RELAXED);  // single producer
+
+    for (uint32_t i = 0; i < batch_count[dst]; i++) {
+        PerHostInvalEntry *e = &r->entries[(tail_pos + i) % kPerHostSpscDepth];
+
+        // wait slot free (consumer cleared op_id=0)
+        for (;;) {
+            flush_line(e);                                // clflushopt (CXL)
+            full_fence();                                 // mfence
+            if (e->src_worker_op_id == 0) break;          // plain load (post-flush, coherent)
+            __builtin_ia32_pause();
+        }
+
+        // write entry fields to CXL (plain stores; not yet visible)
+        e->bucket_idx       = pending[dst][i].bucket_idx;
+        e->slot_idx         = pending[dst][i].slot_idx;
+        e->op_type          = pending[dst][i].op_type;
+        e->src_worker_slot  = pending[dst][i].src_worker_slot;
+        compiler_barrier();
+        e->src_worker_op_id = pending[dst][i].src_worker_op_id;       // last (release pattern)
+        compiler_barrier();
+        flush_line(e);                                    // clflushopt (CXL — push to backing)
+    }
+    tail_pos += batch_count[dst];
+
+    __atomic_store_n(&r->tail, tail_pos, __ATOMIC_RELEASE);// atomic tail store (CXL)
+    flush_line(&r->tail);                                 // clflushopt
+    store_fence();                                        // sfence (single batch barrier)
+
+    // wait for AckChannel.seq to reach tail_pos (peer receiver acked all entries)
+    AckChannel *ach = &per_host_rings_->acks[my_phys_host_pr_][dst][k_id];
+    for (;;) {
+        flush_line(&ach->seq);                            // clflushopt (CXL)
+        full_fence();                                     // mfence
+        if (__atomic_load_n(&ach->seq, __ATOMIC_ACQUIRE) >= tail_pos) break;
+        __builtin_ia32_pause();
+    }
+
+    // flip worker_ack_buf for each worker that contributed an entry
+    for (uint32_t i = 0; i < batch_count[dst]; i++) {
+        WorkerAckSlot *aks = &aggregator_->ack_bufs[k_id]
+                              .slots[pending[dst][i].src_worker_slot];
+        __atomic_store_n(&aks->ack_op_id,
+                         pending[dst][i].src_worker_op_id,
+                         __ATOMIC_RELEASE);              // atomic store (DRAM)
+    }
+}
 ```
 
-#### Receiver thread - drain CXL ring → apply directory updates
+#### Scenario 10: Receiver thread — drain CXL ring → apply directory updates → ack
 
 ```c
-// Read tail from CXL (need clflushopt + mfence to see latest from sender)
-flush_line(&ring->tail);                                   // clflushopt
-full_fence();                                              // mfence
-uint64_t tail = ring->tail.load(std::memory_order_acquire);
+// CONTEXT: 1 thread per host per channel. Drains rings[*][me][k_id], applies
+//          invalidations / cache_register / forward / cache_evict to local
+//          directory + cache pool, then publishes ack_seq.
 
-while (head < tail) {
-    PerHostInvalEntry *e = &ring->entries[head % depth];
-    flush_line(e);                                         // clflushopt (CXL)
-    full_fence();                                          // mfence
-    
-    uint64_t op_id = e->src_worker_op_id;                  // plain load (post-flush, coherent)
-    if (op_id == 0) break;                                 // sender hasn't published yet
-    
-    // Apply: update directory state + invalidate local cache
-    SlotDirectoryEntry *de = &SlotDirectory[e->bucket_idx][e->slot_idx];
-    spinlock_acquire(&de->spinlock);                       // DRAM
-    cache_pool.set_stale(de_key);                          // DRAM atomic byte store
-    de->sharer_bitmap &= ~(1 << peer_host_id);             // DRAM
-    spinlock_release(&de->spinlock);
-    
-    e->src_worker_op_id = 0;                               // plain store, free CXL ring slot
-    compiler_barrier();
-    flush_line(e);                                         // clflushopt (CXL, let sender see slot freed)
-    head++;
+for (int src = 0; src < phys_hosts_pr_; src++) {
+    if (src == my_phys_host_pr_) continue;
+    PerHostSpscRing *r = &per_host_rings_->rings[src][my_phys_host_pr_][k_id];
+
+    // read tail from CXL
+    flush_line(&r->tail);                                 // clflushopt
+    full_fence();                                         // mfence
+    uint64_t tail = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);  // atomic load (post-flush)
+    uint64_t head = r->head;                              // plain load (single consumer)
+
+    while (head < tail) {
+        PerHostInvalEntry *e = &r->entries[head % kPerHostSpscDepth];
+        flush_line(e);                                    // clflushopt
+        full_fence();                                     // mfence
+        uint64_t op_id = e->src_worker_op_id;             // plain load (post-flush)
+        if (op_id == 0) break;                            // sender hasn't published yet
+
+        // Apply to local directory + cache, depending on op_type
+        switch (e->op_type) {
+        case OP_INVALIDATE: {
+            // peer (owner) tells us to drop our cache entry for (bucket, slot)
+            uint32_t b = e->bucket_idx, s = e->slot_idx;
+            // mark cache stale for any entry whose bucket/slot match
+            cache_pool.set_stale_by_slot(b, s);           // atomic byte store (DRAM)
+            __atomic_store_n(&local_self_flags[b][s], 0, __ATOMIC_RELEASE);
+            break;
+        }
+        case OP_CACHE_REGISTER: {
+            // peer (reader) registering itself in our directory
+            SlotDirectoryEntry *de = &SlotDirectory[e->bucket_idx][e->slot_idx];
+            pthread_spin_lock(&de->spinlock);             // DRAM
+            de->sharer_bitmap |= (1 << src);              // DRAM
+            de->state = SLOT_STATE_S;
+            de->version++;
+            pthread_spin_unlock(&de->spinlock);
+            // (response with value bytes is built by sender in scenarios 9 + ack reply path)
+            break;
+        }
+        case OP_CACHE_EVICT: {
+            // peer dropped its cache; remove from sharer set
+            SlotDirectoryEntry *de = &SlotDirectory[e->bucket_idx][e->slot_idx];
+            pthread_spin_lock(&de->spinlock);
+            de->sharer_bitmap &= ~(1 << src);
+            de->version++;
+            pthread_spin_unlock(&de->spinlock);
+            // no response needed (fire-and-forget)
+            break;
+        }
+        case OP_WRITE_FORWARD: {
+            // peer is forwarding a write op; we (owner) execute Scenario 4/5/6
+            execute_local_write(e->key, e->payload, e->payload_size, e->op_type_inner);
+            // build response and queue back via reverse N:1:1:N (omitted)
+            break;
+        }
+        }
+
+        // free CXL ring slot
+        __atomic_store_n(&e->src_worker_op_id, 0, __ATOMIC_RELEASE);  // atomic 8B store (CXL)
+        compiler_barrier();
+        flush_line(e);                                    // clflushopt (CXL)
+        head++;
+    }
+    r->head = head;                                       // plain store (single consumer)
+
+    // publish AckChannel.seq advance
+    AckChannel *ach = &per_host_rings_->acks[src][my_phys_host_pr_][k_id];
+    __atomic_store_n(&ach->seq, head, __ATOMIC_RELEASE);  // atomic store (CXL)
+    flush_line(&ach->seq);                                // clflushopt
+    store_fence();                                        // sfence (single barrier per batch)
 }
-
-// Publish per-batch ack_seq back to sender via CXL AckChannel
-AckChannel *ach = &per_host_rings_->acks[src_host][me][k_id];
-ach->seq.store(head, std::memory_order_release);           // atomic store
-flush_line(&ach->seq);                                     // clflushopt (CXL)
-store_fence();                                             // sfence
 ```
 
-#### Cache pool / Directory updates summary
+#### Scenario 11-22: Smaller ops (table form)
 
-| Op | Primitive |
+These ops are common but small enough to express as 1-2 line primitive sequences:
+
+| # | Op | Primitive sequence |
+|---|---|---|
+| 11 | Sharding lookup | `ShardingEntry s = sharding_table[hash(k)]` — plain load (DRAM, const) |
+| 12 | Cache LRU touch on hit | `__atomic_fetch_add(&entry->lru_epoch, 1, __ATOMIC_RELAXED)` — DRAM |
+| 13 | Cache stale flag set (receiver) | `__atomic_store_n(&entry->stale, 1, __ATOMIC_RELEASE)` — DRAM 1 byte |
+| 14 | Cache stale flag check (reader) | plain load 1 byte (no atomic needed for x86 single-byte) |
+| 15 | LocalSelfFlag set after register ACK | `__atomic_store_n(&local_self_flags[b][s], 1, __ATOMIC_RELEASE)` — DRAM |
+| 16 | Directory.version observability read | `__atomic_load_n(&de->version, __ATOMIC_RELAXED)` — DRAM |
+| 17 | KV blockpool alloc | host-local DRAM spinlock on free list head; `__atomic_store_n(head, head->next, RELAXED)` |
+| 18 | KV blockpool free (lazy GC) | DRAM spinlock + push to free list head |
+| 19 | MPSC tail fetch_add (worker side) | `__atomic_fetch_add(&q->tail, 1, ACQ_REL)` — DRAM (sender consumes) |
+| 20 | MPSC head update (sender side) | `q->head = new_head` — plain store (single consumer) |
+| 21 | SPSC tail update (sender side, CXL) | `__atomic_store_n(&r->tail, new_tail, RELEASE)` + clflushopt + sfence |
+| 22 | SPSC head update (receiver side, CXL) | `r->head = new_head` — plain store (single consumer reads only) |
+
+**注意**: 上面 SPSC head 在 CXL 但只有 receiver 写, sender 不读 (sender 只读 ackChannel.seq), 所以 head 不需要 clflushopt — 直接 plain store 即可.
+
+#### Quick-reference: 何时不需要 clflushopt + fence?
+
+| 场景 | 不需要 flush/fence 因为... |
 |---|---|
-| Reader stale flag check | plain load 1 byte (DRAM, L1 hot) |
-| Reader sets `in_sharers` flag after register ACK | atomic store byte (release) |
-| Receiver sets `stale` flag in cache pool | atomic store byte (release) |
-| Sender / Receiver advance `head`/`tail` on SPSC ring | atomic load/store + clflushopt + sfence (CXL) |
-| Worker→Sender MPSC enqueue | atomic fetch_add tail (DRAM) + plain store payload + atomic store op_id (DRAM, release) |
-| Owner host directory.sharer_bitmap modify | spinlock_acquire + atomic byte store + spinlock_release (all DRAM) |
-| KV block bytes write (large value) | NT store + sfence (CXL) |
-| KV block bytes write (small value < 256 B) | plain store + clflushopt per cacheline + sfence (CXL) |
-| Slot pointer atomic CAS | `__atomic_compare_exchange_n` (8B, CXL) + clflushopt + sfence |
-| Reading bucket from CXL | clflushopt 2 cachelines (bucket = 128 B) + mfence + plain load |
+| 同 host 多 worker 间共享 DRAM (MAP_SHARED) | hardware coherence 自动保证 |
+| 单 host 内 thread/process 间 atomic ops | x86 hardware atomicity for ≤ 8B aligned |
+| sharding_table read-only | initialized once, no mutation |
+| MPSC aggregator queue (DRAM) | DRAM coherent |
+| LocalSelfFlags (DRAM) | DRAM coherent |
+| Cache pool entries (DRAM, MAP_SHARED) | DRAM coherent across same-host workers |
+
+#### Quick-reference: 必须 clflushopt + fence 的场景
+
+| 场景 | 理由 |
+|---|---|
+| 任何 host 写 CXL bytes 让对端 host 看到 | 无跨 host coherence |
+| 任何 host 读 CXL bytes 假定对端 host 改过 | 自己 L3 可能 stale |
+| 写 SPSC ring entry (CXL) | sender 写, receiver 在对端 host 读 |
+| 写 AckChannel.seq (CXL) | receiver 写, sender 在对端 host 读 |
+| 写 slot.pointer / slot.key (CXL) | writer 写, reader 在所有 host 可能读 |
+| 写 KV block bytes (CXL) | writer 写, reader 在对端 host 可能 follow pointer 读 |
+| 读 SPSC ring entry / AckChannel.seq / slot 字段 (CXL) | 对端可能改过 |
 
 ### VII — Anti-patterns（设计错例 list）
 
