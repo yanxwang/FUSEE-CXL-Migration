@@ -138,29 +138,60 @@ Overall throughput-improvement plan is in
   plan item.
 - Do not push to remote without explicit request.
 
-## Protocol A v2 spec compliance (iter-4A onward — HIGHEST CONSTRAINT for protocol A work)
+## Protocol A v2: design proposal format + spec enforcement
 
-`docs/design_goals.md` §Protocol A v2 (sections I–XII) is the binding
-spec for any iter-4A or later change to protocol A. Failures to follow
-it caused iter-3A's silent design drift (Finding-1 routing field
-default, single-CXL-copy越界). Applies equally tight as §"Iter
-execution discipline".
+iter-3A 教训: 声明式约束 ("Claude should read spec before modifying X")
+经实测无强制力 — Finding-1 整两 iter 没人发现, 因为没人逐条对照 spec.
+所以这一节列**有强制力**的机制, 不是 advisory.
 
-**Rules**:
+**Spec location**: `docs/design_goals.md §Protocol A v2` (§I–XIII).
+§I–XII 是 invariants/AP/layout/path; §XIII 是 RAP design 流程.
 
-1. Before modifying any of `src/cxl_kv_ops_A*.{h,cc}`, `src/cxl_directory*`,
-   `src/cxl_sharding*`, `src/cxl_cache_pool*` — **read `docs/design_goals.md`
-   §Protocol A v2 in full first**. Reference invariant numbers (I1-I12)
-   or anti-pattern numbers (AP1-AP15) in commit messages.
+### When you propose a design change / optimization
 
-2. **PR review checklist** (`docs/design_goals.md §XI`) must be pasted
-   into commit description for any PR touching protocol A. Each
-   invariant ✓/✗ + each anti-pattern check + validation gate results.
+Any of these triggers `docs/design_goals.md §XIII Reviewer Attack Process`:
+new architecture / optimization / default-value selection /
+implementation alternative choice / spec modification.
 
-3. **Spec changes go through user**. If implementation can't satisfy
-   an invariant, STOP and ask user to revise spec. **Never silently
-   change spec to match a non-compliant implementation** (this is the
-   exact failure mode that produced Finding-1).
+**Output format mandatory**: STATE, ATTACK VECTORS (≥6 from 6 categories:
+PERFORMANCE, CORRECTNESS, GENERALITY, COMPLEXITY, PRIOR ART,
+IMPLEMENTATION FEASIBILITY), ABLATION CHECK, PRIOR ART CHECK, VERDICT,
+DECISION. Skipping format = proposal rejected by user. See §XIII for
+worked example.
 
-4. Validation gates G1–G5 (`docs/design_goals.md §IX/X`) must run on
-   every iter-4A sweep; results captured in `SUMMARY.log` header.
+If you find yourself wanting to "skip RAP because it's a small change",
+**that's a signal to do RAP**. Small changes accumulate to silent drift.
+Finding-1 was a 4-line `int phys_hosts_pr_ = 1` default.
+
+### When you write code touching protocol A
+
+Files: `src/cxl_kv_ops_A*.{h,cc}`, `src/cxl_directory*`, `src/cxl_sharding*`,
+`src/cxl_cache_pool*`.
+
+**Hard enforcement** (will block commit / PR / sweep):
+
+1. **H4 pre-commit hook** — commit message must contain `\b[Ii][1-9][0-2]?\b`
+   or `\bAP[0-9]+\b` referencing which spec items the change relates to.
+   No reference = commit rejected.
+2. **H2 CI tests** — PR must pass `tests/protocol_a_v2_invariant_check.cc`.
+3. **H3 sweep validation gates G1–G5** — any sweep without all 5 gates
+   reported in `SUMMARY.log` header is invalid; sweep script aborts on fail.
+4. **H1 compile-time / runtime asserts** — I3, I8, I12, AP13, AP14, AP15
+   encoded as build/runtime checks. Violating code crashes at attach time.
+
+### Process discipline (Claude + user co-enforced)
+
+5. **§XI PR review checklist** pasted in PR description for protocol A
+   changes. Each invariant ✓/✗ + each AP check + G1–G5 results.
+6. **P2 Iter retrospective spec-drift audit** — every iter retro must
+   reverse-trace each I/AP to a code location. Missing/wrong = user-escalate.
+7. **P3 Spec changes go through user** — if implementation can't satisfy
+   an invariant, STOP and ask user to revise spec. NEVER silently change
+   spec to make non-compliant implementation valid. This is the exact
+   Finding-1 failure mode.
+
+### What this section is NOT
+
+- "Read the spec before coding" — that was the old E1 line. **Removed**;
+  zero strength in practice. Spec compliance is enforced at commit/PR/sweep
+  boundaries by H1–H4 + P1 (RAP), not by Claude self-discipline.
