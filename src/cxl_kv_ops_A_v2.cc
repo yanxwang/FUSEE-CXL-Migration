@@ -230,8 +230,13 @@ int CxlKvStoreA_v2::forward_to_owner(uint32_t owner, uint64_t key,
   // Pack op_id with host bits to be cluster-unique.
   uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) | (my_op & 0x00FFFFFFFFFFFFFFULL);
 
-  // Reserve a slot via atomic fetch_add on tail.
+  // Reserve a slot via atomic fetch_add on tail. The peer-host
+  // responder reads tail via clflushopt + acquire load, so the
+  // producer must flush the cacheline after the fetch_add to make
+  // the new tail visible across CXL fabric.
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
+  flush_line((void *)&ring->tail);
+  store_fence();
   uint32_t slot = (uint32_t)(tpos % kForwardRingDepth);
   ForwardEntry *e = &ring->entries[slot];
 

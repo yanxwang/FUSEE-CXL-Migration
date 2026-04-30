@@ -58,20 +58,34 @@ sender batching + multiple responder threads.
 ### G2 — Multi-rep stability
 
 Throughput numbers below are single-rep at this iter. iter-5A should
-multi-rep per spec G2. Current single-rep:
+multi-rep per spec G2.
 
-| T | aggregate ops/s | per-worker ops/s |
-|---|-----------------|-------------------|
-| 2  | ~20    | 10 |
-| 4  | ~80    | 10 |
-| 8  | ~160   | 10 |
-| 16 | ~321   | 10 |
+**Initial measurement (BUG: producer's fetch_add on ring tail wasn't
+flushed → responder saw stale tail → all forwards timed out):**
 
-**These are 4-5 orders of magnitude below iter-3A's 4.6 Mops/s
-headline.** Reason: iter-3A's headline was on the no-op N:1:1:N
-config (Finding-1). iter-4A uses CORRECT cross-host coordination
-through ForwardRingMatrix → one responder thread per host serializes
-all cross-host writes, becoming the bottleneck.
+| T | aggregate ops/s |
+|---|-----------------|
+| 2-16 | ~20-321 |
+
+**Post-fix measurement (added `flush_line(&ring->tail) + sfence` after
+fetch_add — Phase-10 extension):**
+
+| T  | aggregate ops/s | uplift vs pre-fix |
+|----|-----------------|--------------------|
+| 2  | 326,019 | ~16,000× |
+| 4  | 479,943 |  ~6,000× |
+| 8  | 567,095 |  ~3,500× |
+| 16 | 571,377 |  ~1,800× |
+
+**iter-4A peak throughput: 0.57 Mops/s aggregate at T=16.** Still
+~10× below iter-3A's no-op-N:1:1:N "4.6 Mops/s" headline because
+the single responder per host now becomes the bottleneck (~250-300k
+req/s/responder ceiling at CXL load+fence cost ~3 µs/op). iter-5A
+Candidate 1 (K-shard responder) targets this.
+
+**Lesson learned (added to memory):** any CXL-resident atomic the
+peer host reads MUST be `flush_line + sfence`'d after modification.
+`std::atomic::fetch_add` does NOT include a CXL flush.
 
 ### G3 — N:1:1:N activation verified
 
