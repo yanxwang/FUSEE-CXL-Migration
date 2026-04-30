@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# iter-4A H4 hard enforcement: protocol-A v2 commits MUST cite an
+# invariant (I1..I12) or anti-pattern (AP1..AP15) in the commit message.
+#
+# Spec: docs/design_goals.md §X H4.
+#
+# Install: from repo root, run
+#     git config core.hooksPath scripts/git-hooks
+# Then this hook runs on every commit.
+
+set -u
+
+# Files whose modification triggers the cite requirement.
+PROTECTED_GLOBS=(
+  'src/cxl_kv_ops_A_v2\.(h|cc)'
+  'src/cxl_directory\.(h|cc)'
+  'src/cxl_sharding\.(h|cc)'
+  'src/cxl_cache_pool\.(h|cc)'
+  'src/cxl_kv_blockpool_freelist\.(h|cc)'
+  'src/cxl_forward_ring\.h'
+)
+
+# Get list of staged files.
+files=$(git diff --cached --name-only)
+hit=0
+for f in $files; do
+  for g in "${PROTECTED_GLOBS[@]}"; do
+    if [[ "$f" =~ ^$g$ ]]; then
+      hit=1
+      break
+    fi
+  done
+done
+
+if [[ $hit -eq 0 ]]; then
+  exit 0  # no protected files modified
+fi
+
+# Read commit message (passed via --message or temp file).
+msg_file="${1:-.git/COMMIT_EDITMSG}"
+if [[ ! -r "$msg_file" ]]; then
+  echo "pre-commit: cannot read commit message at $msg_file" >&2
+  exit 1
+fi
+
+if grep -qE '\b[Ii]([1-9]|1[0-2])\b|\bAP([1-9]|1[0-5])\b' "$msg_file"; then
+  exit 0
+fi
+
+cat >&2 <<EOF
+pre-commit (iter-4A H4): commit modifies protocol A v2 file but
+message has no invariant (I1..I12) or anti-pattern (AP1..AP15)
+reference. Per spec §X H4, every protocol A v2 commit must cite
+which invariant/AP this change relates to.
+
+Add a citation like [I9 fix race] or [AP15 trip wire] to the
+commit subject. To bypass for documentation-only changes, use:
+    git commit --no-verify
+(do not use --no-verify for actual code changes; the gate is there
+ to prevent silent spec drift, not to be skipped).
+EOF
+exit 1

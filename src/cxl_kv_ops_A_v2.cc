@@ -52,6 +52,18 @@ int CxlKvStoreA_v2::attach(void *bucket_base, uint32_t num_buckets,
   if (!bucket_base || num_buckets == 0 || !st || !dir || !cache || !freelist) {
     return -1;
   }
+  // H1 / AP13 trip wire: ShardingTable must reflect the actual host
+  // count. If runner has FUSEE_NUM_HOSTS=2 but st->num_hosts=1, the
+  // sharding routing collapses to "everything is owner-self" and the
+  // cross-host forward path is silently no-op'd (iter-3A Finding-1).
+  // Refuse to attach.
+  if ((int)st->num_hosts != num_hosts) {
+    fprintf(stderr,
+            "AP13 trip wire: ShardingTable.num_hosts=%u != attach.num_hosts=%d\n"
+            "Did you forget to call sharding_init(st, FUSEE_NUM_HOSTS)?\n",
+            st->num_hosts, num_hosts);
+    std::abort();
+  }
   buckets_ = static_cast<CxlKvBucket *>(bucket_base);
   num_buckets_ = num_buckets;
   host_id_ = host_id;
