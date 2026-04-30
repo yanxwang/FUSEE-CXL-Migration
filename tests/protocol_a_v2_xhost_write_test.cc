@@ -112,16 +112,30 @@ int main(int argc, char **argv) {
   // filtered by owner), tries to insert. Cross-host keys → forward.
   std::mt19937_64 key_rng(0xDEADBEEF);
   uint64_t local_w = 0, fwd_w = 0, errors = 0;
+  // Wall-clock for throughput measurement.
+  timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
   for (uint64_t i = 0; i < ops; i++) {
     uint64_t k = key_rng() | 1ULL;
     if ((i % (uint64_t)num_threads) != (uint64_t)client_id) continue;
     uint32_t owner = host_of(&st, k);
-    int rc = store.insert(k, k ^ 0xCAFEULL);
-    if (rc != 0 && rc != -2) { errors++; }
+    // Mix UPDATE on key already inserted (50% workload-A pattern). For
+    // first half do INSERT; second half do UPDATE on already-inserted keys.
+    int rc;
+    if (i < ops / 2) {
+      rc = store.insert(k, k ^ 0xCAFEULL);
+    } else {
+      rc = store.update(k, k ^ 0xBEEFULL);
+    }
+    if (rc != 0 && rc != -2 && rc != -1) { errors++; }
     if (owner == (uint32_t)host_id) local_w++; else fwd_w++;
   }
-  fprintf(stderr, "[h%d c%d] local_w=%lu fwd_w=%lu errors=%lu\n",
-          host_id, client_id, local_w, fwd_w, errors);
+  timespec ts1; clock_gettime(CLOCK_MONOTONIC, &ts1);
+  double wall_s = (double)(ts1.tv_sec - ts0.tv_sec) +
+                  (double)(ts1.tv_nsec - ts0.tv_nsec) / 1e9;
+  uint64_t my_ops = local_w + fwd_w;
+  fprintf(stderr, "[h%d c%d] local_w=%lu fwd_w=%lu errors=%lu wall=%.3fs thpt=%.0f ops/s\n",
+          host_id, client_id, local_w, fwd_w, errors, wall_s,
+          wall_s > 0 ? (double)my_ops / wall_s : 0.0);
 
   if (client_id != 0) { _exit(errors == 0 ? 0 : 1); }
   for (auto p : children) waitpid(p, nullptr, 0);
