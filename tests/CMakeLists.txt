@@ -30,6 +30,13 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
     target_compile_options(${t} PRIVATE -mclflushopt -mavx512f)
 endforeach()
 
+# iter-4A pure-CPU unit tests (no AVX-512 dependency, runnable on workstation).
+foreach(t sharding_test)
+    add_executable(${t} ${t}.cc)
+    target_link_libraries(${t} fusee_cxl)
+    target_compile_options(${t} PRIVATE -O2 -g)
+endforeach()
+
 # Per-stage C write-path latency decomposition runner. Links the
 # decomp-instrumented sibling library so the insert/update stage timestamps
 # in cxl_kv_ops_C.cc are live. Uses CONSENSUS_OPT=3 (protocol C).
