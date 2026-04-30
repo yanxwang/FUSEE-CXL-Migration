@@ -37,27 +37,53 @@ constexpr int kPerHostSpscDepth = 256;  // power of two, per-(src,dst) ring
 // is used at runtime.
 constexpr int kMaxKChannels = 4;
 
+// iter-4A Phase 5: Protocol A v2 message types (spec §I11). Message
+// type discriminates how receiver dispatches; payload fields below
+// reuse the same 64 B cacheline depending on op_type.
+enum PerHostMessageType : uint8_t {
+  kMsgInvalidate    = 1,  // owner -> sharer: drop cache for (bucket, slot)
+  kMsgCacheRegister = 2,  // sharer -> owner: I want to cache (bucket, slot); response carries CXL pointer (Option A)
+  kMsgCacheEvict    = 3,  // sharer -> owner: I evicted (bucket, slot) from my cache
+  kMsgWriteForward  = 4,  // non-owner -> owner: execute UPDATE/INSERT/DELETE on (key, new_block_off)
+  kMsgResponse      = 5,  // owner -> requester: response to register/forward (status, optional cxl_pointer/value)
+};
+
 // 64-B per entry, full cacheline owned by exactly one ring slot.
-//   bucket_idx: which CXL bucket the receiver should refresh
-//   new_epoch: the bucket's new write_epoch (receiver atomic_stores
-//              this into cache_epoch_arr[bucket_idx])
-//   src_worker_slot: index into the source host's worker_ack_buf so
-//              the source-side sender knows which worker to ACK once
-//              the receiver acknowledges this entry
-//   src_worker_op_id: the source worker's per-op id (uniqueness +
-//              double-ACK guard); also doubles as the ring-slot
-//              "ready" sentinel. 0 = slot free.
-//   _pad rounds the entry up to one full cacheline.
+// Layout supports BOTH iter-3A invalidate (legacy, new_epoch) and
+// iter-4A v2 message types (op_type discriminates):
+//   [0..7]  op_type|op_kind|status|_pad|src_worker_slot
+//   [8..15] bucket_idx                  (used by all msg types)
+//   [16..23] new_epoch                  (iter-3A invalidate; iter-4A
+//                                        also uses for slot_idx in low
+//                                        32 bits, repurposed by op_type)
+//   [24..31] key                        (iter-4A: target key)
+//   [32..39] payload_cxl_off            (iter-4A: src CXL block off)
+//   [40..47] value_size + slot_idx      (iter-4A packed)
+//   [48..55] _pad
+//   [56..63] src_worker_op_id           (written LAST = ready sentinel)
 struct alignas(64) PerHostInvalEntry {
-  uint64_t bucket_idx;
-  uint64_t new_epoch;
+  uint8_t  op_type;             // iter-4A: PerHostMessageType. iter-3A path: 0
+  uint8_t  op_kind;              // iter-4A write-forward: 0=upd, 1=ins, 2=del
+  uint8_t  status;               // iter-4A response: 0=ok, !=0 error
+  uint8_t  _pad8;
   uint32_t src_worker_slot;
-  uint32_t _pad32;
-  uint64_t src_worker_op_id;   // 0 = slot free; written last (release)
-  uint64_t _pad[4];
+  uint64_t bucket_idx;           // common to all (iter-3A + iter-4A)
+  uint64_t new_epoch;            // iter-3A invalidate; iter-4A reuses for slot_idx
+  uint64_t key;                  // iter-4A
+  uint64_t payload_cxl_off;      // iter-4A
+  uint64_t value_size_and_slot;  // iter-4A: low 32 = slot_idx, high 32 = value_size
+  uint64_t _pad;
+  uint64_t src_worker_op_id;     // 0 = slot free; written LAST (release)
 };
 static_assert(sizeof(PerHostInvalEntry) == 64,
               "PerHostInvalEntry must occupy one full 64-B cacheline");
+
+// Helpers to pack/unpack the iter-4A slot_idx + value_size pair.
+inline uint32_t per_host_msg_slot_idx(uint64_t v) { return (uint32_t)(v & 0xffffffffu); }
+inline uint32_t per_host_msg_value_size(uint64_t v) { return (uint32_t)(v >> 32); }
+inline uint64_t per_host_msg_pack(uint32_t slot_idx, uint32_t value_size) {
+  return ((uint64_t)value_size << 32) | (uint64_t)slot_idx;
+}
 
 // SPSC ring: 1 src-host sender writes; 1 dst-host receiver reads. head
 // and tail live in separate cachelines so producer / consumer cacheline
