@@ -45,6 +45,7 @@ set(source_fusee_cxl
     cxl_a_local_aggregator.cc
     cxl_latency_decomp_probe.cc
     cxl_sharding.cc
+    cxl_directory.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ticket_lock_fusee_patched.c)
 
