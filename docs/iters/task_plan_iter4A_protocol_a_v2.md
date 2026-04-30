@@ -299,12 +299,24 @@ lock), Scenario 4/5/6 of §VI-B.
 - MODIFIED `tests/cxl_ycsb_runner.cc`: select store impl by
   `CONSENSUS_OPT`
 - NEW `tests/protocol_a_v2_correctness_test.cc`: hash-diff battery
-  (5 reps × T={2,4,8,16} × workloadA 100K UPDATE, only same-host
-  routing — keys whose owner == 0 only, force all writes on g3)
+  (5 reps × T={2,4,8,16} × workloadA 100K UPDATE) using
+  **workload-split-by-owner** (Option C): host 0 dispatches only
+  ops whose `host_of(key) == 0`, host 1 dispatches only ops whose
+  `host_of(key) == 1`. Each host issues ~50K of the 100K target,
+  but every issued op is owner-self. Build flag
+  `kPhase6FilterUnownedOps = true` enables this filtering at the
+  YCSB runner; flag is **removed in Phase 8** once cross-host
+  forward path is wired and the runner can dispatch any owner.
+- The Option-C split is preferred over "force all writes on g3"
+  (Option A) because it (a) exercises both hosts' write paths in
+  the same run — catches host-asymmetric bugs that single-host
+  routing would mask; (b) preserves the natural workload key
+  distribution; (c) leaves no Host-A-specific code path to
+  un-special-case in Phase 8.
 
 **Validation experiment**:
-1. Hash-diff battery (owner-self only):
-   - 5 reps × T={2,4,8,16} × 100K UPDATEs = 20 runs
+1. Hash-diff battery (owner-self only, workload-split-by-owner):
+   - 5 reps × T={2,4,8,16} × 100K UPDATEs (~50K issued per host) = 20 runs
    - Final bucket array byte-identical between hosts → 20/20 PASS
 2. Strict-A linearizability micro-test:
    - Host A writes K, host B reads K immediately → must see new value
@@ -379,13 +391,25 @@ LFM), Scenario 7 (forward) and Scenario 8 (cache evict) of §VI-B.
 
 **Code changes**:
 - MODIFIED `src/cxl_kv_ops_A_v2.cc::update/insert/remove`: check
-  owner; if remote, enqueue OP_WRITE_FORWARD and spin on response
-- MODIFIED receiver: wire `OP_WRITE_FORWARD` handler — local
-  worker dequeues, executes Phase 6's owner-self write code,
-  enqueues response
+  owner; if remote:
+  - allocate ForwardStaging slot via Phase-5 API
+    `forward_staging_alloc(value_size)` (no new region — reuses
+    the per-forwarder ForwardStaging[H] buffer landed in Phase 5)
+  - NT store + sfence the new value bytes into the staging slot
+  - enqueue OP_WRITE_FORWARD (carrying `staging_ptr`,
+    `value_size`, `inner_op_type`) to owner host
+  - spin on OP_RESPONSE; on success free staging slot
+- MODIFIED receiver: wire `OP_WRITE_FORWARD` handler — owner-side
+  worker dequeues, fetches value bytes from forwarder's staging
+  via `clflushopt + mfence + load`, executes Phase 6's owner-self
+  write code, enqueues OP_RESPONSE (status only, no value bytes
+  per §VI-A.bis MESSAGE PAYLOAD POLICY)
 - MODIFIED `src/cxl_cache_pool.cc`: add LRU eviction trigger;
   eviction path enqueues `OP_CACHE_EVICT` to owner if owner != self
 - MODIFIED receiver: wire `OP_CACHE_EVICT` handler
+- REMOVED `kPhase6FilterUnownedOps` build flag from
+  `tests/cxl_ycsb_runner.cc` (workload now dispatches any owner
+  on any host; cross-host writes hit the forward path naturally)
 
 **Validation experiment**:
 1. Hash-diff battery, full cross-host:
@@ -440,8 +464,38 @@ so that future violations of the protocol are detected automatically.
   MAP_SHARED check + AP13 trip-wire test
 - H3 MODIFIED `scripts/run_g34_scaling_sweep.sh`: add 5 validation
   gate computations + abort on failure
-- H4 NEW `.git/hooks/pre-commit`: regex check on commit message
-  for protocol A files
+- H4 NEW `scripts/git-hooks/pre-commit` (tracked, executable;
+  bash) — regex check on commit message for protocol A files.
+  Hook is **tracked in repo** (vs `.git/hooks/` which is local-only
+  + per-clone), so the rule travels with the branch and is
+  reviewable in PRs.
+  - Setup: contributor runs once per clone:
+    `git config core.hooksPath scripts/git-hooks`
+  - Setup instruction added to `README.md` (or `CONTRIBUTING.md`
+    if it exists) under a "Required git hooks" subsection
+  - Hook script content (sketch):
+    ```bash
+    #!/usr/bin/env bash
+    # Reject commits touching protocol A v2 files without an
+    # I/AP spec reference in the commit message.
+    set -e
+    A_RE='src/cxl_kv_ops_A.*\.(cc|h)|src/cxl_directory.*|src/cxl_sharding.*|src/cxl_cache_pool.*'
+    if git diff --cached --name-only | grep -qE "$A_RE"; then
+      msg_file="$(git rev-parse --git-dir)/COMMIT_EDITMSG"
+      if [ -f "$msg_file" ] && \
+         ! grep -qE '\b[Ii][1-9][0-2]?\b|\bAP[0-9]+\b' "$msg_file"; then
+        echo "ERROR: commit touches protocol A v2 files but" >&2
+        echo "       has no I/AP reference in message." >&2
+        echo "       Add e.g. [I9 fix race] or [AP14] to message." >&2
+        exit 1
+      fi
+    fi
+    ```
+  - Note: pre-commit hook fires before message edit on `git commit`
+    without `-m`; the actual final-message check is enforced by a
+    sibling `commit-msg` hook (added alongside) that re-checks
+    `$1` (commit message file) with the same regex. Both hooks
+    ship under `scripts/git-hooks/`.
 
 **Validation experiment**:
 1. Run `tests/protocol_a_v2_invariant_check.cc`: all 6 invariants
@@ -453,10 +507,13 @@ so that future violations of the protocol are detected automatically.
 3. Sweep gate test:
    - Run a smoke sweep with `phys_hosts_pr_` patched to default
      (intentional violation); sweep script must abort with G3 fail
-4. Pre-commit hook test:
+4. Pre-commit / commit-msg hook test (after
+   `git config core.hooksPath scripts/git-hooks`):
    - Commit a change to `cxl_kv_ops_A_v2.cc` with no I/AP reference
      in message → reject
    - Commit with `[I9 fix race]` reference → accept
+   - Commit touching only docs (no protocol A files) with no
+     reference → accept (hook scoped to A files only)
 
 **Success criterion**: 6/6 trip wires fire on intentional violation;
 sweep gate aborts on G3 fail; pre-commit hook rejects/accepts
