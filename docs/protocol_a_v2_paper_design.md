@@ -108,17 +108,20 @@ owner-host tag, and a pointer to a value block;
 per owner host) with size-class-aware sub-allocation; only the
 owner host allocates from its own segment;
 (iii)~the SPSC rings, one per (source host, destination host, channel)
-triple, each carrying invalidation, registration, eviction, and
-forwarded-write messages;
-(iv)~the acknowledgment channels, mirroring the rings.
+triple, each carrying fixed-size 64-byte messages (invalidation,
+registration, eviction, write-forward, response);
+(iv)~the acknowledgment channels, mirroring the rings;
+(v)~per-host forward staging buffers, each owned by its forwarder
+host, used as a short-lived cross-host transfer area for value
+bytes carried by write-forward messages.
 
 Although CXL bytes are accessed across hosts, the only structures
 read or written by multiple hosts on the same physical addresses
 are the SPSC rings (with non-conflicting single-producer
 single-consumer semantics) and the hashtable slot pointers (with
 single-host-writer guaranteed by sharding). All other CXL
-state---KV blocks, ring entries, ack counters---is touched by at
-most one host on each address.
+state---KV blocks, ring entries, ack counters, staging
+buffers---is touched by at most one host on each address.
 
 \textbf{Per-host DRAM.} Each host allocates four
 \texttt{MAP\_SHARED} regions visible to all of its worker processes:
@@ -133,7 +136,12 @@ currently registered as a sharer.
 \textbf{Aggregation point.} Within each host, an MPSC queue in
 \texttt{MAP\_SHARED} DRAM is the sole hand-off between client workers
 and the per-host sender thread; entries carry message type, key,
-target host, and a payload buffer.
+target host, and---for messages requiring large payload---a CXL
+pointer into the host's forward staging buffer rather than the bytes
+themselves. Inline payload is deliberately not supported: at the
+target value sizes ($\geq 256$~B), inline storage cannot fit in the
+fixed-size message slot, so a single out-of-band path keeps the
+protocol simple.
 
 \subsection{Protocol Mechanics}
 
@@ -192,14 +200,16 @@ DRAM-class latency.
 
 On cache miss, the worker enqueues a registration request to the
 owner host through the local sender thread. The owner adds the
-requesting host to the slot's sharer bitmap, retrieves the current
-value (typically from its own local cache), and returns the value
-in the response payload. The requesting worker writes the value
-into its local cache, sets its self-flag, and returns. For values
-whose serialized form fits in a single SPSC-ring entry, this is
-a single round-trip; larger values require a fallback in which the
-response carries a CXL pointer that the requester then dereferences
-through a \texttt{clflushopt}-mediated load.
+requesting host to the slot's sharer bitmap and returns a small
+response carrying the slot's current pointer and value size. The
+requester then dereferences this CXL pointer through a sequence of
+\texttt{clflushopt} instructions followed by an \texttt{mfence} and
+plain loads, copying the value bytes from CXL into its local cache.
+We deliberately avoid any inline-payload variant in which the
+response itself carries value bytes: such a path saves at most one
+CXL load per cache miss, but introduces a second code path that
+must be reasoned about separately, and provides no benefit at the
+value sizes (256~B and above) targeted by our evaluation.
 
 The ordering invariant for cache-fill correctness is that the
 requester must be added to the sharer bitmap \emph{before} it

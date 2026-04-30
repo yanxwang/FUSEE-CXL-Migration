@@ -320,7 +320,7 @@ forwarding 避免 cross-host LFM contention。
 | I8 | **Directory updates use host-local atomics or spinlock on shared mem (PROCESS_SHARED), NOT LFM.** LFM is reserved for genuinely cross-host CXL state. | 偏差例: 拿 LFM 保护本机 DRAM directory → 把 cross-host coordination 工具用在不需要的地方, 引入跨主机 cacheline 流量给本来不跨主机的字段. |
 | I9 | **Read fast path = local cache lookup + stale check (no `acquire-load` on shared atomic, no CXL load).** Read slow path on cache miss = register with directory (mandatory N:1:1:N message + ACK) **before** filling cache. | 偏差例: reader 先 fill cache 后 register (race window: writer 已经 invalidate 完所有当前 sharers 但 reader 还没在 sharers 里 → reader 永远不被通知 stale). |
 | I10 | **Write commit point = "in-place CXL write completes after all sharer ACK received".** Writer does NOT return success until: (a) directory.sharers \\ {self} 全部 ACK invalidate done, (b) CXL write durable (clflushopt + sfence completed). 这是 strict-A linearizability 的来源. | 偏差例: writer 在 invalidate-ACK 完成前先 publish CXL 字节 → 对端 reader 可能在 ACK-before window 读到新值, 但本端 cache 还有 stale → 跨 host 不一致. |
-| I11 | **Cross-host write forwarding via N:1:1:N message (SPSC ring + sender/receiver thread)**, not via cross-host LFM lock. Forward message carries (op_type, key, value bytes); response carries (status, return_value if any). | 偏差例: 用 cross-host LFM lock 互斥 writer → 见 I2. |
+| I11 | **Cross-host write forwarding via N:1:1:N message (SPSC ring + sender/receiver thread)**, not via cross-host LFM lock. Forward message carries (op_type, key, **CXL pointer to value bytes in forward staging buffer**, value_size); forwarder pre-writes value bytes into its host-owned forward staging buffer on CXL; owner reads via clflushopt+load. Response messages carry only (status, optional slot.pointer for cache_register), **never inline value bytes**. | 偏差例: 用 cross-host LFM lock 互斥 writer → 见 I2. 偏差例: response 携带 inline value → 增加一套 code path 但 KV ≥ 256 B fits 不下, 不值. |
 | I12 | **No OpLog write/read in iter-4A.** Crash recovery uses broadcast `everyone_invalidate` + 全 client cache 清空 + on-demand re-fill from CXL. OpLog 框架代码保留, 等 future replication 设计时启用. | 偏差例: iter-4A 写 OpLog 但 reader 不读 → 浪费 CXL 流量 + 误以为有 fault tolerance. |
 
 ### II — CXL 物理布局（authoritative state）
@@ -329,15 +329,18 @@ CXL `/dev/dax0.0` mmap'd region 包含:
 
 ```
 [0]              GlobalHeader (4 KB)
-[4 KB]           BucketLockTable[num_buckets]    ← LFM mutex per bucket; iter-4A 后 only used for bucket-layout 修改互斥, NOT for read path
+[4 KB]           BucketLockTable[num_buckets]    ← LFM mutex per bucket; iter-4A unused (sharding); reserved for protocol C
 [align 64]       CxlKvBucket[num_buckets]        ← (fp, len, owner_node_id, pointer) per slot, NO inline value bytes
-[align 64]       PerHostSpscRing[H][H][K]        ← N:1:1:N 通讯介质 (invalidate + forward + ACK)
+[align 64]       PerHostSpscRing[H][H][K]        ← N:1:1:N 通讯介质 (invalidate + forward + register/evict + ACK)
 [align 64]       AckChannel[H][H][K]
-[align 64]       KvBlockpool                     ← variable-length KV blocks, size-classed
+[align 64]       KvBlockpool[H]                  ← variable-length KV blocks, size-classed; partitioned per owner host
+[align 64]       ForwardStaging[H]               ← per-forwarder-host staging area for OP_WRITE_FORWARD payloads (value bytes ≥ 256 B); short-lived, freed on forward ACK
 [align 64]       (OpLog area — reserved, not written by iter-4A)
 ```
 
 **CXL 上不再有 inline u64 KV 路径**。所有 value bytes 在 KvBlockpool 里, slot 仅含 pointer.
+
+**ForwardStaging[H]** 物理布局: 每个 forwarder host 独占一段 (e.g. 1 MB / host), 用作 OP_WRITE_FORWARD value 的 cross-host transfer buffer. forwarder host 写 staging slot, owner host 读. 生命周期 = 1 forward roundtrip (forwarder 收到 forward-response ACK 后 free staging slot). 跟 KvBlockpool 隔离 (KvBlockpool 是 owner-host owned; ForwardStaging 是 forwarder-host owned).
 
 ### III — DRAM 物理布局 (per host, MAP_SHARED across same-host workers)
 
@@ -390,26 +393,25 @@ read(key):
     return entry.value                                    # plain memcpy from DRAM
   
   # Slow path - cache miss or stale
+  # 设计简化: response 永远不携带 value bytes; 只携带 (status, slot.pointer).
+  # 不再有 inline-value-in-response path (省一套 code path; KV ≥ 256 B 也无法 inline).
+  # 不论 owner=self 还是 owner=peer, reader 自己 fetch value bytes from CXL.
+  
   if shard.owner == self_host:
-    # 同 host: 直接发请求给本机 directory thread (DRAM hardware coherent)
+    # 同 host: 本机 directory 注册 (DRAM hardware coherent, 无 message)
     register_with_local_directory(key, sharer = self_host)
-    # bucket scan from CXL with explicit coherence:
-    flush_line(&buckets_[bucket_idx])                     # clflushopt (CXL, evict L3 stale)
-    flush_line((char*)&buckets_[bucket_idx] + 64)         # clflushopt 2nd cacheline (bucket=128B)
-    full_fence()                                          # mfence (after clflushopt before load)
-    bucket = *(&buckets_[bucket_idx])                     # plain load (now coherent post-flush)
-    slot_idx = scan_for_key(bucket, key)
-    flush_line(slot.pointer_target)                       # clflushopt KV block (or first cacheline)
-    full_fence()                                          # mfence
-    memcpy(value, slot.pointer_target, value_size)        # plain memcpy from CXL
+    cxl_slot_pointer = lookup_slot_via_cxl(bucket_idx, key)  # clflushopt+mfence+load bucket
   else:
-    # 跨 host: N:1:1:N message picks up value in response (Option B for small KV)
+    # 跨 host: 通过 N:1:1:N 让 owner host register 我, 回送 slot.pointer
     send_cache_register_request(key) to shard.owner       # via DRAM aggregator queue + sender thread
     wait for response                                     # spin on local ack_buf, atomic load (acquire) on DRAM
-    if response.payload_inline:                           # value bytes carried in response (Option B)
-      memcpy(value, response.payload, payload_size)       # plain memcpy from DRAM
-    else:                                                  # Option A fallback for large value
-      flush_line + mfence + plain load from CXL pointer in response
+    cxl_slot_pointer = response.slot_pointer              # plain load from DRAM ack_buf (no value bytes here)
+  
+  # Fetch value bytes from CXL (always, regardless of owner)
+  for off in 0 .. value_size by 64:
+    flush_line(cxl_slot_pointer + off)                    # clflushopt (CXL, evict L3 stale)
+  full_fence()                                            # mfence
+  memcpy(value, cxl_slot_pointer, value_size)             # plain memcpy from CXL (now coherent)
   
   cache_pool.insert(key, value, stale=false)              # DRAM stores (atomic insert)
   set_local_self_flag(key, in_sharers=true)               # atomic byte store (DRAM, release)
@@ -727,6 +729,29 @@ Q3: 数据在 CXL 但**只有 self host 在改**?
 
 iter-4A 只用 clflushopt. 不用 clflush (太慢), 不用 clwb (留 stale 副本
 反而让对端 host clflushopt+load 跑不必要的 backing-store read).
+
+═══════════════════════════════════════════════════════════════
+  MESSAGE PAYLOAD POLICY (N:1:1:N)
+═══════════════════════════════════════════════════════════════
+
+iter-4A 测试 KV size 在 {256, 512, 1024} B 范围. **No inline payload
+anywhere** in messages. 单一 out-of-band path:
+
+  OP_INVALIDATE / OP_CACHE_REGISTER / OP_CACHE_EVICT:
+      message 内 only carry 索引 (bucket_idx, slot_idx, key, version,
+      etc.) ≤ 32 B; entry 64 B 充足.
+  
+  OP_RESPONSE (cache_register reply):
+      carries (status, slot.pointer, value_size).
+      NO value bytes inline — reader self-fetches via clflushopt+load.
+  
+  OP_WRITE_FORWARD:
+      forwarder 先 NT-store value 到自己的 ForwardStaging[self] 区域 (CXL),
+      message carries (key, staging_ptr, value_size, inner_op_type).
+      Owner clflushopt+load from staging, executes write, ACK.
+      Forwarder frees staging slot upon ACK.
+
+PerHostMessage entry 维持 64 B (单 cacheline, 防 false sharing 历史教训).
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -808,8 +833,9 @@ return SUCCESS;
 
 ```c
 // CONTEXT: cache miss, owner_host is a peer.
-// PHYSICAL: send cache_register via N:1:1:N; response carries value bytes
-//           (Option B for small KV) or fallback CXL pointer.
+// PHYSICAL: send cache_register via N:1:1:N; response carries (status, slot.pointer);
+//           reader self-fetches value bytes from CXL via clflushopt+mfence+load.
+//           NO inline value path — KV ≥ 256 B in scope, inline never useful.
 
 ShardingEntry shard = sharding_table[hash(key)];          // plain load (DRAM)
 host_id_t owner = shard.owner;                            // owner != self_host
@@ -840,21 +866,19 @@ WorkerAckSlot *ack = &aggregator_->ack_bufs[k_route].slots[my_worker_slot];
 while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
     __builtin_ia32_pause();                               // atomic load acquire (DRAM)
 
-// Step C: response is in `ack->response_payload` (sender thread copied it from CXL ring)
-size_t payload_size = ack->response_size;
+// Step C: response carries (status, slot.pointer, value_size) — NO value bytes
+if (ack->response_status != STATUS_OK) return KEY_NOT_FOUND;
+void *block_addr = ack->response_slot_pointer;            // CXL address
+size_t value_size = ack->response_value_size;
 
-if (payload_size <= INLINE_PAYLOAD_MAX) {                 // Option B: value carried in response
-    memcpy(local_value, ack->response_payload, payload_size); // plain memcpy (DRAM)
-} else {                                                   // Option A fallback: CXL pointer
-    void *block_addr = ack->response_pointer;
-    for (size_t off = 0; off < payload_size; off += 64)
-        flush_line((char*)block_addr + off);              // clflushopt (CXL)
-    full_fence();                                         // mfence
-    memcpy(local_value, block_addr, payload_size);        // plain memcpy from CXL
-}
+// Step D: self-fetch value bytes from CXL
+for (size_t off = 0; off < value_size; off += 64)
+    flush_line((char*)block_addr + off);                  // clflushopt each cacheline (CXL)
+full_fence();                                             // mfence
+memcpy(local_value, block_addr, value_size);              // plain memcpy from CXL (now coherent)
 
-// Step D: insert into local cache
-cache_pool.insert(key, local_value, payload_size, stale=false);  // DRAM
+// Step E: insert into local cache
+cache_pool.insert(key, local_value, value_size, stale=false);  // DRAM
 return SUCCESS;
 ```
 
@@ -1053,37 +1077,61 @@ gc_queue.push((void*)old_pointer);                        // DRAM
 return SUCCESS;
 ```
 
-#### Scenario 7: Cross-host write forward (owner != self) — owner-side handler
+#### Scenario 7: Cross-host write forward (owner != self) — via ForwardStaging buffer
 
 ```c
-// CONTEXT: Self-host worker decided owner is peer; forward op to peer.
-// On peer (owner) host, a worker picks up the forwarded op and executes Scenario 4/5/6.
+// CONTEXT: Self-host worker decided owner is peer; forward op to peer via N:1:1:N.
+// PHYSICAL: forwarder writes value bytes into its own ForwardStaging buffer (CXL),
+//           message carries CXL pointer to staging slot.
+//           Owner-side worker reads from staging via clflushopt+load,
+//           executes local write (Scenario 4/5/6), sends ACK back.
+//           Forwarder frees staging slot upon receiving ACK.
+//           NO inline value path (KV ≥ 256 B in scope).
 
-// Forwarder (self host worker):
+// === Forwarder side ===
 host_id_t owner = sharding_table[hash(key)].owner;
 
+// Step A: alloc staging slot from forwarder's own ForwardStaging[self_host]
+void *staging_addr = forward_staging_alloc(self_host, value_size);  // host-local DRAM metadata
+
+// Step B: write value bytes to staging buffer on CXL (size ≥ 256 B → NT store path)
+for (size_t off = 0; off < value_size; off += 64) {
+    __m512i v = _mm512_loadu_si512((__m512i*)((char*)value + off));
+    _mm512_stream_si512((__m512i*)((char*)staging_addr + off), v);  // NT store (CXL)
+}
+store_fence();                                            // sfence: drain WC to CXL
+
+// Step C: enqueue OP_WRITE_FORWARD message with staging pointer (no inline payload)
 LocalAggregatorQueue *q = &aggregator_->queues[k_route];
-uint64_t pos = __atomic_fetch_add(&q->hdr.tail, 1, __ATOMIC_ACQ_REL);  // DRAM atomic
+uint64_t pos = __atomic_fetch_add(&q->hdr.tail, 1, __ATOMIC_ACQ_REL);
 AggrEntry *e = &q->entries[pos % depth];
-while (__atomic_load_n(&e->op_id, __ATOMIC_ACQUIRE) != 0)
-    __builtin_ia32_pause();
-e->op_type = OP_WRITE_FORWARD;                            // plain store (DRAM)
-e->dst_host = owner;
-e->key = key;
-memcpy(e->payload, value, value_size);                    // plain memcpy (DRAM)
-e->payload_size = value_size;
-e->src_worker_slot = my_slot;
+while (__atomic_load_n(&e->op_id, __ATOMIC_ACQUIRE) != 0) __builtin_ia32_pause();
+e->op_type        = OP_WRITE_FORWARD;                     // plain store (DRAM)
+e->inner_op_type  = OP_UPDATE | OP_INSERT | OP_DELETE;
+e->dst_host       = owner;
+e->key            = key;
+e->staging_ptr    = (uint64_t)staging_addr;               // CXL address
+e->value_size     = value_size;
+e->src_worker_slot= my_slot;
 std::atomic_thread_fence(std::memory_order_release);
 __atomic_store_n(&e->op_id, op_id, __ATOMIC_RELEASE);     // atomic store last
 
-// Wait for forward response (success status)
-while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id)
-    __builtin_ia32_pause();
-return ack->response_status;
+// Step D: spin on worker_ack_buf (DRAM)
+while (__atomic_load_n(&ack->ack_op_id, __ATOMIC_ACQUIRE) != op_id) __builtin_ia32_pause();
+int status = ack->response_status;
 
-// Owner-side worker (a free worker dequeues from "incoming forwards" queue and
-// runs Scenario 4/5/6 then sends response via reverse N:1:1:N):
-// (This is the same code as Scenario 4/5/6 just running in a forward-handler thread)
+// Step E: free staging slot (forwarder side — no message needed; staging life-cycle is
+//          forwarder-side managed; ACK from owner = "I no longer reference staging")
+forward_staging_free(self_host, staging_addr);            // host-local DRAM
+return status;
+
+// === Owner side (in receiver thread, OP_WRITE_FORWARD case in Scenario 10) ===
+// On receipt of OP_WRITE_FORWARD:
+//   1. Copy value bytes from staging:
+//        for off in 0..value_size by 64: clflushopt(staging_ptr + off);
+//        mfence; memcpy(local_value, staging_ptr, value_size);
+//   2. Execute Scenario 4/5/6 (UPDATE/INSERT/DELETE) with the copied value
+//   3. Send response via reverse N:1:1:N (ack only, no payload)
 ```
 
 #### Scenario 8: Cache evict (LRU pressure) — host-local — ~200 ns
@@ -1256,8 +1304,14 @@ for (int src = 0; src < phys_hosts_pr_; src++) {
             de->sharer_bitmap |= (1 << src);              // DRAM
             de->state = SLOT_STATE_S;
             de->version++;
+            uint64_t slot_pointer = buckets_[e->bucket_idx]
+                                    .slots[e->slot_idx].pointer; // plain load (post-flush done in step above)
+            uint32_t value_size = size_class_to_bytes(
+                buckets_[e->bucket_idx].slots[e->slot_idx].size_class);
             pthread_spin_unlock(&de->spinlock);
-            // (response with value bytes is built by sender in scenarios 9 + ack reply path)
+            // Build response (pointer + size only, NO inline value bytes)
+            enqueue_response(src, e->src_worker_slot, e->src_worker_op_id,
+                             STATUS_OK, slot_pointer, value_size);
             break;
         }
         case OP_CACHE_EVICT: {
@@ -1271,9 +1325,18 @@ for (int src = 0; src < phys_hosts_pr_; src++) {
             break;
         }
         case OP_WRITE_FORWARD: {
-            // peer is forwarding a write op; we (owner) execute Scenario 4/5/6
-            execute_local_write(e->key, e->payload, e->payload_size, e->op_type_inner);
-            // build response and queue back via reverse N:1:1:N (omitted)
+            // peer is forwarding a write op via ForwardStaging buffer.
+            // Step 1: read value bytes from forwarder's staging
+            char local_value[kMaxValueSize];
+            for (size_t off = 0; off < e->value_size; off += 64)
+                flush_line((char*)e->staging_ptr + off);   // clflushopt (CXL)
+            full_fence();                                   // mfence
+            memcpy(local_value, (void*)e->staging_ptr, e->value_size);  // plain memcpy from CXL
+            // Step 2: execute local write (Scenario 4/5/6)
+            execute_local_write(e->key, local_value, e->value_size, e->inner_op_type);
+            // Step 3: send forward-response (status only, no value bytes)
+            enqueue_response(src, e->src_worker_slot, e->src_worker_op_id,
+                             STATUS_OK, /*slot_pointer=*/0, /*value_size=*/0);
             break;
         }
         }
@@ -1529,7 +1592,7 @@ chat / commit) showing user explicitly approved the deviation.
 |---|---|---|
 | O1 | Sharding hash function | `(hash(key) >> 31) & 1` (high bit of FNV-1a hash) |
 | O2 | Directory entry size | 16 B per BucketDirectoryEntry, fields per §III |
-| O3 | Forward op response | Option B — response carries value bytes for small values (≤ 48 B), Option A fallback for large. inline u64 / kv=256 都走 Option B |
+| O3 | Forward / cache_register response | **NO inline value bytes anywhere**. Response carries (status, slot.pointer, value_size); reader self-fetches value bytes from CXL via clflushopt+load. Forward op (OP_WRITE_FORWARD) value bytes go through per-host ForwardStaging buffer on CXL (§III). 决策理由: 测试 KV size 都 ≥ 256 B, inline 不可能 fit; 单 oob path 省一套 code path 跟 correctness reasoning. |
 | O4 | Crash recovery | Deferred to future iter (跟 replication 一起设计) |
 | O5 | Size class allocator for KV blockpool | 用 cxl_kv_blockpool 现有 size class 划分; UPDATE 同 size class fast path (但仍 alloc new block 走 CoW), cross-class fall back 同 path |
 

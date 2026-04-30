@@ -209,44 +209,73 @@ isolation enforces zero conflict.
 
 ---
 
-## Phase 5: N:1:1:N message types + sender/receiver dispatch
+## Phase 5: N:1:1:N message types + ForwardStaging buffer + sender/receiver dispatch
 
 **Goal**: Extend existing `cxl_per_host_ring`/aggregator infrastructure
-with new message types: `OP_INVALIDATE`, `OP_CACHE_REGISTER`,
-`OP_CACHE_EVICT`, `OP_WRITE_FORWARD`, `OP_RESPONSE`. Add type
-dispatch in sender + receiver thread; no protocol semantics yet
-(receiver just counts each type).
+with 5 message types: `OP_INVALIDATE`, `OP_CACHE_REGISTER`,
+`OP_CACHE_EVICT`, `OP_WRITE_FORWARD`, `OP_RESPONSE`. **No inline
+value payload anywhere**: messages carry only metadata + CXL pointers
+(per spec §XII O3 / §VI-A.bis MESSAGE PAYLOAD POLICY). For
+`OP_WRITE_FORWARD`, value bytes are pre-written into a per-forwarder
+ForwardStaging buffer on CXL; message carries a pointer.
 
 **Spec coverage**: I11 (cross-host write via N:1:1:N forward,
-not LFM), I7 (no cross-host directory query path), §VI
-synchronization rules for SPSC rings.
+not LFM), §III (CXL layout includes ForwardStaging[H]), §XII O3
+(no inline payload), §VI synchronization rules for SPSC rings.
 
 **Code changes**:
-- MODIFIED `src/cxl_per_host_ring.h`: add `op_type` field to
-  `PerHostInvalEntry` (bump to 64 B if needed for type + payload);
-  rename to `PerHostMessage`
-- MODIFIED `src/cxl_a_local_aggregator.h`: extend `AggrEntry` with
-  `op_type` and inline payload (≤ 48 B for `cache_read_response`)
+- MODIFIED `src/cxl_per_host_ring.h`: rename `PerHostInvalEntry` →
+  `PerHostMessage`; **entry size remains 64 B** (single cacheline,
+  preserve false-sharing-defense from iter-2A); add `op_type`,
+  `inner_op_type`, `staging_ptr`, `value_size`, `slot_pointer`,
+  `status` fields via union by op_type
+- MODIFIED `src/cxl_a_local_aggregator.h`: `AggrEntry` carries
+  same union fields; **no inline payload bytes** (spec §VI-A.bis
+  MESSAGE PAYLOAD POLICY)
+- NEW `src/cxl_forward_staging.h/cc`: per-host ForwardStaging buffer
+  on CXL; size 1 MB / host (sufficient for $T \times \text{max-kv}=
+  86 \times 1\text{KB} \approx 86$ KB of in-flight forwards, with
+  10× headroom); host-local DRAM free-list metadata; allocator API
+  `forward_staging_alloc(size)`/`forward_staging_free(ptr)`
 - MODIFIED `src/cxl_kv_ops_A.cc::sender_loop_k` and
   `receiver_loop_k`: per-op-type counters; receiver's `op_type`
-  switch dispatch (placeholder bodies for now: just count)
-- NEW `tests/n11n_message_dispatch_test.cc`: inject each message
-  type, verify counter on receiver side
+  switch dispatch (placeholder bodies for now: just count + free
+  staging on OP_WRITE_FORWARD ack)
+- NEW `tests/n11n_message_dispatch_test.cc`: inject each of 5
+  message types, verify counter parity on receiver
+- NEW `tests/forward_staging_test.cc`: stress alloc/free + cross-host
+  read-from-staging correctness (forwarder writes value with NT
+  store + sfence; owner-side worker reads via clflushopt+mfence+
+  load; verify byte-equal)
 
 **Validation experiment**:
-1. Inject 1k of each message type from g3 → g4; verify g4 receiver
-   counters all reach exactly 1k
-2. Round-trip latency: per message type, measure host A enqueue →
-   host B receive timestamp; must be ≤ 3 µs per round-trip
-3. Throughput: pipeline 100k messages, measure aggregate ops/sec;
-   must be ≥ 5 M msg/sec per channel
+1. Inject 1k of each of 5 message types from g3 → g4; verify g4
+   receiver counters all reach exactly 1k
+2. ForwardStaging round-trip:
+   - Forwarder writes value bytes (size = 256, 512, 1024) to
+     staging via NT store + sfence
+   - Sends OP_WRITE_FORWARD with staging_ptr
+   - Owner reads via clflushopt+mfence+load, verifies value bytes
+     byte-equal to forwarder's input
+   - Owner sends OP_RESPONSE (status=OK, no value bytes)
+   - Forwarder receives ACK, frees staging slot
+   - Run 100k iterations; zero byte mismatch; zero staging leak
+3. Round-trip latency at value size ∈ {256, 512, 1024} B:
+   - p50 ≤ 3 µs, p99 ≤ 6 µs (forward + ACK roundtrip)
+4. Throughput: pipeline 100k messages, must be ≥ 3 M msg/sec
+   per channel (lower than fully inline because each forward
+   adds NT store on forwarder + clflushopt+load on owner;
+   layer-3 utilization ~50% expected)
 
-**Success criterion**: counter parity (sent = received per type);
-round-trip latency ≤ 3 µs; throughput ≥ 5 M msg/sec.
+**Success criterion**: counter parity for all 5 op types; 100% byte
+equality on ForwardStaging round-trip; latency within budget; zero
+staging slot leak after 100k iterations.
 
-**Bottleneck check**: sender batch K=4 yields ≥ 1.5× throughput
-over K=1 (verifies sfence amortization). Per-CXL-message bytes
-≤ 64 B (single SPSC slot).
+**Bottleneck check**: sender batch K=4 yields ≥ 1.5× throughput over
+K=1; per-CXL-message bytes = 64 B (single SPSC slot, unchanged).
+Forward roundtrip latency at 1 KB ≤ 6 µs (NT 256 ns staging write +
+~2 µs message round-trip + ~700 ns owner-side fetch + ~2 µs reverse
+ack ≈ 5 µs theoretical).
 
 ---
 
