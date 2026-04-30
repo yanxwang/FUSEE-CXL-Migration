@@ -31,7 +31,7 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
 endforeach()
 
 # iter-4A pure-CPU unit tests (no AVX-512 dependency, runnable on workstation).
-foreach(t sharding_test directory_test)
+foreach(t sharding_test directory_test cache_pool_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -O2 -g)
