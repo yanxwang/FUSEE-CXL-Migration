@@ -163,8 +163,7 @@ int CxlKvStoreA_v2::insert(uint64_t key, uint64_t value) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    // Phase 6: cross-host forward not yet implemented.
-    return -10;  // -ENOTSUP placeholder; Phase 8 will implement.
+    return forward_to_owner(owner, key, value, 1 /* INSERT */);
   }
   return execute_write_local(key, value, 1 /* INSERT */);
 }
@@ -172,15 +171,148 @@ int CxlKvStoreA_v2::insert(uint64_t key, uint64_t value) {
 int CxlKvStoreA_v2::update(uint64_t key, uint64_t value) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
-  if (owner != (uint32_t)host_id_) return -10;
+  if (owner != (uint32_t)host_id_) {
+    return forward_to_owner(owner, key, value, 0 /* UPDATE */);
+  }
   return execute_write_local(key, value, 0 /* UPDATE */);
 }
 
 int CxlKvStoreA_v2::remove(uint64_t key) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
-  if (owner != (uint32_t)host_id_) return -10;
+  if (owner != (uint32_t)host_id_) {
+    return forward_to_owner(owner, key, 0, 2 /* DELETE */);
+  }
   return execute_write_local(key, 0, 2 /* DELETE */);
+}
+
+// ---- Phase 8: cross-host write forward via ForwardRingMatrix ----
+
+int CxlKvStoreA_v2::enable_forward(ForwardRingMatrix *fr, bool init_region,
+                                    bool spawn_responder) {
+  if (!fr) return -1;
+  fr_ = fr;
+  if (init_region) {
+    std::memset(fr, 0, forward_ring_matrix_bytes());
+    flush_region(fr, forward_ring_matrix_bytes());
+    store_fence();
+  }
+  if (spawn_responder) {
+    responder_stop_.store(false, std::memory_order_relaxed);
+    responder_ = std::thread([this]() { this->responder_loop(); });
+  }
+  return 0;
+}
+
+void CxlKvStoreA_v2::stop_responder() {
+  if (!responder_.joinable()) return;
+  responder_stop_.store(true, std::memory_order_release);
+  responder_.join();
+}
+
+int CxlKvStoreA_v2::forward_to_owner(uint32_t owner, uint64_t key,
+                                      uint64_t value, int op_kind) {
+  if (!fr_) return -10;  // forward not enabled
+  ForwardRing *ring = &fr_->rings[host_id_][owner];
+  uint64_t my_op = req_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+  // Pack op_id with host bits to be cluster-unique.
+  uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) | (my_op & 0x00FFFFFFFFFFFFFFULL);
+
+  // Reserve a slot via atomic fetch_add on tail.
+  uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
+  uint32_t slot = (uint32_t)(tpos % kForwardRingDepth);
+  ForwardEntry *e = &ring->entries[slot];
+
+  // Wait for slot free (responder must have processed the previous op_id
+  // and zeroed req_op_id).
+  for (;;) {
+    flush_line((void *)e);
+    full_fence();
+    if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+    __builtin_ia32_pause();
+  }
+
+  // Publish request.
+  e->key = key;
+  e->value = value;
+  e->op_kind = (uint8_t)op_kind;
+  e->resp_op_id.store(0, std::memory_order_relaxed);
+  e->status = 0;
+  std::atomic_thread_fence(std::memory_order_release);
+  e->req_op_id.store(op_id, std::memory_order_release);
+  flush_line((void *)e);
+  store_fence();
+
+  // Spin on response.
+  const uint64_t kBudgetUs = 200000;  // 200 ms
+  uint64_t spin_start_ns = 0;
+  for (;;) {
+    flush_line((void *)e);
+    full_fence();
+    uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
+    if (resp == op_id) {
+      int rc = e->status;
+      // Free the slot for the producer's next use.
+      e->req_op_id.store(0, std::memory_order_release);
+      flush_line((void *)e);
+      store_fence();
+      return rc;
+    }
+    if (spin_start_ns == 0) {
+      timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+      spin_start_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    } else {
+      timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+      uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+      if ((now_ns - spin_start_ns) / 1000 > kBudgetUs) {
+        e->req_op_id.store(0, std::memory_order_release);
+        return -11;  // forward timeout
+      }
+    }
+    __builtin_ia32_pause();
+  }
+}
+
+void CxlKvStoreA_v2::responder_loop() {
+  // Poll all incoming forward rings: rings[src][me] for each src != me.
+  while (!responder_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int src = 0; src < num_hosts_; src++) {
+      if (src == host_id_) continue;
+      ForwardRing *ring = &fr_->rings[src][host_id_];
+      uint64_t head = ring->head;
+      // Consumer reads tail via CXL coherent load.
+      flush_line((void *)&ring->tail);
+      full_fence();
+      uint64_t tail = ring->tail.load(std::memory_order_acquire);
+      while (head < tail) {
+        uint32_t slot = (uint32_t)(head % kForwardRingDepth);
+        ForwardEntry *e = &ring->entries[slot];
+        flush_line((void *)e);
+        full_fence();
+        uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
+        if (op_id == 0) break;  // producer hasn't published yet
+        // Execute the request locally.
+        int rc;
+        switch (e->op_kind) {
+          case 0: rc = execute_write_local(e->key, e->value, 0); break;  // UPDATE
+          case 1: rc = execute_write_local(e->key, e->value, 1); break;  // INSERT
+          case 2: rc = execute_write_local(e->key, 0,        2); break;  // DELETE
+          default: rc = -1; break;
+        }
+        // Publish response (status first, then resp_op_id which acts as ready sentinel).
+        e->status = rc;
+        std::atomic_thread_fence(std::memory_order_release);
+        e->resp_op_id.store(op_id, std::memory_order_release);
+        flush_line((void *)e);
+        store_fence();
+        head++;
+        did_work = true;
+      }
+      ring->head = head;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
 }
 
 int CxlKvStoreA_v2::search(uint64_t key, uint64_t *out) {

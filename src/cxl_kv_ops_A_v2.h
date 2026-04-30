@@ -26,6 +26,7 @@
 
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
+#include "cxl_forward_ring.h"
 #include "cxl_hashtable.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_sharding.h"
@@ -33,6 +34,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 
 namespace fusee {
 
@@ -45,6 +47,15 @@ class CxlKvStoreA_v2 {
              int host_id, int num_hosts, bool init_region,
              ShardingTable *st, SlotDirectory *dir, KvCachePool *cache,
              BlockFreeList *freelist);
+
+  // Phase 8: wire cross-host write forward via ForwardRing in CXL.
+  // `fr` lives in CXL (init_region=true on host 0 zeroes the matrix).
+  // Spawns one responder thread per host on the primary client.
+  int enable_forward(ForwardRingMatrix *fr, bool init_region,
+                     bool spawn_responder);
+
+  // Stop the responder thread (call before destroying CXL region).
+  void stop_responder();
 
   int insert(uint64_t key, uint64_t value);
   int update(uint64_t key, uint64_t value);
@@ -73,6 +84,15 @@ class CxlKvStoreA_v2 {
   SlotDirectory *dir_ = nullptr;
   KvCachePool *cache_ = nullptr;
   BlockFreeList *freelist_ = nullptr;
+
+  // Phase 8: cross-host forward.
+  ForwardRingMatrix *fr_ = nullptr;
+  std::thread responder_;
+  std::atomic<bool> responder_stop_{false};
+  std::atomic<uint64_t> req_op_counter_{0};
+
+  void responder_loop();
+  int forward_to_owner(uint32_t owner, uint64_t key, uint64_t value, int op_kind);
 };
 
 }  // namespace fusee
