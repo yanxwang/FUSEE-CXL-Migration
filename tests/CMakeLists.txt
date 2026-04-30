@@ -24,14 +24,15 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
          cxl_dram_cache_test cxl_dram_cache_B_test
          cxl_xhost_test cxl_latency_decomp
          cxl_kv_bench_threads cxl_atomic_bench cxl_atomic_xhost
-         cxl_blockpool_test cxl_dualhost_bw_bench cxl_a_aggr_test)
+         cxl_blockpool_test cxl_dualhost_bw_bench cxl_a_aggr_test
+         protocol_a_v2_2host_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -mclflushopt -mavx512f)
 endforeach()
 
 # iter-4A pure-CPU unit tests (no AVX-512 dependency, runnable on workstation).
-foreach(t sharding_test directory_test cache_pool_test blockpool_freelist_test per_host_msg_test)
+foreach(t sharding_test directory_test cache_pool_test blockpool_freelist_test per_host_msg_test protocol_a_v2_local_test)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -O2 -g)
