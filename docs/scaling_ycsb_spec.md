@@ -1,13 +1,29 @@
-# `scaling_ycsb` — standard benchmark procedure for FUSEE-CXL A/B/C
+# `scaling_ycsb` — standard benchmark procedure for FUSEE-CXL Protocol A
 
 This document defines the canonical YCSB-scaling experiment used to
-validate each phase of the throughput-improvement plan (see
-`ABC_throughput_improvement_plan.md`) and to produce the official
-comparison figures.
+validate each iteration of Protocol A (the directory-based
+cache-coherent CXL protocol described in `docs/design_goals.md`
+§Protocol A) and to produce the official comparison figures.
 
 Every re-run of this procedure produces a self-contained directory
-under `docs/g34_scaling_ycsb_<timestamp>/` with the raw log, 30 main
-plots, a 10-plot `extra/` comparison set, plus this spec.
+under `docs/g34_scaling_ycsb_<timestamp>/` with the raw log, the
+required plot set (see §6), plus this spec.
+
+**Scope (2026-05-01 onwards)**:
+- Only **Protocol A** is swept. Protocol A is and remains "A" — there
+  is no `A_v2` rename: the directory-based cache-coherent design
+  documented in `design_goals.md §Protocol A (§I-XIII)` *is* Protocol
+  A. iter-1A through iter-3A's prior implementations of A are
+  considered superseded historical milestones, not separate protocols.
+- Protocols **B** (eager push) and **C** (lazy release) are **frozen
+  baselines**: their code path remains buildable but is **not** part
+  of the standard sweep matrix. Reference numbers from the last
+  full A/B/C sweep (`docs/g34_scaling_ycsb/`, 2026-04-22) are
+  preserved for historical comparison only and will NOT be regenerated.
+- If a future iter requires re-running B or C (e.g., for an apples-to-
+  apples publication figure), that is an out-of-band ad-hoc run, not
+  the standard sweep — and it must be explicitly justified in the
+  iter plan.
 
 ---
 
@@ -28,22 +44,33 @@ plots, a 10-plot `extra/` comparison set, plus this spec.
   changes or after a PXE wipe.
 - `MAX_HOST_NUM=200` in `cxl_shm_profiling/common.h` (must match on
   both hosts — verify after each re-sync).
-- Binaries: `cxl_ycsb_runner_{A,B,C}` under `build-cxl/tests/`.
+- Binary: `cxl_ycsb_runner_A` under `build-cxl/tests/`. (B/C runners
+  may still build for ad-hoc use but are not invoked by the sweep
+  driver.)
 
 ## 3. Parameters
 
 | Knob | Value | Env var |
 |---|---|---|
-| Protocols | A, B, C | `OPTS="A B C"` |
+| Protocols | A (only) | `OPTS="A"` |
 | Workloads | a, b, c, d, f (e **skipped**: scan unimplemented) | `WORKLOADS="workloada workloadb workloadc workloadd workloadf"` |
 | Clients per host (T) | 1, 2, 4, 8, 16, 32, 64, 86 | `THREADS="1 2 4 8 16 32 64 86"` |
 | Cache modes | on, off (**on first, off second**) | `CACHE_MODES="on off"` |
+| Reps per cell | 5 (per spec §IX G2 multi-rep stability) | `REPS=5` |
 | Bucket count | 65 536 | `NUM_BUCKETS=65536` |
 | Ops cap | 200 000 per phase | `MAX_OPS=200000` |
 | Hosts | 2 (g3 + g4, role-mode) | `HOST0=g3 HOST1=g4` |
 | Per-run timeout | 600 s | `TIMEOUT_S=600` |
 
-**Total runs**: 3 × 5 × 8 × 2 = **240**.
+**Total runs**: 1 × 5 × 8 × 2 × 5 = **400** cell-runs (80 unique cells
+× 5 reps). Headline numbers are 5-rep medians.
+
+A sweep that reports fewer than 80 unique cells (or fewer than 5 reps
+per cell) is **not a valid scaling_ycsb run** and MUST NOT be cited
+as iter-completion evidence. See iter-4A for the cautionary case
+(only 4 cells × 1 rep reported, violating both the cell-count and
+multi-rep gates; flagged as iter-execution-discipline violation per
+`CLAUDE.md`).
 
 ## 4. Client model
 
@@ -70,8 +97,8 @@ Output directory pattern: `logs/g34_scaling_sweep_<yyyymmdd_HHMMSS>/`.
 The orchestrator then copies the raw log + regenerated plots into
 **`docs/g34_scaling_ycsb_<yyyymmdd_HHMMSS>/`** (see § 6).
 
-Expected wall-clock: 25-40 min for the full 240 runs on an unloaded
-pair of g3/g4.
+Expected wall-clock: 60-90 min for the full 80-cell × 5-rep matrix
+on an unloaded pair of g3/g4.
 
 ## 6. Output layout
 
@@ -79,32 +106,57 @@ Every run writes to a fresh directory:
 
 ```
 docs/g34_scaling_ycsb_<timestamp>/
-├── SUMMARY.log                    # raw, one line per run
+├── SUMMARY.log                    # raw, one line per (cell, rep)
 ├── plot_commit.txt                # git SHA + date + runner env
-├── A_thpt_workload{a,b,c,d,f}.png           # 5 plots — protocol A throughput
+├── A_thpt_workload{a,b,c,d,f}.png           # 5 plots — protocol A throughput, 5-rep median
+├── A_thpt_workload{a,b,c,d,f}_band.png      # 5 plots — same with min/max shaded band
 ├── A_lat_workload{a,b,c,d,f}_{read,write}.png  # up to 10 plots — A latency (read+write split)
-├── B_thpt_workload{...}.png                 # 5
-├── B_lat_workload{...}_{read,write}.png     # up to 10
-├── C_thpt_workload{...}.png                 # 5
-├── C_lat_workload{...}_{read,write}.png     # up to 10
 ├── cache_off/
-│   └── same 30+ plot layout for cache-off subset
+│   └── same plot layout for cache-off subset
 ├── extra/
-│   ├── abc_compare_workload{a,b,c,d,f}.png      # 5 — A/B/C throughput overlay, linear Mops/s
-│   └── abc_compare_workload{a,b,c,d,f}_lat.png  # up to 5 — A/B/C write-p99 overlay
-└── (auxiliary: cache_speedup_*.png, scaling_efficiency_C.png, summary_table.md)
+│   ├── A_target_workload{a,b,c,d,f}.png    # 5 — A throughput vs 20 Mops/s target line
+│   └── A_scaling_efficiency.png            # peak T thpt / single-T thpt across workloads
+└── (auxiliary: cache_speedup_A_*.png, summary_table.md, gap_to_target.md)
 ```
 
 (workloadc has only reads → no `_write.png`; other workloads have both
 `_read.png` and `_write.png`.)
 
+The historical comparison directory `docs/g34_scaling_ycsb/`
+(2026-04-22, last full A/B/C run) is preserved as-is for context;
+new sweeps do NOT regenerate B/C bars.
+
 ## 7. Plot conventions
+
+### Visual style — MANDATORY
+
+All plots produced from a `scaling_ycsb` sweep MUST use the project
+plotting standard defined in
+[`docs/tools/plot_style.py`](tools/plot_style.py) (Style B —
+greyscale + accent red `#c44e52`, with `axes.titlepad=10` and
+y-headroom 25 % above bar tops).
+
+Every new `plot_*.py` for a sweep starts with:
+
+```python
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from plot_style import apply_style, COLORS, bar_with_headroom
+apply_style()
+```
+
+and uses `COLORS["kv256"]` / `COLORS["N2"]` / etc. instead of
+hard-coded hex. To change the project visual style, edit
+`docs/tools/plot_style.py` once — do NOT modify per-script.
+
+Reference figure (the look every scaling_ycsb plot should match):
+[`docs/iter5_kv_n_compare/iter5_bestn_thpt_bars.png`](iter5_kv_n_compare/iter5_bestn_thpt_bars.png).
 
 ### Y-axis defaults
 
 - **Linear**, not log. Units: **Mops/s**.
-- The log variants of the code remain in `docs/plot_scaling_sweep.py`
-  and `docs/plot_scaling_extra.py` but **commented-out** under
+- The log variants of the code remain in `docs/tools/plot_scaling_sweep.py`
+  and `docs/tools/plot_scaling_extra.py` but **commented-out** under
   `# LOG-Y (commented; uncomment to re-enable):`. To regenerate log
   versions, uncomment those blocks and rerun the plot scripts.
 
@@ -127,42 +179,63 @@ docs/g34_scaling_ycsb_<timestamp>/
   *microseconds per op*, not Mops/s (it's a latency, not a rate). Axis
   label: `latency (μs)`.
 
-### `extra/abc_compare_*.png` — overlay plots
+### `extra/A_target_*.png` — gap-to-target plots
 
-- 5 throughput overlay plots: one subplot per workload, 3 lines (A/B/C).
-  Y-axis: Mops/s, linear.
-- 5 latency overlay plots: one subplot per workload, 3 lines (A/B/C)
-  showing **write p99** vs `#clients`. If a workload has no writes
-  (workloadc), plot reads' p99 instead and label accordingly.
+- 5 throughput plots, one per workload.
+- Each plot shows Protocol A's 5-rep median throughput line plus a
+  horizontal red dashed line at **20 Mops/s** (the design target per
+  `docs/design_goals.md`).
+- The gap (target − peak observed) is annotated at the rightmost
+  data point. This makes the "distance to ceiling" visually
+  unmissable, replacing the old A/B/C overlay (which is no longer
+  meaningful since B/C are frozen).
+
+### `extra/A_scaling_efficiency.png`
+
+- Per workload, plot `peak_T_throughput / single_T_throughput` as a
+  bar. Identifies which workloads scale and which saturate early.
 
 ## 8. Required raw fields per run (SUMMARY.log format)
 
 Every non-FAIL line has exactly this shape:
 
 ```
-YCSB opt=<A|B|C> cache=<0|1> num_hosts=<H> threads=<T> threads_eff=<T'>
+YCSB opt=A cache=<0|1> num_hosts=<H> threads=<T> threads_eff=<T'> rep=<r>
      load_ops=<N_load> load_thpt=<kops/s>
      trans_ops=<N_trans> trans_wall_max=<seconds> trans_agg_thpt=<kops/s>
      w_avg_ns=<...> w_p50_ns=<...> w_p99_ns=<...>
      r_avg_ns=<...> r_p50_ns=<...> r_p99_ns=<...>
-     # <workload>_opt<X>_t<T>_cache<on|off>
+     # <workload>_optA_t<T>_cache<on|off>_rep<r>
 ```
 
-`threads_eff < threads` indicates the runner clamped (currently A/B
-clamp to 1 unless `FUSEE_UNSAFE_UNCLAMP=1` is set). Plotters MUST
-ignore `threads_eff` and plot against the requested `threads` value so
-curves across phases are aligned.
+`rep` ∈ {1..5} identifies which repetition of the cell this line is.
+
+`threads_eff < threads` indicates the runner clamped (legacy from
+A/B's old per-host PendingRing path). For Protocol A as defined in
+the current `design_goals.md` spec, no clamp is expected; plotters
+MUST still ignore `threads_eff` and plot against the requested
+`threads` value so curves across iters are aligned.
 
 ## 9. Aggregation rule
 
+Within a single rep:
 `trans_agg_thpt = (Σ per-client trans_ops) / max(per-client trans_wall_ns)`.
 
-Latency percentiles are computed per-client then aggregated across
-clients via:
+Latency percentiles within a single rep are computed per-client then
+aggregated across clients via:
 
 - `avg`: total sum / total count.
 - `p50`: median of per-client p50 values (across the `2×T` workers).
 - `p99`: max of per-client p99 values (conservative; captures tails).
+
+Across reps for the same cell (5 reps):
+
+- Headline throughput: **median of 5**. Min/max shown as a band on
+  `*_band.png` plots.
+- Headline latency p50/p99: median of 5.
+- A cell where `(max − min) / median > 0.20` is flagged in
+  `summary_table.md` as **unstable**; user is asked whether to
+  re-run that cell with more reps.
 
 ## 10. Run index
 
@@ -170,7 +243,7 @@ After every re-run, append one line to
 `docs/scaling_ycsb_runs_index.md`:
 
 ```
-| <timestamp> | <phase> | <git SHA> | <notes: peak C workloadc / peak A workloada / key change> |
+| <timestamp> | <iter> | <git SHA> | <notes: peak A workloada / peak A workloadc / gap to 20 Mops/s target / key change> |
 ```
 
 So we can trace at a glance which plot came from which code version
@@ -180,27 +253,36 @@ and what the sweep was intended to validate.
 
 - **Short runs (200k ops) underestimate steady-state** at T=86 by
   roughly 40-60 % due to `max_wall / avg_wall` ratio sensitivity to
-  OS jitter. The 240-run sweep is the "headline" result; for
-  per-phase validation this is adequate. For "final paper-grade"
-  numbers on key cells, follow up with a 2M-ops sustained smoke (see
-  `plot_smoke_2M.py`).
-- **A and B clamp**: currently A/B are runtime-clamped to 1 client per
-  host because of the per-host PendingRing (see Phase 1 + 4 of the
-  improvement plan). Post-Phase-1 the clamp is conditional on the
-  workload having writes; post-Phase-4 it goes away entirely.
+  OS jitter. The 80-cell × 5-rep sweep is the "headline" result; for
+  "final paper-grade" numbers on key cells, follow up with a 2M-ops
+  sustained smoke (see `plot_smoke_2M.py`).
 - **Workload e (scan) is skipped** until scan is implemented; plots
   silently omit workloade.
 
-## 12. Reference run
+## 12. Reference runs
 
-As of 2026-04-22 commit `62a4d54`, the baseline scaling_ycsb run lives
-at `docs/g34_scaling_ycsb/` (no timestamp — legacy directory name).
-From the next run onward the convention is
-`docs/g34_scaling_ycsb_<timestamp>/`.
+| Date | Iter | Directory | Notes |
+|------|------|-----------|-------|
+| 2026-04-22 | iter-3A (C-focused) | `docs/g34_scaling_ycsb/` | Last full A/B/C sweep. Frozen baseline. C workloadc T=86 cache-on = 48.2 Mops/s (200k) / 79.0 Mops/s (2M); C workloadd T=86 cache-on = 44.0 / 66.4 Mops/s. A/B numbers from this run reflect superseded protocol implementations and are NOT valid baselines for the current Protocol A. |
 
-Peak numbers that should be regression-checked:
+Reference targets (per `docs/design_goals.md`):
 
-- C workloadc T=86 cache-on agg: 48.2 Mops/s (200k) / 79.0 Mops/s (2M).
-- C workloadd T=86 cache-on agg: 44.0 Mops/s (200k) / 66.4 Mops/s (2M).
-- A/B workloadc T=86 cache-on agg: 3.3-3.4 Mops/s (clamped — will
-  change after Phase 1).
+- **YCSB-A (R50/W50 Zipf) ≥ 20 Mops/s aggregate** — primary target
+- **YCSB-C (100% read) ≥ 20 Mops/s aggregate** — primary target
+
+Every Protocol A sweep MUST report the gap to these two targets in
+`gap_to_target.md` (auto-generated from SUMMARY.log).
+
+## 13. Iter-completion gate
+
+A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
+
+1. A `docs/g34_scaling_ycsb_<timestamp>/` directory exists with
+   ≥ 80 unique cells × 5 reps (= 400 SUMMARY.log lines, ignoring
+   FAILs and reruns).
+2. `gap_to_target.md` is generated and present.
+3. The iter summary doc cites the `<timestamp>` of that directory.
+
+Iters that report fewer cells (e.g., iter-4A's 4-cell × 1-rep
+preview) violate this gate and must catch up before the next iter
+starts.
