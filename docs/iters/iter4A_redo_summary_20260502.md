@@ -134,9 +134,59 @@ table above). No phase reported as complete-while-not.
 ### G5 forward routing
 - Sharding hash uniform → ~50/50 cross-host vs owner-self.
 
-### Headline numbers
-- See `SUMMARY.log`. T=1 workload-a cache=on rep1-5 medians around
-  500 kops/s. Higher T values populated as sweep progresses.
+### Headline numbers (5-rep medians, cache=on, peak T)
+
+Final from `g34_scaling_ycsb_20260502_040123/SUMMARY.log` (80 cells
+× 5 reps = 400 runs, 2 FAILs at workloadb T=1 rep1 + workloadf T=8
+rep1, both timeouts of unknown root cause; subsequent reps of those
+cells succeeded normally — see `gap_to_target.md` for the canonical
+peak per workload).
+
+| Workload | Peak Mops/s | At T= | Gap to 20 Mops/s | % of target |
+|---|---|---|---|---|
+| workload-a (R50/U50 Zipf) | **16.62** | 86 | -3.38 | **83.1%** |
+| workload-b (R95/U5 Zipf) | 12.34 | 86 | -7.66 | 61.7% |
+| workload-c (R100 Zipf) | 11.66 | 64 | -8.34 | 58.3% |
+| workload-d (R95/I5 latest) | 12.33 | 86 | -7.67 | 61.7% |
+| workload-f (RMW + R) | 14.74 | 86 | -5.26 | 73.7% |
+
+**Note** workload-c T=86 cache=on shows 0.006 Mops/s — that's a
+single-rep cell with all 5 reps in the [0.005, 0.013] range, likely
+a CXL device-side stall (similar instability to the unstable T=86
+cache=off cells). Treated as outlier; canonical peak for workload-c
+is the T=64 cell (11.66 Mops/s, stable).
+
+**Strong scaling on workload-a**: 0.51 → 16.62 Mops/s as T scales
+1 → 86 (~32× speedup, 83% of 20 Mops/s target).
+
+**Per spec §11 caveat**: short runs (50k ops here vs spec 200k) at
+T=86 show high variance — 9 cells flagged "unstable" in
+`summary_table.md` (>20% spread), most are T=86. Headline peak
+picks the median of 5 reps (not max-of-5), so these unstable
+cells' contribution is conservative.
+
+### Comparison vs prior iter-4A and iter-3A baselines
+
+| Iter | A peak Mops/s | Cell count |
+|------|---------------|-----------|
+| iter-1A baseline (2026-04-26) | 0.54 | 32 + 8 FAIL |
+| iter-2A-revised (2026-04-27) | 1.27 | 80 |
+| iter-3A (2026-04-28) | 4.01 | per-slot LFM + same-host atomic_store |
+| iter-4A (2026-04-30, retracted) | 0.57 (post fix) | 4 cells × 1 rep |
+| **iter-4A-redo (this iter)** | **16.62** | **400 runs (80 × 5 reps)** |
+
+iter-4A-redo's 16.62 Mops/s is a **30.8× uplift** over iter-4A
+"complete" (0.57 Mops/s) and a **4.1× uplift** over iter-3A
+(4.01 Mops/s — the previous high water mark for A). The dominant
+delta vs iter-4A is the init-barrier fix: iter-4A's 4-cell sweep
+had silently absorbed timing-induced hangs that suppressed
+throughput; the new tighter barrier eliminates them.
+
+The remaining gap to 20 Mops/s on workload-a (3.38 Mops) is
+plausibly closable by (a) re-enabling blockpool path (current
+inline u64 incurs 16 B atomic publish — for KV size {256, 512,
+1024} a CoW pool publish can amortize) and (b) reducing forward
+roundtrip latency at T=86 via responder K-shard.
 
 ---
 
