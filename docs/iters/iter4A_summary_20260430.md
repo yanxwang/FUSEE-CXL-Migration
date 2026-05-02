@@ -5,7 +5,7 @@
 **Status**: COMPLETE (Phases 1-10 delivered)
 **Branch**: `feat/cxl-migration`
 **Spec**: `docs/design_goals.md §Protocol A v2 (§I-XIII)`
-**Plan**: `docs/iters/task_plan_iter4A_protocol_a_v2.md`
+**Plan (original 10-phase, now superseded)**: `docs/iters/task_plan_iter4A.md` (REPLAN'd 2026-05-02)
 
 ---
 
