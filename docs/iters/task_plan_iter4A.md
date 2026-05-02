@@ -73,7 +73,8 @@ This REPLAN structurally prevents all three:
 
 ## Plan overview
 
-12 phases. Each phase has:
+**13 phases** (Phase 5 is split into 5a + 5b per Q4 decision below).
+Each phase has:
 
 - **Goal** (1-2 sentences)
 - **Code changes** (file-level)
@@ -92,9 +93,9 @@ enforcement + sweep close out (9-10).
 
 ## Phase 0.5 — Invariant→Oracle blueprint + oracle harness
 
-**Goal**: Land an `oracle_harness` test framework + 12 fail-first
+**Goal**: Land an `oracle_harness` test framework + **13** fail-first
 invariant oracles. After this phase the `protocol_a_invariants`
-binary exists and reports 12/12 RED. Every subsequent phase's
+binary exists and reports 13/13 RED. Every subsequent phase's
 acceptance criterion is "the oracles I touched flipped to GREEN and
 the GREEN ones didn't regress."
 
@@ -139,6 +140,21 @@ drift becomes mechanically impossible (§X H2 reality-check).
   // Same-host fork helper for I3 / cache MAP_SHARED tests.
   int  oracle_fork_workers(int n, void (*body)(int worker_id));
 
+  // Crash-recovery fixture for o_i1 / o_i10. Self-contained — does
+  // NOT reuse crash-recover-test/ (which is RDMA-era client/server
+  // architecture and doesn't fit unified-node iter-4A model).
+  // Requires env FUSEE_SSH_HOST_<id> = "g3" / "g4" + ssh-keys set
+  // up so non-interactive ssh works.
+  int kill_peer(int host_id, const char *pgrep_pattern);
+  int restart_peer(int host_id, const char *binary_path,
+                   const char *args, const char *cookie);
+
+  // Perf-counter helper for o_ap16 macroscopic check. Wraps
+  // `perf stat -e uncore_imc/cas_count_write/` over a callable;
+  // returns dax-region PCIe write count.
+  uint64_t measure_pcie_writes_to_dax(std::function<void()> fn);
+  uint64_t measure_pcie_reads_from_dax(std::function<void()> fn);
+
   // Failure macro that records location + dumps SUMMARY before abort.
   #define ORACLE_REQUIRE(cond) ...
   ```
@@ -146,22 +162,32 @@ drift becomes mechanically impossible (§X H2 reality-check).
   scaling_ycsb's shared-stats convention; orchestrator-supplied
   `FUSEE_RUN_COOKIE`).
 
-- NEW `tests/protocol_a_invariants.cc` (~400 LOC, 12 oracle bodies):
+- NEW `tests/protocol_a_invariants.cc` (~430 LOC, 13 oracle bodies):
 
   | Oracle | Spec ref | host_count | tsan | What it tests |
   |--------|----------|-----------|------|---------------|
-  | `o_i1_recover_from_cxl` | §I1 | 2 | no | host A inserts 1k keys, hard-kills its process; restart, host B's reader fetches all 1k from CXL byte-equal |
+  | `o_i1_recover_from_cxl` | §I1 | 2 | no | host A inserts 1k keys, hard-kills its process via `kill_peer`; `restart_peer` re-attaches; host B's reader fetches all 1k from CXL byte-equal |
   | `o_i2_owner_routing_uniform` | §I2 | 1 | no | 100k synthetic keys → owner_host distribution within 5 % of uniform; same key hashes to same owner across calls |
   | `o_i2_xhost_writes_use_forward` | §I2/I11 | 2 | no | 1000 cross-host writes; counter `forward_to_owner_calls == 1000`, `execute_write_local_xhost == 0` |
-  | `o_i3_cache_map_shared` | §I3 | 1 | no | 4 fork workers; worker 0 set_stale; worker 1 lookup sees `stale==1` without IPC |
-  | `o_i4_lazy_not_physical` | §I4 | 1 | no | invalidate K then lookup K → returns entry pointer (not NULL) with `stale==1` |
+  | `o_i3_cache_map_shared` | §I3 + **AP3** | 1 | no | 4 fork workers; worker 0 set_stale; worker 1 lookup sees `stale==1` without IPC. **Also covers AP3** ("no per-worker private cache") — if a worker has private cache, worker 1 wouldn't observe worker 0's set_stale and oracle FAILs |
+  | `o_i4_lazy_not_physical` | §I4 + AP4 | 1 | no | invalidate K then lookup K → returns entry pointer (not NULL) with `stale==1` |
   | `o_i5_per_slot_no_false_share` | §I5/I7 | 1 | no | 16 same-host workers write 1M ops to distinct slots in same bucket; per-thread tput within 30 % of single-thread tput (no contention) |
-  | `o_i8_no_lfm_in_protocol_a` | §I8 | 2 | no | run 5k ops mixed; LFM `acquire_count == 0`; spinlock `acquire_count > 0` |
-  | **`o_i9_concurrent_read_write_no_stale`** | **§I9** | **2** | **yes** | **host A reads K (populates cache); host B updates K; host A reads K again — MUST see new value. Run 1000 iterations. This oracle is the one iter-4A's first attempt missed.** |
-  | `o_i10_writer_durable_after_return` | §I10 | 2 | no | host A writes K, returns; SIGKILL host A immediately; host B reads K from CXL — must see new value (commit point includes CXL durable + sharer ACK before return) |
+  | `o_i8_no_lfm_in_protocol_a` | §I8 + **AP10** | 2 | no | run 5k ops mixed; LFM `acquire_count == 0`; spinlock `acquire_count > 0`. **Also covers AP10** ("no LFM for cross-host writer mutex") — if any LFM acquire happens on protocol-A path, oracle FAILs |
+  | **`o_i9_concurrent_read_write_no_stale`** | **§I9 race** | **2** | **yes** | **host A reads K (populates cache); host B updates K; host A reads K again — MUST see new value. Run 1000 iterations. This oracle is the one iter-4A's first attempt missed.** |
+  | **`o_i9_fast_path_no_cxl_access`** (new) | **§I9 perf** | 1 | no | NEW. 100k cache-hit reads; `measure_pcie_reads_from_dax(fn)` ≤ 1k (allow cache miss + register refresh, but not per-op CXL access); p50 latency ≤ 60 ns. Catches accidental fall-through to CXL atomic during fast path |
+  | `o_i10_writer_durable_after_return` | §I10 | 2 | no | host A writes K, returns; `kill_peer(0)` immediately; host B reads K from CXL — must see new value (commit point includes CXL durable + sharer ACK before return) |
   | `o_i11_xhost_forward_observable` | §I11 | 2 | no | forwarder publishes ForwardRing tail via fetch_add; owner host sees new tail within 100 µs (verifies CXL atomic flush plumbing end-to-end) |
   | `o_i12_no_oplog_calls` | §I12 | 1 | no | run 1k ops; `oplog_begin_count == 0`, `oplog_commit_count == 0` |
-  | `o_ap16_cxl_atomic_flush_paired` | §VII AP16 (new) | 1 | no | scans symbol table at link time + runtime instrumentation: every CXL-resident atomic store/RMW emits a `flush_line` event within 5 instructions in the same source location (introspection via debug build flag) |
+  | `o_ap16_cxl_atomic_flush_paired` | §VII AP16 (new) | 1 | no | **Macroscopic stress**: harness runs 1M atomic stores against a CXL-resident ring; `measure_pcie_writes_to_dax(fn)` returns count; oracle PASS iff ratio ∈ [0.95M, 1.05M]. Black-box check, no per-instruction inspection (avoids compiler-reorder false positives). Microscopic per-line check is the Phase 5.5 audit table, not this oracle |
+
+  **Anti-pattern coverage map** (to avoid redundant oracles):
+  - AP3 → covered by `o_i3_cache_map_shared`
+  - AP4 → covered by `o_i4_lazy_not_physical`
+  - AP10 → covered by `o_i8_no_lfm_in_protocol_a`
+  - AP13/14/15 → enforced via H1 trip wires (Phase 9 SIGABRT in
+    debug build), not oracle-tested
+  - AP16 → covered by `o_ap16_cxl_atomic_flush_paired` + Phase 5.5
+    audit doc
 
 - NEW `tests/CMakeLists.txt` entry:
   `add_executable(protocol_a_invariants ...)` plus a TSan variant
@@ -175,15 +201,16 @@ drift becomes mechanically impossible (§X H2 reality-check).
 
 1. Build `protocol_a_invariants` and `protocol_a_invariants_tsan`.
 2. Run on g3+g4: `bash scripts/run_invariant_oracles.sh`.
-3. **Expected output**: `12 oracles, 0 PASS, 12 FAIL`. Every
+3. **Expected output**: `13 oracles, 0 PASS, 13 FAIL`. Every
    oracle fails because no protocol code exists yet. This is the
    GREEN condition for Phase 0.5: ALL RED.
 
 **Success criterion**: `protocol_a_invariants` binary builds; oracle
-runner driver works (cross-host barrier, fork helper, timeout, TSan
-build); `12/12 FAIL` reported with each failure citing a clean spec
-reference. NO oracle accidentally PASSing (a green oracle now means
-the test is misimplemented — abort and fix the oracle).
+runner driver works (cross-host barrier, fork helper, kill/restart
+fixture, perf-counter helper, timeout, TSan build); `13/13 FAIL`
+reported with each failure citing a clean spec reference. NO oracle
+accidentally PASSing (a green oracle now means the test is
+misimplemented — abort and fix the oracle).
 
 **Bottleneck check**: harness overhead per oracle ≤ 50 ms idle
 (barrier + setup); cross-host barrier latency ≤ 5 ms p99.
@@ -274,69 +301,107 @@ isolation strict (cross-host alloc returns 0).
 
 ---
 
-## Phase 5 — Message channel **fully wired** (5 message types + receivers)
+## Phase 5 (split) — Message channel **fully wired** (all 5 message types + receivers)
 
-**Goal**: NOT a "type definition + counter stub" phase like the
-first attempt. Phase 5 lands all 5 message types AND their
-receiver-side handler logic. After this phase, Phase 6/7/8 only
-attach the sender side at the KV API entry points; receivers don't
-get rewritten later.
+Original Phase 5 had ~1150 LOC across types + ForwardStaging +
+receivers + tests, exceeding the 800 LOC review-friendly threshold.
+Per Q4 user decision (2026-05-02), Phase 5 is **predetermined to
+split** into 5a (metadata-only messages) and 5b (value-carrying
+messages). 5a's invalidate/register/evict are simpler
+metadata-update handlers; 5b's write-forward + response require
+ForwardStaging + cross-cacheline value transfer and benefit from
+isolation.
 
-**Spec coverage**: I11, §III ForwardStaging, §XII O3 no inline
-payload, §VI sync rules.
+### Phase 5a — metadata-only messages (invalidate / register / evict)
+
+**Goal**: land 3 of 5 message types with full receiver logic; no
+value-carrying messages yet.
+
+**Spec coverage**: I9 read side (OP_CACHE_REGISTER), I9 invalidate
+(OP_INVALIDATE), §VI sync rules.
 
 **Code changes**:
 
 - MODIFIED `src/cxl_per_host_ring.h`: rename `PerHostInvalEntry` →
   `PerHostMessage`; entry size stays 64 B (preserve cacheline
-  discipline); union-by-`op_type` with fields for the 5 types.
-
-- NEW `src/cxl_forward_staging.{h,cc}`: per-host ForwardStaging
-  buffer on CXL (1 MB / host); host-local DRAM free-list metadata;
-  alloc/free API.
-
-- MODIFIED `src/cxl_kv_ops_A.{h,cc}` (the protocol-A class —
-  refactored from the old `_v2` filename via a separate cleanup
-  commit at the start of this phase) — add `receiver_loop_full()`:
+  discipline); union-by-`op_type` with fields for op_type ∈
+  {OP_INVALIDATE, OP_CACHE_REGISTER, OP_CACHE_EVICT, OP_RESPONSE};
+  reserve op_type values for OP_WRITE_FORWARD (Phase 5b).
+- MODIFIED `src/cxl_kv_ops_A.{h,cc}` (refactored from the old
+  `_v2` filename via a separate cleanup commit at the start of
+  Phase 5a) — add `receiver_loop_metadata()`:
   - **OP_INVALIDATE handler**: take owner-side directory lock for
     target slot; `cache_pool_set_stale(key)`; clear `sharer_bitmap`
     bit for sender host; release; reply OP_RESPONSE.
   - **OP_CACHE_REGISTER handler**: take directory lock; set
     `sharer_bitmap` bit for sender; bump `version`; copy current
-    value pointer; release; reply OP_RESPONSE with value pointer.
+    value pointer (CXL pointer, no value bytes inline); release;
+    reply OP_RESPONSE with pointer.
   - **OP_CACHE_EVICT handler**: take directory lock; clear
     `sharer_bitmap` bit; if bitmap == 0 set state INVALID; release;
     reply OP_RESPONSE.
-  - **OP_WRITE_FORWARD handler**: fetch value from forwarder's
-    ForwardStaging via `clflushopt + mfence + load`; call shared
-    `execute_write_local()` (introduced as a static helper, used by
-    both owner-self and forward paths); reply OP_RESPONSE.
   - **OP_RESPONSE handler**: sender side; mark request slot ready.
 
-- NEW `tests/n11n_full_dispatch_test.cc`: for each of 5 op types,
-  inject 1k from g3 → g4, verify (a) g4 receiver counter == 1k,
-  (b) g4 directory state changed correctly per op type,
-  (c) g3 receives matching OP_RESPONSE within timeout.
-
-- NEW `tests/forward_staging_roundtrip_test.cc`: 100k roundtrips at
-  value sizes {256, 512, 1024} B; zero byte mismatch; zero staging
-  slot leak; p99 ≤ 6 µs.
+- NEW `tests/n11n_metadata_dispatch_test.cc`: for each of 3 op
+  types (invalidate, register, evict), inject 1k from g3 → g4,
+  verify (a) g4 receiver counter == 1k, (b) g4 directory state
+  changed correctly per op type, (c) g3 receives matching
+  OP_RESPONSE within timeout.
 
 **Oracles affected**:
-- All oracles that need cross-host messaging (`o_i9`, `o_i10`,
-  `o_i11`) become *runnable* but most still fail at the KV-API
-  level (no API path yet uses them).
-- `o_i11_xhost_forward_observable`: RED → GREEN (the message-
-  channel-level test passes; KV-API-level tests still fail until
-  Phase 8).
+- `o_i11_xhost_forward_observable`: RED → GREEN at the message-
+  channel level (forward semantic at KV API still RED; flips to
+  full GREEN at Phase 8). The oracle measures CXL atomic
+  visibility, which is exercised by all 4 message types here.
 
-**Bottleneck check**: message round-trip p50 ≤ 3 µs (sender enqueue
-+ flush 200 ns + receiver consume 1.5 µs + response 1.3 µs).
+**Bottleneck check**: message round-trip p50 ≤ 3 µs.
 
-**Why this phase changed from the first attempt**: original Phase 5
-defined types but receivers were counter stubs. Phases 6/7/8 each
-wrote `// TODO future phase` for receiver behavior. By landing the
-receivers fully here, no later phase can introduce a TODO chain.
+### Phase 5b — value-carrying messages (write_forward + ForwardStaging)
+
+**Goal**: land OP_WRITE_FORWARD + ForwardStaging buffer
+infrastructure; receiver-side handler complete; sender-side
+plumbing not yet attached to KV API (that's Phase 8).
+
+**Spec coverage**: I11, §III ForwardStaging, §XII O3 no inline
+payload, §VI-A.bis MESSAGE PAYLOAD POLICY.
+
+**Code changes**:
+
+- NEW `src/cxl_forward_staging.{h,cc}`: per-host ForwardStaging
+  buffer on CXL (1 MB / host); host-local DRAM free-list metadata;
+  alloc/free API.
+- MODIFIED `src/cxl_per_host_ring.h`: activate OP_WRITE_FORWARD
+  union variant (reserved in 5a) — `staging_ptr`, `value_size`,
+  `inner_op_type` fields.
+- MODIFIED `src/cxl_kv_ops_A.cc::receiver_loop_metadata()` →
+  `receiver_loop_full()`:
+  - **OP_WRITE_FORWARD handler**: fetch value from forwarder's
+    ForwardStaging via `clflushopt + mfence + load`; call shared
+    `execute_write_local()` (introduced as a static helper, used
+    by both owner-self and forward paths); reply OP_RESPONSE
+    (status only, no value bytes per §VI-A.bis MESSAGE PAYLOAD
+    POLICY).
+
+- NEW `tests/forward_staging_roundtrip_test.cc`: 100k roundtrips
+  at value sizes {256, 512, 1024} B; zero byte mismatch; zero
+  staging slot leak; p99 ≤ 6 µs.
+- NEW `tests/n11n_write_forward_dispatch_test.cc`: 1k
+  OP_WRITE_FORWARD from g3 → g4 with random value bytes; g4
+  receiver-side `execute_write_local()` produces correct
+  byte-equal state; g3 receives OP_RESPONSE.
+
+**Oracles affected**: none flip yet at the protocol level (the
+sender side isn't wired to KV API until Phase 8). The 5a-flipped
+`o_i11_xhost_forward_observable` must stay GREEN.
+
+**Bottleneck check**: write-forward roundtrip p50 ≤ 6 µs at 256 B
+value; ForwardStaging alloc latency ≤ 80 ns uncontended.
+
+**Why Phase 5 split was predetermined**: per Q4 user decision
+2026-05-02. Predetermined split eliminates the "decide at runtime
+based on LOC" judgment call (which iter-2A taught us tends to
+default to "don't split" once you're already mid-stream). 5a + 5b
+also give two natural commit/PR boundaries for review.
 
 ---
 
@@ -354,7 +419,23 @@ CPU coherence domain; std::atomic instructions update CPU cache
 only, never the device. Precedent: iter-4A first-attempt Phase 10
 ring->tail bug, ~16,000× perf loss."
 
+**Two-layer defense against AP16** (per Q3 user decision 2026-05-02).
+Single-layer "≤ 5 instructions between atomic store and flush_line"
+checks were rejected as too brittle (compiler reorders, inlining
+varies by `-O` level, false-positive prone). Replaced with:
+
+- **Macroscopic black-box oracle** (Layer 1, runtime): the
+  `o_ap16_cxl_atomic_flush_paired` oracle from Phase 0.5. Stresses
+  1M `atomic.store()` against a CXL-resident ring under
+  `perf stat -e uncore_imc/cas_count_write/`; PASS iff PCIe write
+  count ∈ [0.95M, 1.05M]. Black-box, no per-instruction inspection,
+  no compiler-reorder false positives.
+- **Microscopic manual audit table** (Layer 2, review-time):
+  `docs/iters/iter4A_cxl_atomic_audit.md` lists every CXL-resident
+  atomic site for human reviewer sign-off.
+
 **Code changes**:
+
 - NEW `docs/iters/iter4A_cxl_atomic_audit.md`: table of every
   `std::atomic` / `fetch_add` / `compare_exchange*` / `.store(` /
   `.load(` in `src/cxl_*.{h,cc}`, classified:
@@ -362,18 +443,25 @@ ring->tail bug, ~16,000× perf loss."
   - **CXL-resident** (rings, ForwardStaging metadata, anything in
     `/dev/dax0.0` region): must have flush_line + sfence pair.
   - Each row: `file:line | resident | producer flush OK | consumer
-    flush OK | fix commit`.
-- ADD entry AP16 to `src/cxl_kv_ops_A.h` H1 trip wire: optional
-  debug-build instrumentation that crashes if a CXL-resident
-  atomic is written without a `flush_line` within N instructions
-  (pragmatic heuristic — see open question Q4).
+    flush OK | fix commit | reviewer sign-off`.
+
+- NEW `src/perf_counter_helper.{h,cc}`: thin wrapper around
+  `perf_event_open(2)` + `uncore_imc/cas_count_{read,write}/` to
+  measure dax-region PCIe traffic over a callable; used by both
+  the `o_ap16` oracle and the `o_i9_fast_path_no_cxl_access`
+  oracle.
+
+- ADD AP16 entry to `design_goals.md §VII` and to
+  `src/cxl_kv_ops_A.h` H1 trip wire (debug-build runtime).
 
 **Oracles affected**:
 - `o_ap16_cxl_atomic_flush_paired`: RED → GREEN (only after audit
-  table is 100 % OK and instrumentation is enabled in debug build).
+  table is 100 % OK AND macroscopic stress oracle passes).
 
-**Bottleneck check**: audit instrumentation in debug build ≤ 5 %
-runtime overhead (release build no overhead).
+**Bottleneck check**: perf-counter helper overhead per measurement
+≤ 50 µs (one syscall + counter read); release build has zero
+overhead (helper is conditionally compiled into oracle binary
+only).
 
 ---
 
@@ -439,6 +527,11 @@ directory's `sharer_bitmap`. Phase 7 is purely the sender side.
 - `o_i9_concurrent_read_write_no_stale`: RED → GREEN. **This is
   the oracle iter-4A's first attempt skipped.** It must be GREEN
   at this phase or Phase 7 is not complete.
+- `o_i9_fast_path_no_cxl_access`: RED → GREEN. Validates that the
+  read fast path (cache hit) does NOT fall through to any CXL
+  atomic load. Measured by `measure_pcie_reads_from_dax(fn)` ≤ 1k
+  during 100k cache-hit reads. Catches accidental fall-through
+  (e.g., reading `directory.version` per op).
 
 **Bottleneck check**: read fast path ≤ 60 ns p50; cross-host miss
 (register round-trip) ≤ 4 µs p99.
@@ -576,20 +669,21 @@ gate as `docs/scaling_ycsb_spec.md §13`.
 The single source of truth for "which phase brings which oracle to
 GREEN":
 
-| Oracle | P0.5 | P1 | P2 | P3 | P4 | P5 | P5.5 | P6 | P7 | P8 | P9 | P10 |
-|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `o_i1_recover_from_cxl` | R | R | R | R | R | R | R | R | R | **G** | G | G |
-| `o_i2_owner_routing_uniform` | R | **G** | G | G | G | G | G | G | G | G | G | G |
-| `o_i2_xhost_writes_use_forward` | R | R | R | R | R | R | R | R | R | **G** | G | G |
-| `o_i3_cache_map_shared` | R | R | R | **G** | G | G | G | G | G | G | G | G |
-| `o_i4_lazy_not_physical` | R | R | R | **G** | G | G | G | G | G | G | G | G |
-| `o_i5_per_slot_no_false_share` | R | R | **G** | G | G | G | G | G | G | G | G | G |
-| `o_i8_no_lfm_in_protocol_a` | R | R | R | R | R | R | R | **G** | G | G | G | G |
-| **`o_i9_concurrent_read_write_no_stale`** | R | R | R | R | R | R | R | R | **G** | G | G | G |
-| `o_i10_writer_durable_after_return` | R | R | R | R | R | R | R | **G** | G | G | G | G |
-| `o_i11_xhost_forward_observable` | R | R | R | R | R | **G** | G | G | G | G | G | G |
-| `o_i12_no_oplog_calls` | R | R | R | R | R | R | R | **G** | G | G | G | G |
-| `o_ap16_cxl_atomic_flush_paired` | R | R | R | R | R | R | **G** | G | G | G | G | G |
+| Oracle | P0.5 | P1 | P2 | P3 | P4 | P5a | P5b | P5.5 | P6 | P7 | P8 | P9 | P10 |
+|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `o_i1_recover_from_cxl` | R | R | R | R | R | R | R | R | R | R | **G** | G | G |
+| `o_i2_owner_routing_uniform` | R | **G** | G | G | G | G | G | G | G | G | G | G | G |
+| `o_i2_xhost_writes_use_forward` | R | R | R | R | R | R | R | R | R | R | **G** | G | G |
+| `o_i3_cache_map_shared` | R | R | R | **G** | G | G | G | G | G | G | G | G | G |
+| `o_i4_lazy_not_physical` | R | R | R | **G** | G | G | G | G | G | G | G | G | G |
+| `o_i5_per_slot_no_false_share` | R | R | **G** | G | G | G | G | G | G | G | G | G | G |
+| `o_i8_no_lfm_in_protocol_a` | R | R | R | R | R | R | R | R | **G** | G | G | G | G |
+| **`o_i9_concurrent_read_write_no_stale`** | R | R | R | R | R | R | R | R | R | **G** | G | G | G |
+| **`o_i9_fast_path_no_cxl_access`** | R | R | R | R | R | R | R | R | R | **G** | G | G | G |
+| `o_i10_writer_durable_after_return` | R | R | R | R | R | R | R | R | **G** | G | G | G | G |
+| `o_i11_xhost_forward_observable` | R | R | R | R | R | **G** | G | G | G | G | G | G | G |
+| `o_i12_no_oplog_calls` | R | R | R | R | R | R | R | R | **G** | G | G | G | G |
+| `o_ap16_cxl_atomic_flush_paired` | R | R | R | R | R | R | R | **G** | G | G | G | G | G |
 
 R = expected RED, G = expected GREEN, **bold** = the phase that
 flips this oracle. A phase is incomplete if its bold cells are not
@@ -646,11 +740,13 @@ failure mode.
 
 ## Quick stats
 
-- **12 phases** (was 10): adds Phase 0.5 (oracle blueprint) and
+- **13 phases** (was 10 in first attempt): adds Phase 0.5 (oracle
+  blueprint), Phase 5 split into 5a + 5b (predetermined per Q4),
   Phase 5.5 (atomic audit).
-- **~5500 LOC delta** (was ~4200): adds ~600 LOC oracle harness +
-  oracle bodies, ~700 LOC Phase 5 expansion (full receivers).
-- **12 invariant oracles** (was 0 invariant-specific tests, only
+- **~5680 LOC delta** (was ~4200): adds ~630 LOC oracle harness +
+  13 oracle bodies + perf-counter helper; ~700 LOC Phase 5 expansion
+  (full receivers across 5a + 5b).
+- **13 invariant oracles** (was 0 invariant-specific tests, only
   hash-diff). Hash-diff retained as defensive cross-check.
 - **400-cell sweep** (was 4 in first attempt) — gated by §13.
 
@@ -679,51 +775,86 @@ it is wasted. Items that survive into the REPLAN:
 - [x] `src/cxl_kv_blockpool` (Phase 4) — likely usable as is.
 - [x] `src/cxl_per_host_ring.h` extended for 5 message types
   (Phase 5 partial) — receiver bodies must be EXTENDED to real
-  handlers in REPLAN Phase 5; the type union and message struct
-  layout survive.
+  handlers in REPLAN Phase 5a (3 metadata types) + 5b
+  (write_forward); the type union and message struct layout survive.
 - [x] `src/cxl_forward_ring.h` + ForwardRingMatrix
   (Phase 8 partial) — usable; Phase 5.5 audits its atomics; Phase 8
-  REPLAN re-uses ForwardStaging integration.
+  REPLAN re-uses ForwardStaging integration from Phase 5b.
 - [x] iter-4A first-attempt summary at
   `docs/iters/iter4A_summary_20260430.md` — preserved as
   cautionary precedent; do not delete.
 
 Items to **rewrite** in REPLAN:
 - `src/cxl_kv_ops_A_v2.{h,cc}` → renamed to `src/cxl_kv_ops_A.{h,cc}`
-  in REPLAN Phase 5 (cleanup commit). Logic in `execute_write_local`
-  rewritten in REPLAN Phase 6 (real invalidate); `search` rewritten
-  in REPLAN Phase 7 (real register).
+  in REPLAN Phase 5a (cleanup commit at start of phase). Logic in
+  `execute_write_local` rewritten in REPLAN Phase 6 (real
+  invalidate); `search` rewritten in REPLAN Phase 7 (real register).
 - All `// TODO Phase 7/8` and `// Phase 7 wires that` comments
   must be gone after REPLAN Phases 6/7.
 
 ---
 
-## Pending user review before Phase 0.5 starts
+## Decisions taken (2026-05-02)
 
-1. **Oracle list complete?** 12 oracles cover I1-I12 + AP16. Any
-   invariant or AP I missed that needs a dedicated oracle?
-   Specifically:
-   - AP1-AP12 are mostly anti-pattern *design* warnings rather than
-     runtime-detectable invariants. Should AP3 (no per-worker
-     private cache) and AP10 (no LFM) get their own oracles?
-     Currently AP10 is folded into `o_i8_no_lfm_in_protocol_a`.
+The 5 open questions raised in the first draft of the REPLAN have
+been resolved by user direction; recorded here for later
+cross-referencing.
 
-2. **`o_i1_recover_from_cxl`**: requires kill-then-restart fixture.
-   Does the existing `crash-recover-test/` infrastructure support
-   that, or do I need to build the kill helper from scratch in
-   Phase 0.5?
+**Q1 — AP3 / AP10 dedicated oracle?** No. AP3 is structurally caught
+by `o_i3_cache_map_shared` (a per-worker private cache would make
+worker-1 miss worker-0's set_stale → oracle FAILs). AP10 is caught
+by `o_i8_no_lfm_in_protocol_a` (LFM acquire counter must be 0). The
+oracle table explicitly notes these coverage chains so future audits
+don't ask "where's the AP3 test."
 
-3. **`o_i10_writer_durable_after_return`**: needs SIGKILL right
-   after return + fork-restart-and-read sequence. Same question as
-   above.
+**Q2 — `o_i1` / `o_i10` SIGKILL+restart fixture**: implemented
+**self-contained** inside `tests/oracle_harness.h` as
+`kill_peer(host_id, pgrep_pattern)` + `restart_peer(host_id,
+binary_path, args, cookie)`. Does NOT reuse `crash-recover-test/`
+(which is RDMA-era client/server architecture and doesn't fit the
+unified-node iter-4A model).
 
-4. **`o_ap16` runtime instrumentation**: is the "5 instructions
-   between atomic store and flush_line" check too brittle (compiler
-   may reorder)? Alternative: count `flush_line` calls in unit time
-   and cross-check against `atomic_store` calls in CXL region —
-   looser but no false positives.
+**Q3 — `o_ap16` runtime instrumentation**: rejected the brittle "≤ 5
+instructions between atomic store and flush_line" check. Replaced
+with a **two-layer defense**:
+- Layer 1 (macroscopic, runtime, oracle-style): the `o_ap16` oracle
+  uses `perf stat -e uncore_imc/cas_count_write/` over a 1M-store
+  stress test against a CXL-resident ring; PCIe-write count ∈
+  [0.95M, 1.05M] = PASS. Black-box, no compiler-reorder
+  false-positives.
+- Layer 2 (microscopic, review-time, audit-style): Phase 5.5's
+  `iter4A_cxl_atomic_audit.md` lists every CXL-resident atomic site
+  for human reviewer sign-off.
 
-5. **Phase 5 split**: should I commit to 5a/5b split up-front, or
-   keep the conditional split per the risk register?
+**Q4 — Phase 5 split**: predetermined into **5a (metadata-only:
+invalidate / register / evict)** + **5b (value-carrying:
+write_forward + ForwardStaging)**. No "decide at runtime" judgment
+call — that pattern historically defaults to "don't split" once
+mid-stream.
 
-After your confirmation I will start Phase 0.5.
+**Q5 — oracle count**: 12 → **13**, adding
+`o_i9_fast_path_no_cxl_access` to cover §I9's *performance* half
+(the existing `o_i9_concurrent_read_write_no_stale` covers only the
+race-correctness half). The new oracle uses
+`measure_pcie_reads_from_dax(fn)` to verify the read fast path does
+not fall through to any CXL atomic.
+
+---
+
+## Ready to start Phase 0.5
+
+All structural decisions resolved. Phase 0.5 deliverable list:
+
+1. `tests/oracle_harness.h` (~230 LOC; includes kill_peer /
+   restart_peer + perf-counter helper).
+2. `tests/protocol_a_invariants.cc` (~430 LOC; 13 oracle bodies).
+3. `tests/CMakeLists.txt` entry for `protocol_a_invariants` +
+   `protocol_a_invariants_tsan`.
+4. `scripts/run_invariant_oracles.sh` cross-host driver.
+5. `src/perf_counter_helper.{h,cc}` (used by `o_ap16` and
+   `o_i9_fast_path_no_cxl_access`).
+6. Build on g3/g4; run `bash scripts/run_invariant_oracles.sh`;
+   confirm `13 oracles, 0 PASS, 13 FAIL` reported.
+
+Phase 0.5 commit prefix: `[iter4A-blueprint][I1..I12][AP3][AP10][AP16]`
+(per H4 hook, multiple I/AP refs in single commit OK).
