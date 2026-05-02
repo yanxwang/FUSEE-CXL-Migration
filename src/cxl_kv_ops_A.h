@@ -19,6 +19,7 @@
 #include "cxl_directory.h"
 #include "cxl_forward_ring.h"
 #include "cxl_hashtable.h"
+#include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_sharding.h"
@@ -45,15 +46,25 @@ class CxlKvStoreA {
              ShardingTable *st, SlotDirectory *dir, KvCachePool *cache,
              BlockFreeList *freelist, CxlKvBlockPool *pool);
 
-  // Phase 8: wire cross-host write forward / OP_CACHE_REGISTER /
-  // OP_INVALIDATE via ForwardRing in CXL. `fr` lives in CXL
-  // (init_region=true on host 0 zeroes the matrix). Spawns one
-  // responder thread per host on the primary client.
+  // Phase 8: wire cross-host write forward / OP_CACHE_REGISTER via
+  // ForwardRing in CXL. `fr` lives in CXL (init_region=true on host
+  // 0 zeroes the matrix). Spawns one responder thread per host on
+  // the primary client.
   int enable_forward(ForwardRingMatrix *fr, bool init_region,
                      bool spawn_responder);
 
-  // Stop the responder thread (call before destroying CXL region).
+  // iter-5A Phase 4: wire the SEPARATE invalidate channel. `ir` lives
+  // in CXL (init_region=true on host 0 zeroes the matrix). Spawns one
+  // cache_dispatcher thread per host on the primary client. Must be
+  // called AFTER enable_forward (the writer-side broadcast in
+  // execute_write_local needs both fr_ and ir_ wired).
+  int enable_invalidate(InvalRingMatrix *ir, bool init_region,
+                        bool spawn_dispatcher);
+
+  // Stop the responder + dispatcher threads (call before destroying
+  // CXL region).
   void stop_responder();
+  void stop_dispatcher();
 
   // Public KV API. The value parameter is u64 for source-compat with
   // existing tests / runner. Internally each value occupies a full
@@ -80,8 +91,11 @@ class CxlKvStoreA {
 
   // Cross-host helpers (Phase 7 + 8). All use ForwardRingMatrix slots.
   int forward_to_owner(uint32_t owner, uint64_t key, uint64_t value, int op_kind);
-  int forward_invalidate(uint32_t target_host, uint64_t key);
   int forward_cache_register(uint32_t owner, uint64_t key, uint64_t *out_value);
+
+  // iter-5A: invalidate goes on its own channel (InvalRing) rather
+  // than ForwardRing, to break the responder-context circular wait.
+  int send_invalidate(uint32_t target_host, uint64_t key);
 
   // Responder dispatch (one entry per cycle).
   void responder_handle(ForwardEntry *e);
@@ -103,16 +117,24 @@ class CxlKvStoreA {
   std::atomic<bool> responder_stop_{false};
   std::atomic<uint64_t> req_op_counter_{0};
 
+  // iter-5A Phase 4: cache invalidate channel + dispatcher.
+  InvalRingMatrix *ir_ = nullptr;
+  std::thread cache_dispatcher_;
+  std::atomic<bool> dispatcher_stop_{false};
+  std::atomic<uint64_t> inval_op_counter_{0};
+
   void responder_loop();
+  void cache_dispatcher_loop();
 };
 
-// op_kind values used on ForwardEntry::op_kind. The first three match
-// the long-standing UPDATE/INSERT/DELETE convention; iter-4A-redo
-// adds INVALIDATE and CACHE_REGISTER for cross-host coherence.
+// op_kind values used on ForwardEntry::op_kind. UPDATE/INSERT/DELETE
+// flow through the responder; CACHE_REGISTER also flows through the
+// responder (request side). INVALIDATE has its own channel
+// (InvalRing) per iter-5A Phase 4 — it is NOT carried on ForwardEntry
+// any more.
 constexpr uint8_t kOpKindUpdate        = 0;
 constexpr uint8_t kOpKindInsert        = 1;
 constexpr uint8_t kOpKindDelete        = 2;
-constexpr uint8_t kOpKindInvalidate    = 3;  // writer -> sharer
 constexpr uint8_t kOpKindCacheRegister = 4;  // sharer -> owner; resp value = u64
 
 }  // namespace fusee

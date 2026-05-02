@@ -22,6 +22,7 @@
 #include "cxl_directory.h"
 #include "cxl_forward_ring.h"
 #include "cxl_hashtable.h"
+#include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_kv_ops_A.h"
@@ -176,10 +177,11 @@ int main(int argc, char **argv) {
   std::size_t pool_bytes =
       CxlKvBlockPool::bytes_for((uint32_t)want_blocks, kBlockSize, num_hosts);
   std::size_t fr_bytes = forward_ring_matrix_bytes();
+  std::size_t ir_bytes = inval_ring_matrix_bytes();
   std::size_t stats_bytes = sizeof(WorkerStats) * 2 * kMaxClients;
   std::size_t header_bytes = 4096;
   std::size_t total = header_bytes + bucket_bytes + pool_bytes + fr_bytes
-                    + stats_bytes + 4096;
+                    + ir_bytes + stats_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
   CXLRegion r{};
@@ -198,8 +200,9 @@ int main(int argc, char **argv) {
       reinterpret_cast<char *>(r.base) + header_bytes);
   void *pool_mem = reinterpret_cast<char *>(buckets) + bucket_bytes;
   void *fr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
+  void *ir_mem = reinterpret_cast<char *>(fr_mem) + fr_bytes;
   WorkerStats *stats = reinterpret_cast<WorkerStats *>(
-      reinterpret_cast<char *>(fr_mem) + fr_bytes);
+      reinterpret_cast<char *>(ir_mem) + ir_bytes);
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -271,6 +274,10 @@ int main(int argc, char **argv) {
     if (store.enable_forward(fr, /*init=*/true, /*spawn_responder=*/true) != 0) {
       fprintf(stderr, "primary enable_forward failed\n"); return 1;
     }
+    InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
+    if (store.enable_invalidate(ir, /*init=*/true, /*spawn_dispatcher=*/true) != 0) {
+      fprintf(stderr, "primary enable_invalidate failed\n"); return 1;
+    }
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
     flush_line(&hdr->init_done); store_fence();
@@ -292,10 +299,15 @@ int main(int argc, char **argv) {
       return 1;
     }
     if (host_id == 1 && client_id == 0) {
-      // host 1 primary: enable forward (no init), spawn responder.
+      // host 1 primary: enable forward + invalidate (no init), spawn
+      // responder + dispatcher.
       ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
       if (store.enable_forward(fr, /*init=*/false, /*spawn_responder=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_forward failed\n"); return 1;
+      }
+      InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
+      if (store.enable_invalidate(ir, /*init=*/false, /*spawn_dispatcher=*/true) != 0) {
+        fprintf(stderr, "[h1 primary] enable_invalidate failed\n"); return 1;
       }
       uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
       CACHELINE_STORE(&hdr->init_done, cur | 0x2ULL);
@@ -450,6 +462,7 @@ int main(int argc, char **argv) {
   }
 
   store.stop_responder();
+  store.stop_dispatcher();
 
   if (is_primary_client) {
     flush_region(stats, stats_bytes); full_fence();

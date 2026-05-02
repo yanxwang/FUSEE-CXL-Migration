@@ -161,35 +161,62 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
 
   // Step 4: invalidate sharers \ {self}. spec §I9 / I10.
   //
-  // ITER-4A-REDO DEADLOCK FIX (2026-05-02): when execute_write_local
-  // runs from the responder thread context, calling forward_invalidate
-  // sends a message that the peer responder must ACK. If the peer
-  // responder is itself in execute_write_local (which it might be if
-  // we're handling a forward FROM that peer), we deadlock.
+  // iter-5A Phase 4: broadcast OP_INVALIDATE on the SEPARATE
+  // InvalRing channel and wait for ACK from each non-self sharer.
+  // The cache_dispatcher_loop on each peer host drains InvalRing
+  // independently of its responder, so no circular wait can form.
+  // (See cxl_inval_ring.h header comment + RAP in iter5A_summary
+  // for the deadlock-freedom argument.)
   //
-  // Fix: skip the synchronous broadcast. We rely on the caller (worker
-  // path only — not responder path) to broadcast invalidates. Currently
-  // disabled entirely for the deadline-scoped sweep; iter-5A first
-  // task = correctly thread the invalidate through a separate channel
-  // (proper §I9 strict-A semantics).
-  //
-  // Effect: peer-host caches may contain stale values until the cache
-  // entry is evicted by LRU or refreshed by an explicit re-search.
-  // For the YCSB workload with cache-on, strict-A is violated under
-  // concurrent peer-host read+write race (untested by hash-diff alone).
-  (void)de;
+  // For INSERT no prior sharers exist (we're the only host ever to
+  // touch the slot), so skip. UPDATE/DELETE: scan bitmap.
+  uint8_t bitmap = de->sharer_bitmap;
+  if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
+    for (int h = 0; h < num_hosts_; h++) {
+      if (h == host_id_) continue;
+      if ((bitmap & (1u << h)) == 0) continue;
+      send_invalidate((uint32_t)h, key);
+    }
+  }
 
   // Step 5: CoW publish.
-  // ITER-4A-REDO DEADLINE-SCOPED (2026-05-02): use inline u64 in slot
-  // (size_class=0). Blockpool wire is in attach() and search() but the
-  // YCSB sweep path stores u64 inline to avoid pool exhaustion at
-  // 50k+ UPDATEs (workload-a hot-bucket Zipf creates higher alloc
-  // rate than expected). KV size dimension {256, 512, 1024} requires
-  // blockpool; deferred to iter-5A.
+  //
+  // iter-5A Phase 1: blockpool path RESTORED with FUSEE_TRACE_BLOCKPOOL=1
+  // instrumentation to diagnose the iter-4A-redo hang at workload-a 50k+.
+  // Inline u64 path retained as runtime-fallback when pool_ == nullptr
+  // (legacy tests that didn't supply pool, or ad-hoc benchmarks that
+  // want the lower per-op cost).
   if (op_kind == kOpKindDelete) {
     retire_slot(slot);
-  } else {
+  } else if (pool_ == nullptr) {
+    // Inline u64 fallback (Protocol A degenerate mode).
     publish_slot_cow(slot, key, new_value);
+  } else {
+    // Full blockpool CoW path.
+    uint64_t blk_off = pool_->alloc();
+    static thread_local int trace = -1;
+    if (trace == -1) {
+      const char *e = getenv("FUSEE_TRACE_BLOCKPOOL");
+      trace = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (blk_off == 0) {
+      if (trace) {
+        fprintf(stderr, "[A:trace h%d] blockpool EXHAUSTED key=%lx op=%d\n",
+                host_id_, key, op_kind);
+      }
+      slot_directory_unlock(de);
+      return -4;
+    }
+    pool_->write(blk_off, &new_value, sizeof(new_value));
+    uint8_t fp = key_fingerprint(key);
+    uint8_t sc = kSizeClassBlock256;
+    uint64_t encoded = cxl_slot_pack(blk_off, sc, fp);
+    if (trace) {
+      fprintf(stderr,
+              "[A:trace h%d] write key=%lx op=%d blk_off=%lx encoded=%lx\n",
+              host_id_, key, op_kind, blk_off, encoded);
+    }
+    publish_slot_cow(slot, key, encoded);
   }
 
   // Step 6: directory state.
@@ -306,8 +333,127 @@ int CxlKvStoreA::forward_to_owner(uint32_t owner, uint64_t key,
   return status;
 }
 
-int CxlKvStoreA::forward_invalidate(uint32_t target_host, uint64_t key) {
-  return forward_to_owner(target_host, key, 0, kOpKindInvalidate);
+// iter-5A: send OP_INVALIDATE on the SEPARATE InvalRing channel.
+// Producer reserves a slot via fetch_add(tail) + flush, writes the
+// key, and spins on resp_op_id (which the dispatcher_loop on the
+// target host will set). No interaction with ForwardRingMatrix.
+int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
+  if (!ir_) return -10;  // invalidate channel not enabled
+  InvalRing *ring = &ir_->rings[host_id_][target_host];
+  uint64_t my_op = inval_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+  uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
+                   (my_op & 0x00FFFFFFFFFFFFFFULL);
+
+  uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
+  flush_line((void *)&ring->tail);
+  store_fence();
+  uint32_t slot = (uint32_t)(tpos % kInvalRingDepth);
+  InvalEntry *e = &ring->entries[slot];
+
+  // Wait for slot free.
+  for (;;) {
+    flush_line((void *)e);
+    full_fence();
+    if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+    __builtin_ia32_pause();
+  }
+
+  e->key = key;
+  e->resp_op_id.store(0, std::memory_order_relaxed);
+  e->status = 0;
+  std::atomic_thread_fence(std::memory_order_release);
+  e->req_op_id.store(op_id, std::memory_order_release);
+  flush_line((void *)e);
+  store_fence();
+
+  // Spin on response (200 ms budget — dispatcher should be fast).
+  const uint64_t kBudgetUs = 200000;
+  uint64_t spin_start_ns = 0;
+  for (;;) {
+    flush_line((void *)e);
+    full_fence();
+    uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
+    if (resp == op_id) {
+      int rc = e->status;
+      e->req_op_id.store(0, std::memory_order_release);
+      flush_line((void *)e);
+      store_fence();
+      return rc;
+    }
+    if (spin_start_ns == 0) {
+      timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+      spin_start_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    } else {
+      timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+      uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+      if ((now_ns - spin_start_ns) / 1000 > kBudgetUs) {
+        e->req_op_id.store(0, std::memory_order_release);
+        return -11;
+      }
+    }
+    __builtin_ia32_pause();
+  }
+}
+
+int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
+                                   bool spawn_dispatcher) {
+  if (!ir) return -1;
+  ir_ = ir;
+  if (init_region) {
+    std::memset(ir, 0, inval_ring_matrix_bytes());
+    flush_region(ir, inval_ring_matrix_bytes());
+    store_fence();
+  }
+  if (spawn_dispatcher) {
+    dispatcher_stop_.store(false, std::memory_order_relaxed);
+    cache_dispatcher_ = std::thread([this]() { this->cache_dispatcher_loop(); });
+  }
+  return 0;
+}
+
+void CxlKvStoreA::stop_dispatcher() {
+  if (!cache_dispatcher_.joinable()) return;
+  dispatcher_stop_.store(true, std::memory_order_release);
+  cache_dispatcher_.join();
+}
+
+// Dispatcher: drain incoming InvalRing[*][me]; for each entry mark
+// the key stale in the local cache_pool and ACK via resp_op_id.
+// CRUCIALLY this thread does NOT acquire the directory spinlock and
+// does NOT call execute_write_local — so it cannot deadlock with
+// the responder thread that is processing forwards.
+void CxlKvStoreA::cache_dispatcher_loop() {
+  while (!dispatcher_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int src = 0; src < num_hosts_; src++) {
+      if (src == host_id_) continue;
+      InvalRing *ring = &ir_->rings[src][host_id_];
+      uint64_t head = ring->head;
+      flush_line((void *)&ring->tail);
+      full_fence();
+      uint64_t tail = ring->tail.load(std::memory_order_acquire);
+      while (head < tail) {
+        uint32_t slot = (uint32_t)(head % kInvalRingDepth);
+        InvalEntry *e = &ring->entries[slot];
+        flush_line((void *)e);
+        full_fence();
+        uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
+        if (op_id == 0) break;
+
+        // Lazy stale flag — no directory lock, no execute_write_local.
+        cache_pool_set_stale(cache_, e->key);
+        e->status = 0;
+        std::atomic_thread_fence(std::memory_order_release);
+        e->resp_op_id.store(op_id, std::memory_order_release);
+        flush_line((void *)e);
+        store_fence();
+        head++;
+        did_work = true;
+      }
+      ring->head = head;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
 }
 
 int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
@@ -372,12 +518,8 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
       e->status = rc;
       break;
     }
-    case kOpKindInvalidate: {
-      // Mark cache stale (lazy stale flag, AP4 — no physical delete).
-      cache_pool_set_stale(cache_, e->key);
-      e->status = 0;
-      break;
-    }
+    // iter-5A: kOpKindInvalidate REMOVED from ForwardEntry path —
+    // invalidates now flow on InvalRing handled by cache_dispatcher_loop.
     case kOpKindCacheRegister: {
       // §I9 register-then-fill: under directory lock, set sharer bit
       // for the requesting host, look up the value, return it.
@@ -413,9 +555,24 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
       uint64_t encoded = bucket->slots[found].value;
       slot_directory_unlock(de);
 
-      // Inline u64 path (deadline-scoped): the slot.value IS the u64.
-      e->value = encoded;
-      e->status = 0;
+      // Decode block ptr (size_class > 0) OR fall back to inline u64
+      // (size_class == 0, legacy/test mode with pool_ == nullptr).
+      uint8_t sc = cxl_slot_size_class(encoded);
+      if (sc == kSizeClassInline || pool_ == nullptr) {
+        e->value = encoded;
+        e->status = 0;
+      } else {
+        uint64_t blk_off = cxl_slot_blk_off(encoded);
+        if (blk_off != 0) {
+          uint64_t v = 0;
+          pool_->read(blk_off, &v, sizeof(v));
+          e->value = v;
+          e->status = 0;
+        } else {
+          e->value = 0;
+          e->status = -1;
+        }
+      }
       break;
     }
     default:
@@ -492,8 +649,16 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) {
   full_fence();
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (bucket->slots[s].key == key) {
-      // Inline u64 path: slot.value IS the u64 value.
-      uint64_t v = bucket->slots[s].value;
+      uint64_t encoded = bucket->slots[s].value;
+      uint8_t sc = cxl_slot_size_class(encoded);
+      uint64_t v;
+      if (sc == kSizeClassInline || pool_ == nullptr) {
+        v = encoded;
+      } else {
+        uint64_t blk_off = cxl_slot_blk_off(encoded);
+        v = 0;
+        if (blk_off != 0) pool_->read(blk_off, &v, sizeof(v));
+      }
       *out = v;
       cache_pool_insert(cache_, key,
                         reinterpret_cast<const uint8_t *>(&v),
