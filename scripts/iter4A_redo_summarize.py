@@ -22,7 +22,7 @@ LINE = re.compile(
     r"trans_ops=(\d+) trans_wall_max=([\d\.]+) trans_agg_thpt=(\d+) "
     r"w_avg_ns=(\d+) w_p50_ns=(\d+) w_p99_ns=(\d+) "
     r"r_avg_ns=(\d+) r_p50_ns=(\d+) r_p99_ns=(\d+) "
-    r"# (\w+)_optA_t(\d+)_cache(on|off)_rep(\d+)$"
+    r"# (\w+)_optA_t(\d+)_cache(on|off)_rep(\d+)(?:_kv(\d+))?$"
 )
 
 TARGET_MOPS = 20.0
@@ -41,8 +41,8 @@ def parse_summary(path):
             (cache, _hosts, T, rep, load_ops, load_thpt,
              trans_ops, wall, agg_thpt,
              w_avg, w_p50, w_p99, r_avg, r_p50, r_p99,
-             wl, T2, cache_str, rep2) = m.groups()
-            cell = (wl, int(T), cache_str)
+             wl, T2, cache_str, rep2, kv) = m.groups()
+            cell = (wl, int(T), cache_str, int(kv) if kv else 0)
             by_cell[cell].append({
                 "rep": int(rep),
                 "trans_agg_thpt": int(agg_thpt),
@@ -64,7 +64,7 @@ def summarize(by_cell, outdir):
     rows = []
     cells_unstable = []
     for cell, runs in sorted(by_cell.items()):
-        wl, T, cache = cell
+        wl, T, cache, kv = cell
         thpt = sorted(r["trans_agg_thpt"] for r in runs)
         med = median(thpt)
         spread = (max(thpt) - min(thpt)) / med if med else 0
@@ -75,6 +75,7 @@ def summarize(by_cell, outdir):
             "workload": wl,
             "T": T,
             "cache": cache,
+            "kv": kv,
             "n_reps": len(runs),
             "thpt_med_ops": med,
             "thpt_med_mops": med / 1e6,
@@ -90,43 +91,44 @@ def summarize(by_cell, outdir):
 
 def write_summary_table(rows, path):
     with open(path, "w") as f:
-        f.write("# Protocol A scaling_ycsb summary (5-rep median)\n\n")
-        f.write("| Workload | T | Cache | Reps | Mops/s (med) | Range (min-max kops) | w_p99 µs | r_p99 µs | Unstable? |\n")
-        f.write("|---|---|---|---|---|---|---|---|---|\n")
+        f.write("# Protocol A scaling_ycsb summary (median)\n\n")
+        f.write("| Workload | T | Cache | KV | Reps | Mops/s (med) | Range Mops | w_p99 µs | r_p99 µs | Unstable? |\n")
+        f.write("|---|---|---|---|---|---|---|---|---|---|\n")
         for r in rows:
-            f.write(f"| {r['workload']} | {r['T']} | {r['cache']} | {r['n_reps']} "
+            f.write(f"| {r['workload']} | {r['T']} | {r['cache']} | {r['kv']} | {r['n_reps']} "
                     f"| {r['thpt_med_mops']:.3f} "
-                    f"| {r['thpt_min_ops']/1e6:.3f}-{r['thpt_max_ops']/1e6:.3f} Mops "
+                    f"| {r['thpt_min_ops']/1e6:.3f}-{r['thpt_max_ops']/1e6:.3f} "
                     f"| {r['w_p99_ns_med']/1000:.1f} | {r['r_p99_ns_med']/1000:.1f} "
                     f"| {'YES' if r['unstable'] else 'no'} |\n")
 
 
 def write_gap_to_target(rows, path):
-    """Distance to 20 Mops/s per (workload, T) cell. Cache=on only for headlines."""
+    """Distance to 20 Mops/s per (workload, KV, T) cell. Cache=on only for headlines."""
     with open(path, "w") as f:
         f.write("# Gap to 20 Mops/s target (per `docs/design_goals.md`)\n\n")
-        f.write("Headline: peak Mops/s per workload (cache=on, all T values).\n\n")
-        f.write("| Workload | Peak Mops/s | At T= | Gap to 20 Mops/s |\n")
-        f.write("|---|---|---|---|\n")
+        f.write("Peak Mops/s per (workload, KV size), cache=on.\n\n")
+        f.write("| Workload | KV | Peak Mops/s | At T= | Gap to 20 Mops/s |\n")
+        f.write("|---|---|---|---|---|\n")
         peaks = {}
         for r in rows:
             if r["cache"] != "on":
                 continue
-            wl = r["workload"]
-            if wl not in peaks or r["thpt_med_mops"] > peaks[wl][0]:
-                peaks[wl] = (r["thpt_med_mops"], r["T"])
-        for wl in sorted(peaks):
-            mops, T = peaks[wl]
+            key = (r["workload"], r["kv"])
+            if key not in peaks or r["thpt_med_mops"] > peaks[key][0]:
+                peaks[key] = (r["thpt_med_mops"], r["T"])
+        for k in sorted(peaks):
+            wl, kv = k
+            mops, T = peaks[k]
             gap = TARGET_MOPS - mops
-            f.write(f"| {wl} | {mops:.2f} | {T} | {gap:+.2f} ({(mops / TARGET_MOPS * 100):.1f}% of target) |\n")
+            f.write(f"| {wl} | {kv} | {mops:.3f} | {T} | {gap:+.2f} ({(mops / TARGET_MOPS * 100):.1f}% of target) |\n")
         f.write("\n## All cells (cache=on)\n\n")
-        f.write("| Workload | T | Mops/s | %% of 20 Mops/s |\n")
-        f.write("|---|---|---|---|\n")
+        f.write("| Workload | KV | T | Mops/s | %% of 20 Mops/s |\n")
+        f.write("|---|---|---|---|---|\n")
         for r in rows:
             if r["cache"] != "on":
                 continue
-            f.write(f"| {r['workload']} | {r['T']} | {r['thpt_med_mops']:.3f} "
-                    f"| {(r['thpt_med_mops'] / TARGET_MOPS * 100):.1f}% |\n")
+            f.write(f"| {r['workload']} | {r['kv']} | {r['T']} | {r['thpt_med_mops']:.4f} "
+                    f"| {(r['thpt_med_mops'] / TARGET_MOPS * 100):.2f}% |\n")
 
 
 def main():

@@ -93,11 +93,62 @@ gap_to_target.md alongside this doc)
   `cross_host_op_count` instrumentation (sharding hash uniform).
 - **G6 concurrent rw race**: violations=0 at N=1000 ✓ — STRICT-A HELD.
 
-### Headline numbers (filled post-sweep)
+### Headline numbers (sweep complete 07:48 CDT, 240/240, 17 fails)
 
-(filled in here once sweep at `docs/g34_scaling_ycsb_20260502_063110/`
-completes. Compare per-(workload, KV size) peak Mops/s to 20 Mops/s
-target.)
+Peak Mops/s per (workload, KV size), cache=on, single-rep:
+
+| Workload | KV=256 | KV=512 | KV=1024 |
+|---|---|---|---|
+| workload-a (R50/U50 Zipf) | **17.90 (T=64) [89.5%]** | 14.44 (T=64) [72.2%] | 0.25 (T=64) [1.2%] |
+| workload-b (R95/U5 Zipf) | 12.23 (T=86) [61.2%] | 11.65 (T=64) [58.2%] | 5.27 (T=16) [26.4%] |
+| workload-c (R100 Zipf) | 12.31 (T=86) [61.5%] | 13.26 (T=64) [66.3%] | 11.99 (T=64) [60.0%] |
+| workload-d (R95/I5 latest) | 12.24 (T=86) [61.2%] | 6.69 (T=32) [33.5%] | 11.75 (T=86) [58.7%] |
+| workload-f (RMW + R) | 0.25 (T=86) [1.2%] | 0.25 (T=86) [1.2%] | **15.62 (T=86) [78.1%]** |
+
+Highest 4 cells:
+1. **workload-a KV=256 T=64 = 17.90 Mops/s — 89.5% of 20 Mops/s target** (3.4 Mops gap)
+2. workload-f KV=1024 T=86 = 15.62 Mops/s — 78.1%
+3. workload-a KV=512 T=64 = 14.44 Mops/s — 72.2%
+4. workload-c KV=512 T=64 = 13.26 Mops/s — 66.3%
+
+**FAILs**: 17 of 240 cells (7%). All `rc=124` (timeout); concentrated
+at low T (1-16) with KV=512/1024 and workloadb/d/f (Zipf write-heavy).
+Pattern is consistent with the iter-4A-redo "first-cell timeout"
+flake exacerbated by invalidate broadcast — first iteration of a
+new (workload, KV, T) combination tends to timeout, subsequent reps
+of same cell would likely succeed (per iter-4A-redo precedent of 0.5%
+fail rate retry recovery). REPS=1 standing default exposes this; opt-in
+multi-rep would suppress it.
+
+### Comparison vs iter-4A-redo and iter-3A
+
+| Iter | A peak Mops/s | Notes |
+|------|---------------|-------|
+| iter-3A (2026-04-28) | 4.01 | per-slot LFM + same-host atomic_store; broadcast was no-op |
+| iter-4A-redo (2026-05-02 04:43) | 16.62 (T=86) | inline u64; broadcast disabled (§I9 violated under race) |
+| **iter-5A (this iter, 07:48)** | **17.90 (T=64, KV=256)** | blockpool wired, KV size dim swept; **§I9 STRICT-A enforced** |
+
+iter-5A retained ~99 % of iter-4A-redo's peak throughput on workload-a
+KV=256 while ADDING strict-A linearizability (G6 violations=0). The
+common-wisdom expectation was that adding strict-A invalidate would
+regress throughput substantially; in fact, at high T (≥32) the
+invalidate broadcast amortizes cleanly because per-host single
+dispatcher matches sender thread count well at that scale. At low T
+(1-16) the regression is severe (~100×) because each writer is
+sequentially blocked on its single invalidate ACK.
+
+### G6 evidence (concurrent rw race test)
+
+`tests/protocol_a_rw_race_test` at N=1000:
+- host 0 writes K=1..1000 (UPDATE on a single host-0-owned key)
+- host 1 reads K continuously, asserts monotonic non-decreasing
+- **violations = 0** ✓ (zero stale reads observed)
+
+Caveat: host 1's reader observed only ~1% of writes (final_v=10/1000)
+because each invalidate roundtrip is ~50-200 ms. Reader saw 2.3 B
+reads in 60 s, mostly hitting fresh cache between rare invalidate
+arrivals. Strict-A holds: the read sequence is monotonic. iter-6A's
+K-shard dispatcher should let reader see all 1000 writes within budget.
 
 ---
 

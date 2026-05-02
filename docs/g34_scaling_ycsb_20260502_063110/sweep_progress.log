@@ -1,1 +1,14 @@
 [sweep] total runs planned: 240
+[sweep] 20/240 done (2 fails); elapsed 643s
+[sweep] 40/240 done (2 fails); elapsed 869s
+[sweep] 60/240 done (2 fails); elapsed 1077s
+[sweep] 80/240 done (5 fails); elapsed 1711s
+[sweep] 100/240 done (6 fails); elapsed 1955s
+[sweep] 120/240 done (7 fails); elapsed 2161s
+[sweep] 140/240 done (9 fails); elapsed 2464s
+[sweep] 160/240 done (9 fails); elapsed 2627s
+[sweep] 180/240 done (10 fails); elapsed 2848s
+[sweep] 200/240 done (14 fails); elapsed 3410s
+[sweep] 220/240 done (16 fails); elapsed 3873s
+[sweep] 240/240 done (17 fails); elapsed 4392s
+[sweep] DONE 240 runs, 17 fails, total 4392s
