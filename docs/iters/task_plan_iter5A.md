@@ -41,13 +41,21 @@ verification.
 
 ## Phase 1: P1 root-cause diagnostic — blockpool hang
 
-**Goal**: identify which of three hypotheses (or a fourth) is the
-true root cause of the workload-a 50k+ hang. No fix yet — pure
-diagnosis with falsifiable predictions.
+**Goal**: locate the **exact line / state** where the hang occurs,
+collect runtime data, and only THEN hypothesize. Hypotheses below
+are starting points, not a fixed framework — they may be falsified
+together, in which case Phase 1 continues with new hypotheses
+informed by the runtime trace, not a phase-budget escalation.
+
+Per QR7 (user, 2026-05-02): "Even if all hypotheses fail, the
+focus is breakpoint + data collection + finding the exact hung
+code, then re-hypothesize." So Phase 1 is **persistently
+diagnostic** — it ends when root cause is named and the A-B
+fix-test confirms it, no earlier.
 
 **Spec coverage**: I6 (CoW), AP16 candidate (CXL atomic flush).
 
-**Hypotheses (must each be tested or ruled out before Phase 2)**:
+**Starting hypotheses (each tested but NOT exhaustive)**:
 
 H1: `cursors_[host_id_].bump.fetch_add` lacks `flush_line + sfence`
     after the RMW. Peer host reading own cursor sees stale → alloc
@@ -70,43 +78,101 @@ H3: pool exhaustion edge case. `bump.fetch_add` returns `idx >=
     bucket scan; runner counts it as failed but moves on. So this
     is unlikely a hang root cause, but verify.
 
-H4 (open): some other interaction not yet hypothesized.
+H4 (open): some other interaction not yet hypothesized — must be
+named with evidence after the data-collection sub-phases below.
 
-**Code changes** (diagnostic instrumentation only):
-- MODIFIED `src/cxl_kv_blockpool.cc`: add atomic counter
-  `n_alloc_calls`, `n_alloc_exhausted`, `n_writes`. Print to stderr
-  every 10k operations.
-- MODIFIED `src/cxl_kv_ops_A.cc::execute_write_local`: add tagged
-  printf at each step (entered, locked, allocated, wrote_value,
-  published, unlocked) with a counter.
-- NEW `tests/protocol_a_blockpool_hang_test.cc`: minimal repro.
-  Single-host fork(), spawn 1 writer doing 100k UPDATEs to a hot
-  bucket. If H1 is true, hang reproduces single-host (own cursor
-  unflushed = host doesn't see own update? — it does via CPU cache
-  coherence; so single-host SHOULD work, isolating to cross-host
-  visibility).
-  Cross-host variant: 2 hosts, alternating writers to same bucket.
+**Phase 1 is structured in 3 sub-phases (not parallel — gated)**:
 
-**Validation experiment**:
-1. Run repro test single-host, 100k UPDATEs to hot bucket. **Pass
-   criterion**: completes in < 10s (single-host has no cross-host
-   atomic visibility issue, so this rules in/out H1's cross-host
-   nature).
-2. Run 2-host variant, 100k UPDATEs. If hang reproduces here but
-   not single-host → H1 confirmed.
-3. Binary search: with 2-host repro, scan trans_ops ∈ {30k, 40k,
-   45k, 48k, 49k, 50k, 51k}. Note exact threshold + scaling
-   behavior.
-4. Apply H1-fix (add flush_line + sfence after cursor.fetch_add)
-   and re-run #2. If hang gone → H1 was real.
-5. If H1 doesn't fix it: try H2 (replace NT with plain+clflushopt
-   + sfence on pool.write). If H1 + H2 both fail: print full trace
-   and re-hypothesize.
+### Sub-phase 1.A: instrument + locate the exact hang point
 
-**Success criterion**: root cause is named (H1 / H2 / H3 / H4) and
-backed by an A-B test where applying the predicted fix to the
-predicted-cause variable eliminates the hang. The verdict is
-**recorded in iter-5A summary** with the A-B numbers.
+Before testing any hypothesis, find WHERE in the code execution
+stalls. Without this, we are guessing.
+
+**Code changes** (instrumentation only):
+- MODIFIED `src/cxl_kv_blockpool.cc`: counters `n_alloc_calls`,
+  `n_alloc_exhausted`, `n_writes`; print to stderr per 1k ops.
+  In `alloc()`: print `idx` value + `cursors_[host_id_].bump`
+  load value (after the fetch_add) + `seg_base_ - base_` offset.
+  In `write()`: print first 8 B of input + dst pointer + flushed
+  cacheline count.
+- MODIFIED `src/cxl_kv_ops_A.cc::execute_write_local`: tagged
+  printf at each step (entered b=$b, locked, allocated blk_off=
+  $off, wrote_value, slot_packed encoded=$enc, slot_published,
+  cache_updated, unlocked, returning rc=$rc).
+- MODIFIED `src/cxl_kv_ops_A.cc::responder_handle::CACHE_REGISTER`:
+  same tagged printf at each step including `pool->read` value.
+- ENABLED at runtime via `FUSEE_TRACE_BLOCKPOOL=1` env var (gated
+  so default sweep doesn't print).
+- NEW `tests/protocol_a_blockpool_hang_repro.cc`: minimal 2-host
+  repro that exercises the same path as `protocol_a_ycsb` workloada
+  50k. Fork 2 workers per host, run 50k UPDATE on Zipf keyset. NO
+  workload spec file dependency — generate keys in-process so the
+  test is hermetic.
+
+**Validation experiment** (1.A):
+1. Run repro WITH trace under timeout=180s on g3+g4. If reproduces
+   the hang, capture last 100 trace lines from each host into a
+   `trace_h0.log` / `trace_h1.log` artifact. Goal: identify
+   the LAST line printed on each host before hang.
+2. From the trace endpoints, classify the hang location:
+   (a) inside `pool.alloc` (cursor stuck);
+   (b) inside `pool.write` (NT-store stalled);
+   (c) inside `slot_directory_lock` (peer-host holding spinlock);
+   (d) inside `forward_*_spin_wait` (responder unresponsive);
+   (e) inside `cache_pool_*` (DRAM hashmap deadlock?);
+   (f) some other location.
+3. Capture also: `dmesg`, `/proc/<pid>/stack`, `gdb -p <pid>` trace
+   on both hosts at hang time. The kernel/userspace stack trace is
+   THE evidence. If gdb requires symbol info, build with `-g` for
+   this phase.
+
+**Phase 1.A exit criterion**: a named hang location class
+(a/b/c/d/e/f) with backing trace + stack evidence; written into
+phase 1 sub-summary.
+
+### Sub-phase 1.B: hypothesis testing (informed by 1.A)
+
+Once the hang location is known, the relevant hypothesis subset
+applies. Sub-phase 1.A's answer narrows what to test:
+- Hang in alloc / pool internals → H1, H2, H3 candidates
+- Hang in slot_directory_lock → cross-host writer mutex bug, new
+  category
+- Hang in forward_*_spin_wait → responder-side issue (re-examine
+  cache_register handler under blockpool path; perhaps owner's
+  pool.read deadlocks pool.write — same data structure, mostly
+  cacheline-disjoint though)
+- Hang in cache_pool → unrelated to blockpool, surprise finding
+
+For each applicable hypothesis, do A-B (apply predicted fix to
+JUST that variable, hold all else constant, re-run repro).
+
+**Phase 1.B exit criterion**: ONE A-B pairing where predicted fix
+eliminates the hang AND the alternative (no-fix) reproduces it.
+That is the named root cause.
+
+### Sub-phase 1.C: if 1.B exhausts hypotheses without convergence
+
+Continue diagnostic — do NOT escalate yet. Per QR7:
+1. Re-read the 1.A trace + stack with fresh eyes (often the answer
+   is in stack frame N+2 of what we initially looked at).
+2. Single-step the repro under gdb on one host while peer host
+   runs normally. Catch the moment of hang in gdb.
+3. Compare the working vs hanging cases at the SYSCALL level
+   (`strace -f -e trace=futex,clone,read,write,memfd_create -p`
+   on each protocol_a_ycsb pid). Hang patterns often show up as
+   a futex_wait in user mode that never returns.
+4. If a new hypothesis emerges from 1-3, run 1.B again with it.
+5. Repeat until root cause named.
+
+**Phase 1.C exit criterion**: same as 1.B — ONE A-B pairing
+isolating the cause. The phase does not auto-terminate on a time
+budget; it ends when a confirmed root cause exists. (User-explicit
+exception per CLAUDE.md "physically impossible" clause: if g3/g4
+testbed becomes unreachable, escalate.)
+
+**Phase 1 success criterion**: root cause named + A-B confirmed +
+documented in iter-5A summary with the trace + fix diff. No phase
+budget; persistence wins.
 
 **Bottleneck check**: blockpool alloc latency ≤ 50 ns uncontended;
 ≤ 200 ns contended (8 threads on same segment). Verify in
@@ -446,30 +512,43 @@ plots. Verify iter-completion gate (§13) passes.
 - MODIFIED `scripts/run_iter4A_redo_sweep.sh` → `run_iter5A_sweep.sh`:
   - Loop over KV_SIZES="256 512 1024".
   - Set MAX_OPS=200000 (spec value, not 50000).
+  - **REPS=1** (per QR5; 1 rep only this iter — 5-rep multi-rep
+    stability gate G2 is suspended for iter-5A and re-instated in
+    iter-6A once the dispatcher channel + blockpool path have
+    multi-rep history).
   - Output dir `docs/g34_scaling_ycsb_<ts>/`.
-  - At end, invoke `iter5A_summarize.py` + `plot_iter4A_redo.py`
-    (rename to `plot_iter5A.py` and parameterize for KV size)
-    to generate all spec §6 plots.
+  - At end, invoke `iter5A_summarize.py` + `plot_iter5A.py` (rename
+    + parameterize for KV size) to generate all spec §6 plots.
+  - Add `sleep 0.2; chmod 666 /dev/dax0.0` between cells (per QR6,
+    cleanup the iter-4A-redo 0.5% first-rep timeout).
 - MODIFIED `tests/protocol_a_ycsb.cc`: read FUSEE_KV_SIZE env;
   blockpool sized accordingly.
 
 **Validation experiment**:
 1. Full sweep: 1 protocol × 5 workloads × 8 T × 2 cache × 3 KV
-   sizes × 5 reps = 1200 SUMMARY.log lines. **0 FAILs target**;
-   any FAILs investigated.
-2. All 6 validation gates G1-G6 reported in `gap_to_target.md`.
-3. Plots generated per §6: per-KV-size A_thpt_workload<wl>_kv<X>
-   bands, A_lat per (wl, KV size, op), extra/A_target_workload<wl>_kv<X>,
+   sizes × 1 rep = **240 SUMMARY.log lines**. **0 FAILs target**;
+   any FAILs investigated. (Per QR5 the 5-rep gate is suspended;
+   spec §13 iter-completion gate is correspondingly relaxed for
+   iter-5A only — iter-6A restores 5-rep.)
+2. All 6 validation gates G1, G3-G6 reported in `gap_to_target.md`.
+   G2 (multi-rep) explicitly marked DEFERRED-iter-6A.
+3. Plots generated per §6: per-KV-size A_thpt_workload<wl>_kv<X>,
+   A_lat per (wl, KV size, op), extra/A_target_workload<wl>_kv<X>,
    extra/A_kv_size_compare_workload<wl>, A_scaling_efficiency.
+   No min/max bands (single rep) → drop `_band.png` variant for
+   iter-5A.
 4. `gap_to_target.md` headline: peak Mops/s per (workload, KV size)
-   with gap to 20 Mops/s.
+   with gap to 20 Mops/s. Note "single-rep, treat numbers as
+   indicative not steady-state" caveat at top of file.
 
-**Success criterion**: 1200/1200 cells valid (FAILs documented if
-any); G1-G6 all reported PASS; iter-5A summary doc exists +
+**Success criterion**: 240/240 cells valid (FAILs documented if
+any); G1, G3-G6 all reported PASS; iter-5A summary doc exists +
 references the timestamped output dir.
 
 **Bottleneck check**: per `docs/scaling_ycsb_spec.md` expected
-3-4.5h for full matrix; if exceeds 6h, identify cause.
+~50-90 min for the 240-cell single-rep matrix at MAX_OPS=200k
+(was 3-4.5h for the 1200-cell × 5-rep matrix); if exceeds 2h,
+identify cause.
 
 ---
 
@@ -477,13 +556,13 @@ references the timestamped output dir.
 
 | Phase | Validates I/AP/G | Cumulative test count | Cumulative LOC delta |
 |-------|------------------|----------------------|----------------------|
-| 1 | AP16 candidate | 1 | ~80 (instrumentation only) |
+| 1 | AP16 candidate; gdb/strace data collection | 1 (repro test) | ~80 (instrumentation) |
 | 2 | I6, AP16 | 4 | ~350 |
 | 3 | RAP doc only | 4 | 0 |
 | 4 | I9, I10, AP14, AP15, G6 | 6 | ~600 |
-| 5 | G1, G2, all H2 invariants | 11 | ~800 |
+| 5 | G1, all H2 invariants | 11 | ~800 |
 | 6 | §VII, §IX, §X | 12 | ~900 |
-| 7 | G1-G6, §13 gate | 13 | ~1000 |
+| 7 | G1, G3-G6, §13 gate (G2 deferred per QR5) | 13 | ~1000 |
 
 ---
 
@@ -520,11 +599,11 @@ If any criterion fails, the phase is not done.
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|-----------|
-| Phase 1 hypothesis grid (H1-H4) all wrong; 4th unknown root cause | Med | Phase 1 includes "if H1+H2 fail, print full trace and re-hypothesize"; budget includes additional binary-search + fault-injection time before declaring stuck |
+| Phase 1 hypothesis grid (H1-H3) all wrong; novel root cause | Med | Per QR7, Phase 1 has no budget. Sub-phase 1.A locates exact hang line first; 1.B narrows to relevant hypothesis subset; 1.C continues with gdb single-step + strace + new-hypothesis loop until root cause named. Cannot declare phase stuck. |
 | Phase 4 dispatcher saturates at T≥64; K-shard introduces ordering violation | Low | K-shard routes by `hash(key) % K`; same-key invalidates always go to same dispatcher → per-key FIFO preserved; matches iter-3A's K-channel proof |
 | Phase 4 rw race test exposes additional §I9 gaps beyond the disabled-broadcast one | Med | If new gap found, escalate to user (per P3 of §X — spec changes go through user); do not silently weaken §I9 |
 | Phase 5 re-enabling tempdisabled tests reveals attach signature drift | Low | Mechanical fix; ~30 min per test |
-| Phase 7 full 1200-cell sweep exceeds wallclock budget | Low | Spec §11 already accepts shrink to 200-cell subset on testbed pressure; scope-down ALWAYS escalated to user, never silent |
+| Phase 7 240-cell single-rep sweep exceeds wallclock budget | Low | At MAX_OPS=200k × 240 cells × ~15-20s/cell ≈ 60-80 min expected; 2h hard ceiling. If exceeds, escalate user, never silent scope-down |
 | Phase 6 AP16 codify gets stuck on commit-msg hook regex complexity | Low | Settle for a checked-in `scripts/audit_cxl_atomics.sh` and a per-PR review checklist if dynamic regex too brittle |
 
 ---
@@ -537,9 +616,9 @@ If any criterion fails, the phase is not done.
 | QR2 | Phase 4 rw race test: monotonically increasing values, or richer pattern (random key chosen + post-hoc total-order verification)? | Monotonic (simpler oracle, sufficient for §I9 strict-A invariant) |
 | QR3 | Phase 6 AP16 hook: full grep-based static check, or document-only checklist? | Document checklist + manual grep audit script. Full static check is iter-7 if false-negative rate observed |
 | QR4 | Phase 7 KV size grid: 256/512/1024 (3 sizes per spec) or include 8 (legacy inline)? | 3 sizes per spec; legacy 8 dropped (was iter-4 backward-compat artifact) |
-| QR5 | Phase 7 sweep wallclock target: ≤ 4.5h (spec §5 estimate) or extend up to 8h if needed? | 4.5h target; if exceeds, escalate to user before continuing |
-| QR6 | Cell-isolation cleanup (P7 from iter-4A-redo summary, the 2 first-rep timeouts) — fold into Phase 7 or a separate Phase? | Fold into Phase 7 sweep script (`sleep 0.2; chmod 666 /dev/dax0.0` between cells) |
-| QR7 | If Phase 1 root cause is NOT H1/H2/H3 but something exotic, max time spent before escalating to user? | Until reasonable root-cause framework emerges OR ~½ of the original-Phase-1 budget; whichever first |
+| QR5 | Phase 7 reps per cell | **REPS=1** (user, 2026-05-02). 5-rep G2 multi-rep stability gate suspended for iter-5A; re-instated iter-6A. Total cells 240 not 1200. |
+| QR6 | Cell-isolation cleanup (the 2 first-rep timeouts) — fold into Phase 7 or a separate Phase? | Fold into Phase 7 sweep script (`sleep 0.2; chmod 666 /dev/dax0.0` between cells) |
+| QR7 | Phase 1: when do hypotheses get exhausted? | **No phase budget.** Persistence wins (user, 2026-05-02): break, collect data, find exact hung code first; then hypothesize. Phase 1 ends only when root cause is named + A-B confirmed. Only escalate on physical impossibility (testbed unreachable). |
 | QR8 | Phase 5: keep iter-4A-redo's `protocol_a_ycsb.cc` (custom runner) OR finally integrate into `cxl_ycsb_runner.cc` (the C/B-shaped runner)? | Keep `protocol_a_ycsb.cc` separate; the unified runner is iter-7+ effort |
 
 ---
@@ -549,7 +628,7 @@ If any criterion fails, the phase is not done.
 - **7 phases**, each with concrete code + test + experiment
 - **~1000 LOC delta** across blockpool fix + invalidate channel + tests
 - **6 invariants/AP** newly enforced (I9 strict-A, I10 commit point, AP14, AP15, AP16, G6)
-- **2 hard blockers (P1 + P2) closed**, plus **all of P3-P11** from iter-4A-redo's secondary deficit list folded in (P3 → Phase 5; P4/P5 → Phase 7; P6 → Phase 7 metrics; P7 → Phase 7 sweep script; P8 acceptable per §11; P9 → Phase 6; P10 → Phase 4; P11 → Phase 6)
+- **2 hard blockers (P1 + P2) closed**, plus **most of P3-P11** from iter-4A-redo's secondary deficit list folded in (P3 → Phase 5; P4/P5 → Phase 7; P6 → Phase 7 metrics; P7 → Phase 7 sweep script; P8 acceptable per §11; P9 → Phase 6; P10 → Phase 4; P11 → Phase 6). G2 multi-rep stability is **deferred to iter-6A** per QR5.
 - **20 Mops/s gap closure** explicitly OUT of scope (iter-6A), so this iter has a clear "done" criterion that doesn't depend on hitting the absolute throughput target
 
 ---
