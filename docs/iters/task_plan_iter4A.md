@@ -95,7 +95,7 @@ enforcement + sweep close out (9-10).
 
 **Goal**: Land an `oracle_harness` test framework + **13** fail-first
 invariant oracles. After this phase the `protocol_a_invariants`
-binary exists and reports 13/13 RED. Every subsequent phase's
+binary exists and reports 14/14 RED. Every subsequent phase's
 acceptance criterion is "the oracles I touched flipped to GREEN and
 the GREEN ones didn't regress."
 
@@ -162,7 +162,7 @@ drift becomes mechanically impossible (§X H2 reality-check).
   scaling_ycsb's shared-stats convention; orchestrator-supplied
   `FUSEE_RUN_COOKIE`).
 
-- NEW `tests/protocol_a_invariants.cc` (~430 LOC, 13 oracle bodies):
+- NEW `tests/protocol_a_invariants.cc` (~470 LOC, 14 oracle bodies):
 
   | Oracle | Spec ref | host_count | tsan | What it tests |
   |--------|----------|-----------|------|---------------|
@@ -179,6 +179,7 @@ drift becomes mechanically impossible (§X H2 reality-check).
   | `o_i11_xhost_forward_observable` | §I11 | 2 | no | forwarder publishes ForwardRing tail via fetch_add; owner host sees new tail within 100 µs (verifies CXL atomic flush plumbing end-to-end) |
   | `o_i12_no_oplog_calls` | §I12 | 1 | no | run 1k ops; `oplog_begin_count == 0`, `oplog_commit_count == 0` |
   | `o_ap16_cxl_atomic_flush_paired` | §VII AP16 (new) | 1 | no | **Macroscopic stress**: harness runs 1M atomic stores against a CXL-resident ring; `measure_pcie_writes_to_dax(fn)` returns count; oracle PASS iff ratio ∈ [0.95M, 1.05M]. Black-box check, no per-instruction inspection (avoids compiler-reorder false positives). Microscopic per-line check is the Phase 5.5 audit table, not this oracle |
+  | **`o_kv_blockpool_integrated`** (new, per Q6) | §I6 + Phase 6 | 2 | no | After 1k writes at each of 3 sizes (256/512/1024), verify (a) `slot.block_ptr` always non-NULL CXL address; (b) `blockpool_alloc_count` == ops; (c) no slot.block_ptr equals an inline value pattern (e.g., low 56 bits don't look like a u64 value); (d) reading the block via clflushopt+load returns byte-equal value. Catches "protocol path silently uses inline u64 instead of blockpool" |
 
   **Anti-pattern coverage map** (to avoid redundant oracles):
   - AP3 → covered by `o_i3_cache_map_shared`
@@ -201,13 +202,13 @@ drift becomes mechanically impossible (§X H2 reality-check).
 
 1. Build `protocol_a_invariants` and `protocol_a_invariants_tsan`.
 2. Run on g3+g4: `bash scripts/run_invariant_oracles.sh`.
-3. **Expected output**: `13 oracles, 0 PASS, 13 FAIL`. Every
+3. **Expected output**: `14 oracles, 0 PASS, 14 FAIL`. Every
    oracle fails because no protocol code exists yet. This is the
    GREEN condition for Phase 0.5: ALL RED.
 
 **Success criterion**: `protocol_a_invariants` binary builds; oracle
 runner driver works (cross-host barrier, fork helper, kill/restart
-fixture, perf-counter helper, timeout, TSan build); `13/13 FAIL`
+fixture, perf-counter helper, timeout, TSan build); `14/14 FAIL`
 reported with each failure citing a clean spec reference. NO oracle
 accidentally PASSing (a green oracle now means the test is
 misimplemented — abort and fix the oracle).
@@ -283,21 +284,59 @@ set_stale/evict ops; no protocol integration.
 
 ---
 
-## Phase 4 — KV blockpool: per-host partition + CoW write API
+## Phase 4 — KV blockpool: per-host partition + size-class CoW alloc API
 
-**Goal**: per-owner-host blockpool segments on CXL; host-local DRAM
-free-list; `blockpool_alloc/free` API exposed but not yet wired
-into protocol.
+**Goal**: per-owner-host blockpool segments on CXL with **3 size
+classes (256 / 512 / 1024 B)**; host-local DRAM free-list per size
+class; `blockpool_alloc(size_class)` / `blockpool_free()` API
+exposed. API will be wired into the protocol path in Phase 6 (per
+Q6 decision below — Variable-KV integration is in-scope for
+iter-4A).
 
-**Spec coverage**: I6, §VI synchronization.
+**Spec coverage**: I6, §VI synchronization, §III blockpool layout.
 
-**Code changes**: MODIFIED `src/cxl_kv_blockpool.{h,cc}` — partition
-into `H` segments + per-segment host-local spinlock.
+**Code changes**:
 
-**Oracles affected**: none flip yet (no protocol path).
+- MODIFIED `src/cxl_kv_blockpool.{h,cc}`:
+  - Partition CXL region into `H` segments (one per owner host).
+  - Each segment further partitioned into 3 size-class arenas:
+    256 B / 512 B / 1024 B blocks.
+  - Capacity per host: `kBlocksPerSizeClass × (256 + 512 + 1024) B`.
+    Sized for `num_buckets × kSlotsPerBucket × 3` plus 2× headroom
+    for in-flight CoW (old-block-alive-while-new-block-published).
+    Default: `2 GB / host` total → ~1 M blocks per size class.
+  - Per-(segment, size_class) host-local DRAM free-list with its
+    own pthread_spinlock.
+  - `blockpool_alloc(size_class) → cxl_block_ptr` (returns CXL
+    pointer; block content is uninitialized).
+  - `blockpool_free(cxl_block_ptr)`: caller must call after CoW
+    commit + invalidate ACK confirms no reader has the old block.
 
-**Bottleneck check**: alloc ≤ 50 ns uncontended; per-host segment
-isolation strict (cross-host alloc returns 0).
+- NEW `src/cxl_kv_block.h`: in-block layout
+  ```cpp
+  struct CxlKvBlockHeader {
+    uint64_t key;          // for fingerprint cross-check
+    uint16_t value_size;   // 256 / 512 / 1024
+    uint8_t  size_class;   // 0/1/2
+    uint8_t  reserved[5];
+    // value bytes follow, length = value_size
+  };
+  static_assert(sizeof(CxlKvBlockHeader) == 16);
+  ```
+  Total block = header (16 B) + value bytes (256/512/1024).
+
+- MODIFIED `tests/blockpool_test.cc`:
+  - 3 size classes × 100k alloc/free cycles each, no double-alloc.
+  - Cross-host isolation per size class.
+  - Round-trip: alloc → NT-store value → flush → peer-host
+    clflushopt+load → byte-equal at all 3 sizes.
+
+**Oracles affected**: none flip yet (Phase 6 wires the protocol
+path; this phase is API-only).
+
+**Bottleneck check**: alloc latency ≤ 60 ns uncontended per size
+class (DRAM free-list pop); contended ≤ 250 ns; cross-host
+isolation strict.
 
 ---
 
@@ -465,63 +504,144 @@ only).
 
 ---
 
-## Phase 6 — Writer owner-self full integration
+## Phase 6 — Writer owner-self full integration **with blockpool CoW**
 
-**Goal**: wire the owner-self write path on the **complete** message
-channel from Phase 5: directory spinlock → blockpool alloc + CoW
-write to CXL → **send OP_INVALIDATE to every sharer** (real, not
-stub) → **wait OP_RESPONSE** → atomic CAS slot.pointer → update
-directory state → update local cache.
+**Goal**: wire the owner-self write path on the complete message
+channel from Phase 5, **with full Variable-KV blockpool integration
+(per Q6 user decision 2026-05-02)**. Slot stores a CXL block
+pointer + size, NOT an inline 8 B value. Sequence: directory
+spinlock → blockpool_alloc(size_class) → NT-store value bytes into
+new block → flush + sfence → send OP_INVALIDATE to every sharer →
+wait OP_RESPONSE → atomic CAS slot.pointer = new block → update
+directory state → update local cache → **schedule old block for
+free** (only after invalidate ACK confirms no reader holds it).
 
-**Spec coverage**: I9 (write side), I10, I6, I8.
+**Spec coverage**: I9 (write side), I10, I6 (CoW), I8 (host-local
+lock), §VI-A.bis NT-store decision rule for ≥ 256 B blocks.
 
 **Code changes**:
-- NEW `src/cxl_kv_ops_A.cc::execute_write_local()` (replacing the
-  old _v2 implementation): full sequence as above. The Phase 5
-  receivers already handle invalidate; this phase only ADDS the
-  sender call site.
-- MODIFIED `tests/cxl_ycsb_runner.cc`: select Protocol A as
-  `CONSENSUS_OPT_A`; existing build flag, no rename.
+
+- MODIFIED `src/cxl_hashtable.h`: `CxlKvSlot` layout change:
+  ```cpp
+  struct CxlKvSlot {
+    uint64_t key;                  // for fingerprint match
+    uint64_t block_ptr;            // CXL pointer (0 = empty/deleted)
+                                   // Low 4 bits encode size_class
+                                   // (3 classes fit in 2 bits; 2
+                                   // bits reserved for future flags).
+                                   // Block size derivable from class.
+  };
+  static_assert(sizeof(CxlKvSlot) == 16);
+  ```
+  No more inline-u64 path. **Hard break from iter-3A's
+  `CxlKvSlot { key:u64, value:u64 }`.**
+
+- NEW `src/cxl_kv_ops_A.cc::execute_write_local(key, value_bytes,
+  value_size, op_kind)`:
+  ```
+  spin_lock(directory[slot])
+  size_class  = size_class_of(value_size)        // round up
+  new_block   = blockpool_alloc(size_class)      // own host segment
+  // Format block: header (16 B) + value bytes (NT-store ≥ 256 B)
+  CxlKvBlockHeader hdr = { key, value_size, size_class, 0 };
+  nt_memcpy(new_block, &hdr, sizeof hdr)         // 16 B header
+  nt_memcpy(new_block + 16, value_bytes, value_size)
+  sfence()                                        // CXL durable
+  // Invalidate sharers (Phase 5a receivers handle the actual
+  // directory + cache_pool_set_stale on owner side)
+  for each h in directory[slot].sharer_bitmap \ {self}:
+    enqueue OP_INVALIDATE(slot, key) → h
+  wait all OP_RESPONSE
+  // Commit point: atomic CAS slot.pointer
+  old_block = atomic_cas(slot.block_ptr, prev, new_block | size_class)
+  flush_line(slot); sfence();                    // CXL durable
+  directory[slot].state         = Shared
+  directory[slot].sharer_bitmap = (1 << self)
+  directory[slot].version++
+  spin_unlock
+  cache_pool_insert(key, value_bytes, value_size)
+  // Defer-free: queue old_block to a per-host retirement list;
+  // freed lazily after a "no in-flight reader" epoch barrier
+  retire_block(old_block)
+  ```
+
+- NEW `src/cxl_kv_retire.{h,cc}`: simple epoch-based block retire.
+  Workers tick a per-host epoch counter; a block is freed when
+  the global min-epoch passes the epoch at which the block was
+  retired. Avoids freeing a block while a reader still holds the
+  old `slot.block_ptr`.
+
+- MODIFIED `tests/cxl_ycsb_runner.cc`: select Protocol A via
+  `CONSENSUS_OPT_A`; runner now passes value-bytes pointer +
+  value_size to insert/update (not u64); reads return value bytes.
 
 **Oracles affected**:
-- `o_i10_writer_durable_after_return`: RED → GREEN (only if
-  invalidate ACK wait is genuinely synchronous; if asynchronous
-  optimization is added, oracle catches it).
-- `o_i9_concurrent_read_write_no_stale`: stays RED until Phase 7
-  wires register-then-fill on read side. **THIS IS THE KEY
-  CONSTRAINT THAT WAS MISSING IN THE FIRST ATTEMPT.** Phase 6
-  cannot be marked complete with `o_i9` GREEN — it can only show
-  the writer-side half.
 
-- Hash-diff battery (existing-style oracle, kept as defensive
-  cross-check):
-  - 5 reps × T={2,4,8,16} × 100K UPDATEs using **workload-split-
-    by-owner** (Option C); host 0 dispatches owner=0 ops, host 1
-    dispatches owner=1 ops; build flag `kPhase6FilterUnownedOps =
-    true`, removed in Phase 8.
+- `o_i10_writer_durable_after_return`: RED → GREEN (only if
+  invalidate ACK wait + CXL block durable are both before
+  return).
+- `o_i9_concurrent_read_write_no_stale`: stays RED until Phase 7
+  wires register-then-fill on read side.
+- **`o_kv_blockpool_integrated` (NEW oracle)**: RED → GREEN.
+  After 1k writes, slot.block_ptr is non-NULL CXL address;
+  blockpool alloc counter == ops; no slot stores value bytes
+  inline (slot's low-bits ≠ value pattern).
+- Hash-diff battery extended to 3 size classes:
+  - 5 reps × T={2,4,8,16} × **3 sizes (256/512/1024)** × 100K
+    UPDATEs using workload-split-by-owner = 60 runs.
+  - Final bucket+block array byte-identical between hosts → 60/60
+    PASS.
 
 **Bottleneck check**: per-op latency at T=4 owner-self uncontended
-≤ 5 µs.
+≤ 6 µs at kv=256, ≤ 8 µs at kv=1024 (NT-store dominant time
+~60 ns/256 B → ~250 ns/1024 B; rest of pipeline ~5 µs).
 
 ---
 
 ## Phase 7 — Reader register-then-fill (slow path) — **THE FIX**
 
 **Goal**: wire `search()` slow path: on cross-host miss, send
-OP_CACHE_REGISTER to owner; receive value via OP_RESPONSE; THEN
-populate local cache. Phase 5 receiver already updates owner
-directory's `sharer_bitmap`. Phase 7 is purely the sender side.
+OP_CACHE_REGISTER to owner; receive **(block_ptr, value_size)** via
+OP_RESPONSE; **fetch value bytes from CXL block via clflushopt +
+mfence + load**; THEN populate local cache. Phase 5 receiver
+already updates owner directory's `sharer_bitmap`. Phase 7 is the
+sender side + value-fetch.
 
-**Spec coverage**: I9 (read side, register-then-fill), AP15.
+**Spec coverage**: I9 (read side, register-then-fill), AP15,
+§VI-A.bis MESSAGE PAYLOAD POLICY (response carries pointer not
+value bytes).
 
 **Code changes**:
-- MODIFIED `src/cxl_kv_ops_A.cc::search()`: cross-host miss path
-  enqueues OP_CACHE_REGISTER, spins on response, fills cache only
-  AFTER response carries value bytes.
-- AP15 trip wire: assert that `cache_pool_insert(key, value)` is
+- MODIFIED `src/cxl_kv_ops_A.cc::search()`:
+  ```
+  // Fast path: local cache hit
+  if cache_hit(key) and not stale:
+    return cached value_bytes        // no CXL access
+  owner = host_of(key)
+  if owner == self:
+    // Same-host miss: scan local bucket, dereference block_ptr
+    block = scan_bucket_for_key(key) // CXL bucket + block load
+    cache_pool_insert(key, block.value_bytes, block.value_size)
+    return value_bytes
+  // Cross-host miss
+  enqueue OP_CACHE_REGISTER(key) → owner
+  spin OP_RESPONSE                     // receiver_loop_metadata on owner
+                                       // adds self to sharer_bitmap and
+                                       // returns (block_ptr, value_size)
+  flush_line(block_ptr); mfence();
+  value_bytes = load_block_value(block_ptr, value_size)  // CXL OOB fetch
+  cache_pool_insert(key, value_bytes, value_size)        // AFTER register ACK
+  return value_bytes
+  ```
+- AP15 trip wire: assert that `cache_pool_insert(key, ...)` is
   preceded by `register_acked(key)` flag set; abort otherwise.
   Implemented as a debug-build `cache_pool_insert_after_register()`
   wrapper.
+- MODIFIED Phase 5a OP_CACHE_REGISTER receiver handler (slight
+  extension): response payload now carries `(block_ptr,
+  value_size)` not `(value_pointer, 0)`. Block content is OOB on
+  CXL — receiver does NOT include value bytes in the 64 B
+  PerHostMessage (NO inline payload, per §VI-A.bis).
 
 **Oracles affected**:
 - `o_i9_concurrent_read_write_no_stale`: RED → GREEN. **This is
@@ -540,17 +660,44 @@ directory's `sharer_bitmap`. Phase 7 is purely the sender side.
 
 ## Phase 8 — Cross-host write forward + cache evict
 
-**Goal**: enqueue OP_WRITE_FORWARD via ForwardStaging when
-`owner != self`; spin on OP_RESPONSE. Wire LRU pressure → enqueue
-OP_CACHE_EVICT to owner.
+**Goal**: enqueue OP_WRITE_FORWARD via ForwardStaging (sized for
+256/512/1024 B values) when `owner != self`; spin on OP_RESPONSE.
+Wire LRU pressure → enqueue OP_CACHE_EVICT to owner.
 
-**Spec coverage**: I11, AP14.
+**Spec coverage**: I11, AP14, §VI-A.bis NO inline payload.
 
 **Code changes**:
-- MODIFIED `src/cxl_kv_ops_A.cc::{update,insert,remove}`: check
-  owner; if remote, allocate ForwardStaging slot, NT-store + sfence
-  value bytes, enqueue OP_WRITE_FORWARD, spin response, free
-  staging.
+- MODIFIED `src/cxl_kv_ops_A.cc::{update,insert,remove}`:
+  ```
+  if owner_host(key) != self:
+    staging = forward_staging_alloc(value_size)   // 256/512/1024
+    nt_memcpy(staging, value_bytes, value_size)
+    sfence()
+    msg.staging_ptr = staging
+    msg.value_size  = value_size
+    msg.inner_op    = op_kind                     // INSERT/UPDATE/DELETE
+    enqueue OP_WRITE_FORWARD(msg) → owner
+    spin OP_RESPONSE                              // owner runs Phase 6's
+                                                  // execute_write_local
+                                                  // (which now allocates a
+                                                  // CXL block on owner's
+                                                  // segment, NOT in
+                                                  // staging — staging is
+                                                  // only the message-time
+                                                  // value buffer)
+    forward_staging_free(staging)
+  ```
+- MODIFIED Phase 5b OP_WRITE_FORWARD handler (slight extension):
+  receiver fetches value bytes from forwarder's staging via
+  `clflushopt + mfence + load`, **then calls Phase 6's full
+  `execute_write_local()` with those bytes**. So forwarded writes
+  end up in owner's blockpool segment via the same CoW path —
+  staging is purely a transient transport buffer, never the
+  durable home of a value.
+- MODIFIED `src/cxl_forward_staging.{h,cc}`: capacity at 1 MB / host
+  is sufficient for `T(86) × max_kv(1024) × outstanding(2) ≈
+  176 KB`; keep 1 MB for headroom. Add `forward_staging_alloc()`
+  size-class-aware (allocates from same 256/512/1024 free-lists).
 - MODIFIED `src/cxl_cache_pool.cc`: LRU eviction trigger; if
   evicted entry's owner != self, enqueue OP_CACHE_EVICT.
 - REMOVED `kPhase6FilterUnownedOps` build flag.
@@ -619,30 +766,42 @@ gate.
 
 **Validation experiment**:
 
-1. Full sweep:
-   - 1 protocol × 5 workloads × 8 T × 2 cache × 5 reps =
-     **400 SUMMARY.log lines** (= 80 unique cells × 5 reps).
+1. Full sweep (per Q6: KV size is now a sweep dimension):
+   - 1 protocol × 5 workloads × 8 T × 2 cache × **3 KV sizes
+     (256/512/1024)** × 5 reps = **1200 SUMMARY.log lines** (= 240
+     unique cells × 5 reps).
    - Output to `docs/g34_scaling_ycsb_<timestamp>/`.
    - All 5 G1-G5 gates pass each cell.
+   - Wall clock: 3-4.5 h on g3+g4 (3× the old 80-cell budget).
+   - Requires `docs/scaling_ycsb_spec.md` to be updated FIRST to
+     declare `KV_SIZES="256 512 1024"` and the 1200-line gate
+     (companion commit at start of Phase 10).
 
 2. Required artifacts in the timestamped directory:
-   - `SUMMARY.log` (with `rep=<r>` field).
+   - `SUMMARY.log` (with `rep=<r>` and `kv_size=<256|512|1024>`
+     fields).
    - `plot_commit.txt`.
-   - 5 × `A_thpt_workload*.png` (5-rep median) +
-     5 × `*_band.png` (min/max band).
-   - up to 10 × `A_lat_workload*_{read,write}.png`.
-   - `cache_off/` with the same plot set.
-   - `extra/A_target_workload*.png` (5; gap-to-20-Mops/s line).
+   - **15** × `A_thpt_workload<a..f>_kv<256|512|1024>.png`
+     (5-rep median; one plot per workload × KV size).
+   - 15 × `*_band.png` (min/max band).
+   - up to 30 × `A_lat_workload*_kv*_{read,write}.png`.
+   - `cache_off/` with the same plot set (another 15 + 15 + 30).
+   - `extra/A_target_workload*_kv*.png` (15; gap-to-20-Mops/s
+     line per workload × KV size).
+   - `extra/A_kv_size_compare_workload*.png` (5; KV-size scaling
+     overlay per workload).
    - `extra/A_scaling_efficiency.png`.
    - `summary_table.md`.
-   - **`gap_to_target.md`** (auto-generated from SUMMARY.log).
+   - **`gap_to_target.md`** (auto-generated from SUMMARY.log;
+     reports gap to 20 Mops/s for YCSB-A and YCSB-C at each KV
+     size).
    - new row in `docs/scaling_ycsb_runs_index.md`.
 
 3. iter-4A summary doc `docs/iters/iter4A_summary_<ts>.md`:
-   - 5-rep median headline numbers per workload at peak T.
-   - Stage attribution via Phase 6 latency decomp.
+   - 5-rep median headline numbers per (workload, KV size, peak T).
+   - Stage attribution via Phase 6 latency decomp at kv=256 / 1024.
    - Spec drift audit (P2): each I/AP traced to a code location
-     with grep evidence; 12/12 oracle GREEN evidence pasted.
+     with grep evidence; 14/14 oracle GREEN evidence pasted.
    - RAP retrospective: which Phase 1-9 design choices were
      verified by sweep data, which were not.
    - Cite the sweep `<timestamp>` per scaling spec §13.
@@ -652,8 +811,8 @@ gate.
 
 **Success criterion (HARD GATE)**:
 
-- 400/400 SUMMARY.log lines ≠ FAIL.
-- 12/12 oracles GREEN.
+- 1200/1200 SUMMARY.log lines ≠ FAIL.
+- 14/14 oracles GREEN.
 - All required plot files present (script-checked).
 - `gap_to_target.md` exists and shows gap to 20 Mops/s for both
   YCSB-A and YCSB-C.
@@ -684,6 +843,7 @@ GREEN":
 | `o_i11_xhost_forward_observable` | R | R | R | R | R | **G** | G | G | G | G | G | G | G |
 | `o_i12_no_oplog_calls` | R | R | R | R | R | R | R | R | **G** | G | G | G | G |
 | `o_ap16_cxl_atomic_flush_paired` | R | R | R | R | R | R | R | **G** | G | G | G | G | G |
+| **`o_kv_blockpool_integrated`** | R | R | R | R | R | R | R | R | **G** | G | G | G | G |
 
 R = expected RED, G = expected GREEN, **bold** = the phase that
 flips this oracle. A phase is incomplete if its bold cells are not
@@ -714,14 +874,14 @@ failure mode.
 ## Out of scope (deferred to iter-5A or later)
 
 - Replication / fault tolerance (per §XII O4).
-- Variable-KV blockpool full integration into A path (kv 256/512/
-  1024). Phase 4 wires the API; full integration deferred so
-  iter-4A can reach a stable correctness milestone first.
 - K-shard responder threads (forward path scaling). iter-4A's
   single responder is the scale ceiling; iter-5A first task.
 - BucketLockTable removal from Protocol A's region (saves ~2.5 GB).
 - Read-path cache=on collapse for read-heavy workloads (iter-3A
   open issue carried forward).
+
+(Variable-KV blockpool integration was previously listed here as
+out-of-scope but moved IN-scope per Q6 user decision 2026-05-02.)
 
 ---
 
@@ -733,8 +893,10 @@ failure mode.
 | `o_i9` race oracle hits TSan false positives on cross-host atomics | Med | TSan only used for same-host portions of the test; cross-host correctness verified by value-equality, not TSan |
 | Phase 5 receiver scope expansion blows up the phase to too-many-LOC | Med | If receiver code > ~800 LOC, split Phase 5 into 5a (invalidate + register + evict) and 5b (write-forward + response). Decision deferred to start of Phase 5 |
 | Phase 5.5 atomic audit finds atomics in iter-3A code paths still in tree | Med-High | Audit table records "needs fix" rows; fix in same phase before advancing. Do NOT skip with "iter-3A code is legacy" — protocol C still uses some of those code paths |
-| Phase 10 sweep takes longer than budget (60-90 min) | Low | Per-cell timeout 600 s + cell-skip with user approval recorded in summary; all 80 cells must report some result (timeout or value), not "skipped" |
-| Phase 10 reveals 12/12 oracles GREEN but throughput still very low (forward path bottleneck) | High | This is *expected* — iter-4A's goal is correctness, not the 20 Mops/s target. iter-5A K-shard responder is the throughput follow-up. Phase 10 must still report the gap honestly in `gap_to_target.md` |
+| Phase 10 sweep takes longer than budget (3-4.5 h with kv-size dim) | Med | Per-cell timeout 600 s + cell-skip with user approval recorded in summary; all 240 cells must report some result (timeout or value), not "skipped". If wall-clock exceeds 6 h, escalate before truncating |
+| Phase 10 reveals 14/14 oracles GREEN but throughput still very low (forward path bottleneck) | High | This is *expected* — iter-4A's goal is correctness, not the 20 Mops/s target. iter-5A K-shard responder is the throughput follow-up. Phase 10 must still report the gap honestly in `gap_to_target.md` |
+| Variable-KV CoW path triggers blockpool fragmentation under sustained workload | Med | Phase 4 sizes 2 GB / host with 2× headroom; epoch-based defer-free in Phase 6 keeps in-flight blocks bounded. If observed in Phase 10 sweep, falls back to size-class compaction in iter-5A |
+| `o_kv_blockpool_integrated` heuristic (low-bits ≠ value pattern) yields false negatives on degenerate values like all-zero blocks | Med | Oracle additionally checks `blockpool_alloc_count == ops_count` and reads back the block via clflushopt+load; both must hold. Pure structural check still sound |
 
 ---
 
@@ -744,11 +906,13 @@ failure mode.
   blueprint), Phase 5 split into 5a + 5b (predetermined per Q4),
   Phase 5.5 (atomic audit).
 - **~5680 LOC delta** (was ~4200): adds ~630 LOC oracle harness +
-  13 oracle bodies + perf-counter helper; ~700 LOC Phase 5 expansion
+  14 oracle bodies + perf-counter helper; ~700 LOC Phase 5 expansion
   (full receivers across 5a + 5b).
-- **13 invariant oracles** (was 0 invariant-specific tests, only
+- **14 invariant oracles** (was 0 invariant-specific tests, only
   hash-diff). Hash-diff retained as defensive cross-check.
-- **400-cell sweep** (was 4 in first attempt) — gated by §13.
+- **1200-line sweep** (240 unique cells × 5 reps; 3× larger than
+  the 80-cell baseline because KV size is now a sweep dim per Q6;
+  was 4 in first attempt) — gated by `scaling_ycsb_spec.md §13`.
 
 ---
 
@@ -839,6 +1003,31 @@ race-correctness half). The new oracle uses
 `measure_pcie_reads_from_dax(fn)` to verify the read fast path does
 not fall through to any CXL atomic.
 
+**Q6 — Variable-KV blockpool integration scope**: B (in iter-4A,
+not deferred). Rationale: iter-4A sweep numbers should be directly
+usable for paper headlines; deferring leaves a kv-size gap between
+"correctness milestone" and "production data point" that iter-5A
+would inherit. Concretely:
+- Phase 4 ships size-class allocator (256/512/1024 B) + per-host 2
+  GB segment + epoch defer-free.
+- Phase 6 `execute_write_local()` allocates from blockpool, NT-
+  stores value bytes into block, slot stores `(block_ptr,
+  size_class)` not inline u64. **Hard break from iter-3A's
+  inline-u64 slot.**
+- Phase 7 `search()` cross-host miss receives `(block_ptr, size)`
+  via OP_CACHE_REGISTER response, fetches value bytes from CXL
+  block via `clflushopt + mfence + load`. NO inline payload in any
+  message (per §VI-A.bis).
+- Phase 8 cross-host write: ForwardStaging sized for max KV
+  (1 KB × T=86 × 2 outstanding ≈ 176 KB; 1 MB / host headroom
+  unchanged).
+- Phase 10 sweep adds KV size dim: 80 cells → 240 cells × 5 reps
+  = 1200 SUMMARY lines; wall-clock ~3-4.5 h.
+- New 14th oracle `o_kv_blockpool_integrated` flips GREEN at
+  Phase 6, catches "protocol path silently uses inline u64".
+- `scaling_ycsb_spec.md` §3 requires companion edit at start of
+  Phase 10 to declare `KV_SIZES="256 512 1024"`.
+
 ---
 
 ## Ready to start Phase 0.5
@@ -847,14 +1036,14 @@ All structural decisions resolved. Phase 0.5 deliverable list:
 
 1. `tests/oracle_harness.h` (~230 LOC; includes kill_peer /
    restart_peer + perf-counter helper).
-2. `tests/protocol_a_invariants.cc` (~430 LOC; 13 oracle bodies).
+2. `tests/protocol_a_invariants.cc` (~470 LOC; 14 oracle bodies).
 3. `tests/CMakeLists.txt` entry for `protocol_a_invariants` +
    `protocol_a_invariants_tsan`.
 4. `scripts/run_invariant_oracles.sh` cross-host driver.
 5. `src/perf_counter_helper.{h,cc}` (used by `o_ap16` and
    `o_i9_fast_path_no_cxl_access`).
 6. Build on g3/g4; run `bash scripts/run_invariant_oracles.sh`;
-   confirm `13 oracles, 0 PASS, 13 FAIL` reported.
+   confirm `14 oracles, 0 PASS, 14 FAIL` reported.
 
 Phase 0.5 commit prefix: `[iter4A-blueprint][I1..I12][AP3][AP10][AP16]`
 (per H4 hook, multiple I/AP refs in single commit OK).

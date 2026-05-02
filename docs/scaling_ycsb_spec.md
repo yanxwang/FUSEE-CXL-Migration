@@ -56,20 +56,28 @@ required plot set (see §6), plus this spec.
 | Workloads | a, b, c, d, f (e **skipped**: scan unimplemented) | `WORKLOADS="workloada workloadb workloadc workloadd workloadf"` |
 | Clients per host (T) | 1, 2, 4, 8, 16, 32, 64, 86 | `THREADS="1 2 4 8 16 32 64 86"` |
 | Cache modes | on, off (**on first, off second**) | `CACHE_MODES="on off"` |
+| KV value sizes | 256, 512, 1024 B (per Protocol A blockpool) | `KV_SIZES="256 512 1024"` |
 | Reps per cell | 5 (per spec §IX G2 multi-rep stability) | `REPS=5` |
 | Bucket count | 65 536 | `NUM_BUCKETS=65536` |
 | Ops cap | 200 000 per phase | `MAX_OPS=200000` |
 | Hosts | 2 (g3 + g4, role-mode) | `HOST0=g3 HOST1=g4` |
 | Per-run timeout | 600 s | `TIMEOUT_S=600` |
 
-**Total runs**: 1 × 5 × 8 × 2 × 5 = **400** cell-runs (80 unique cells
-× 5 reps). Headline numbers are 5-rep medians.
+**Total runs**: 1 × 5 × 8 × 2 × 3 × 5 = **1200** cell-runs (240 unique
+cells × 5 reps). Headline numbers are 5-rep medians.
 
-A sweep that reports fewer than 80 unique cells (or fewer than 5 reps
-per cell) is **not a valid scaling_ycsb run** and MUST NOT be cited
-as iter-completion evidence. See iter-4A for the cautionary case
-(only 4 cells × 1 rep reported, violating both the cell-count and
-multi-rep gates; flagged as iter-execution-discipline violation per
+KV-size dimension was added 2026-05-02 when Protocol A's blockpool
+integration moved from Phase 4 (API-only) to Phase 6 (full CoW
+write path). Prior to that date, slots stored an inline 8 B value;
+post Protocol A, slots store a CXL block pointer + size_class and
+the actual value lives in a per-host blockpool segment.
+
+A sweep that reports fewer than 240 unique cells (or fewer than 5
+reps per cell) is **not a valid scaling_ycsb run** and MUST NOT be
+cited as iter-completion evidence. See iter-4A first attempt for
+the cautionary case (only 4 cells × 1 rep reported, violating cell-
+count, multi-rep, AND kv-size gates; flagged as iter-execution-
+discipline violation per
 `CLAUDE.md`).
 
 ## 4. Client model
@@ -97,8 +105,9 @@ Output directory pattern: `logs/g34_scaling_sweep_<yyyymmdd_HHMMSS>/`.
 The orchestrator then copies the raw log + regenerated plots into
 **`docs/g34_scaling_ycsb_<yyyymmdd_HHMMSS>/`** (see § 6).
 
-Expected wall-clock: 60-90 min for the full 80-cell × 5-rep matrix
-on an unloaded pair of g3/g4.
+Expected wall-clock: 3-4.5 h for the full 240-cell × 5-rep matrix
+(80 base cells × 3 KV sizes × 5 reps = 1200 SUMMARY.log lines) on
+an unloaded pair of g3/g4.
 
 ## 6. Output layout
 
@@ -108,14 +117,15 @@ Every run writes to a fresh directory:
 docs/g34_scaling_ycsb_<timestamp>/
 ├── SUMMARY.log                    # raw, one line per (cell, rep)
 ├── plot_commit.txt                # git SHA + date + runner env
-├── A_thpt_workload{a,b,c,d,f}.png           # 5 plots — protocol A throughput, 5-rep median
-├── A_thpt_workload{a,b,c,d,f}_band.png      # 5 plots — same with min/max shaded band
-├── A_lat_workload{a,b,c,d,f}_{read,write}.png  # up to 10 plots — A latency (read+write split)
+├── A_thpt_workload{a,b,c,d,f}_kv{256,512,1024}.png   # 15 plots — protocol A throughput per (workload, KV size), 5-rep median
+├── A_thpt_workload{a,b,c,d,f}_kv*_band.png            # 15 plots — same with min/max shaded band
+├── A_lat_workload{a,b,c,d,f}_kv*_{read,write}.png  # up to 30 plots — A latency per (workload, KV size, op kind)
 ├── cache_off/
 │   └── same plot layout for cache-off subset
 ├── extra/
-│   ├── A_target_workload{a,b,c,d,f}.png    # 5 — A throughput vs 20 Mops/s target line
-│   └── A_scaling_efficiency.png            # peak T thpt / single-T thpt across workloads
+│   ├── A_target_workload{a,b,c,d,f}_kv*.png   # 15 — A throughput vs 20 Mops/s target, per (workload, KV size)
+│   ├── A_kv_size_compare_workload*.png        # 5 — KV-size scaling overlay per workload
+│   └── A_scaling_efficiency.png               # peak T thpt / single-T thpt across workloads
 └── (auxiliary: cache_speedup_A_*.png, summary_table.md, gap_to_target.md)
 ```
 
@@ -200,15 +210,17 @@ Reference figure (the look every scaling_ycsb plot should match):
 Every non-FAIL line has exactly this shape:
 
 ```
-YCSB opt=A cache=<0|1> num_hosts=<H> threads=<T> threads_eff=<T'> rep=<r>
+YCSB opt=A cache=<0|1> num_hosts=<H> threads=<T> threads_eff=<T'> kv_size=<256|512|1024> rep=<r>
      load_ops=<N_load> load_thpt=<kops/s>
      trans_ops=<N_trans> trans_wall_max=<seconds> trans_agg_thpt=<kops/s>
      w_avg_ns=<...> w_p50_ns=<...> w_p99_ns=<...>
      r_avg_ns=<...> r_p50_ns=<...> r_p99_ns=<...>
-     # <workload>_optA_t<T>_cache<on|off>_rep<r>
+     # <workload>_optA_t<T>_cache<on|off>_kv<256|512|1024>_rep<r>
 ```
 
 `rep` ∈ {1..5} identifies which repetition of the cell this line is.
+`kv_size` ∈ {256, 512, 1024} identifies the value-byte size class
+the runner used for this cell.
 
 `threads_eff < threads` indicates the runner clamped (legacy from
 A/B's old per-host PendingRing path). For Protocol A as defined in
@@ -253,7 +265,7 @@ and what the sweep was intended to validate.
 
 - **Short runs (200k ops) underestimate steady-state** at T=86 by
   roughly 40-60 % due to `max_wall / avg_wall` ratio sensitivity to
-  OS jitter. The 80-cell × 5-rep sweep is the "headline" result; for
+  OS jitter. The 240-cell × 5-rep sweep is the "headline" result; for
   "final paper-grade" numbers on key cells, follow up with a 2M-ops
   sustained smoke (see `plot_smoke_2M.py`).
 - **Workload e (scan) is skipped** until scan is implemented; plots
@@ -278,7 +290,7 @@ Every Protocol A sweep MUST report the gap to these two targets in
 A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
 
 1. A `docs/g34_scaling_ycsb_<timestamp>/` directory exists with
-   ≥ 80 unique cells × 5 reps (= 400 SUMMARY.log lines, ignoring
+   ≥ 240 unique cells × 5 reps (= 1200 SUMMARY.log lines, ignoring
    FAILs and reruns).
 2. `gap_to_target.md` is generated and present.
 3. The iter summary doc cites the `<timestamp>` of that directory.
