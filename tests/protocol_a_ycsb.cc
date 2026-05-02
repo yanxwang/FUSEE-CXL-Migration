@@ -275,13 +275,15 @@ int main(int argc, char **argv) {
     CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
     flush_line(&hdr->init_done); store_fence();
   } else {
-    // Children of host 0: wait for primary's bit 0.
-    if (host_id == 0) {
-      while (true) {
-        flush_line(&hdr->init_done); full_fence();
-        if ((CACHELINE_LOAD(&hdr->init_done) & 0x1ULL) != 0) break;
-        __builtin_ia32_pause();
-      }
+    // EVERYONE except host 0 primary waits for bit 0 (host 0 primary
+    // has finished init=true attach + ring matrix memset). This
+    // includes host 1 primary AND all non-primary children — without
+    // this barrier, host 1 races with host 0's memset of buckets +
+    // forward ring matrix.
+    while (true) {
+      flush_line(&hdr->init_done); full_fence();
+      if ((CACHELINE_LOAD(&hdr->init_done) & 0x1ULL) != 0) break;
+      __builtin_ia32_pause();
     }
     if (store.attach(buckets, num_buckets, host_id, num_hosts,
                      /*init_region=*/false,

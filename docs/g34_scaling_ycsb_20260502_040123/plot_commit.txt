@@ -1,0 +1,4 @@
+ca56ea2998537dfcb6f1071271c65864803c1ab8
+build_date=Sat May  2 04:01:23 AM CDT 2026
+iter=iter-4A-redo
+kv_size=256 (single size class; KV=512/1024 deferred to iter-5A)
