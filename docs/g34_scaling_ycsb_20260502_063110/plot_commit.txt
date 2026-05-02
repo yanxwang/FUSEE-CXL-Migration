@@ -1,0 +1,5 @@
+8a58aa8c80f1461c5378488a255ee74351b714e6
+build_date=Sat May  2 06:31:10 AM CDT 2026
+iter=iter-5A
+kv_sizes=256/512/1024
+reps=1 (standing default)

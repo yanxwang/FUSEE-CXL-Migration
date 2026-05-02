@@ -331,6 +331,12 @@ A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
    FAILs and reruns excluded.
 2. `gap_to_target.md` is generated and present.
 3. The iter summary doc cites the `<timestamp>` of that directory.
+4. **G6 (concurrent rw race test) PASS**: `tests/protocol_a_rw_race_test`
+   run on the commit referenced in `plot_commit.txt` reports
+   `violations=0`. This is the §I9 strict-A linearizability gate.
+   iter-4A "Phase 8 hash-diff PASS but OP_CACHE_REGISTER never wired"
+   was undetectable from hash-diff alone; G6 closes that hole.
+   First enforced from iter-5A onwards.
 
 Iters that report fewer cells (e.g., iter-4A's 4-cell × 1-rep
 preview) violate this gate and must catch up before the next iter

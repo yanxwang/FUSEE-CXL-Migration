@@ -169,7 +169,12 @@ int main(int argc, char **argv) {
   // CXL region layout:
   //   [4 KB header][bucket array][KvBlockPool region][ForwardRingMatrix][stats]
   std::size_t bucket_bytes = sizeof(CxlKvBucket) * num_buckets;
-  const uint32_t kBlockSize = 256;  // iter-4A-redo: single 256 B size class
+  // iter-5A Phase 7: KV_SIZE (= block_size) is per-cell, env-driven.
+  uint32_t kBlockSize = 256;
+  if (const char *e = getenv("FUSEE_KV_SIZE")) {
+    int v = atoi(e);
+    if (v == 256 || v == 512 || v == 1024) kBlockSize = (uint32_t)v;
+  }
   uint64_t want_blocks = std::max((uint64_t)64,
                                    (uint64_t)trans_ops.size() * 2 +
                                    (uint64_t)load_ops.size());

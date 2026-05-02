@@ -1420,6 +1420,16 @@ These ops are common but small enough to express as 1-2 line primitive sequences
 13. **AP13: 把 phys_hosts_pr_, my_phys_host_pr_ 等 routing field 留 default value** — Finding-1 的失败模式。attach() 必须从 FUSEE_NUM_HOSTS 等 env 显式赋值, **没有合法的 default fallback**。
 14. **AP14: silently 把 sharer set 退化成 broadcast** — directory entry 不能省。如果 directory 因为某些原因不 available（e.g. crash 后），必须显式 broadcast all hosts (recovery 路径)，不能让某次 op silently broadcast。
 15. **AP15: cache fill 在 register ACK 之前完成** — 违反 I9 race-free invariant.
+16. **AP16: 在 CXL 上的 std::atomic store / RMW 不 flush_line+sfence**
+    — `std::atomic::store` / `fetch_add` / `compare_exchange` 在 x86 上是
+    单 CPU coherence domain 内原子, **不会自动 flush 到 CXL device**。
+    跨 host 读 atomic 字段必须 producer 端 `flush_line + sfence` 把脏行
+    push 到 CXL，否则 consumer host 读到 stale。iter-4A Phase 10 在
+    `ForwardRing::tail` 上踩到此坑，~16,000× 性能损失；iter-5A Phase 4
+    `InvalRing::tail`/`InvalEntry::resp_op_id` 同样必须 flush。诊断
+    checklist: grep src 下所有 `std::atomic` field, 验证每处 store/RMW
+    后立即跟随 `flush_line(&that_field) + store_fence()`。在 CXL region
+    内的 atomic 视为 device-mapped 而非 cache-coherent。
 
 ### VIII — Protocol comparison
 
@@ -1443,7 +1453,11 @@ iter-4A 任何 sweep / benchmark 必须报告:
 3. **N:1:1:N 真实激活验证**: dispatch_and_wait 里的 cross-host enqueue loop 必须有 non-zero iteration count (以 sweep summary 报告, e.g. "all cells ran with `phys_hosts_pr_=2`, enqueue loop executed N times"); 否则 = AP13 的 silent failure.
 4. **Directory hit rate**: invalidation 流量 = ops × avg_sharers_per_key, 必须报告 sharers 分布 (mean, p99); broadcast (sharers==H) 比例 < 5% (否则 directory 不起作用了, 等同 broadcast).
 5. **Forward routing measured**: cross-host write 比例 + forward latency p50/p99; same-host write 比例 + forward overhead 0 (sanity check).
-
+6. **G6 — 并发 read+write race test**: iter-5A Phase 4 起列入 iter-completion
+   gate。`tests/protocol_a_rw_race_test`: host 0 把 key K 单调递增写
+   1..N，host 1 持续读 K 断言永远不下降。**violations = 0** 是 §I9 strict-A
+   linearizability 的直接 evidence。如果 hash-diff 都 PASS 而 G6 fail, 就是
+   iter-4A "Phase 8 hash-diff PASS 但 §I9 缺口 untested" 的精确再现。
 
 ### X — Enforcement mechanisms
 

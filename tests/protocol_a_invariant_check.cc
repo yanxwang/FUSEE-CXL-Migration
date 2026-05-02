@@ -72,9 +72,16 @@ static int test_ap13_trip_wire() {
     SlotDirectory dir; slot_directory_init(&dir, dir_mem, B, kCxlKvSlotsPerBucket);
     KvCachePool cache; cache_pool_init(&cache, cache_mem, B);
     BlockFreeList fl; block_freelist_init(&fl);
+    // iter-5A: attach now requires a pool. AP13 fires before pool is
+    // touched so a minimal pool is fine.
+    std::size_t pool_bytes = CxlKvBlockPool::bytes_for(64, 256, 2);
+    void *pool_mem = mmap(nullptr, pool_bytes, PROT_READ | PROT_WRITE,
+                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    CxlKvBlockPool pool;
+    pool.attach(pool_mem, pool_bytes, 64, 256, 0, 2, true);
     CxlKvStoreA store;
     // Pass num_hosts=2 to attach — should ABORT.
-    store.attach(bucket_mem, B, 0, 2, true, &st, &dir, &cache, &fl);
+    store.attach(bucket_mem, B, 0, 2, true, &st, &dir, &cache, &fl, &pool);
     _exit(0);  // unreachable if abort fires
   }
   int st;
