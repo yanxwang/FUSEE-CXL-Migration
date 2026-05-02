@@ -57,14 +57,24 @@ required plot set (see §6), plus this spec.
 | Clients per host (T) | 1, 2, 4, 8, 16, 32, 64, 86 | `THREADS="1 2 4 8 16 32 64 86"` |
 | Cache modes | on, off (**on first, off second**) | `CACHE_MODES="on off"` |
 | KV value sizes | 256, 512, 1024 B (per Protocol A blockpool) | `KV_SIZES="256 512 1024"` |
-| Reps per cell | 5 (per spec §IX G2 multi-rep stability) | `REPS=5` |
+| Reps per cell | **1** (default; specific experiments may override) | `REPS=1` |
 | Bucket count | 65 536 | `NUM_BUCKETS=65536` |
 | Ops cap | 200 000 per phase | `MAX_OPS=200000` |
 | Hosts | 2 (g3 + g4, role-mode) | `HOST0=g3 HOST1=g4` |
 | Per-run timeout | 600 s | `TIMEOUT_S=600` |
 
-**Total runs**: 1 × 5 × 8 × 2 × 3 × 5 = **1200** cell-runs (240 unique
-cells × 5 reps). Headline numbers are 5-rep medians.
+**Total runs**: 1 × 5 × 8 × 2 × 3 × 1 = **240** cell-runs (240 unique
+cells × 1 rep). Headline numbers are single-rep observations.
+
+**Reps policy (set 2026-05-02)**: standard sweep is 1 rep per cell.
+Multi-rep (REPS=N, N>1) is reserved for **specific experiments
+that explicitly require it**: e.g., investigating noise on a
+suspected unstable cell, validating a stability fix, or producing
+a paper-grade headline number. When a multi-rep run happens, the
+iter summary doc / experiment log MUST state the rep count + why
+multi-rep was needed. Default sweeps that report 1-rep numbers
+are valid; the spec §IX G2 "multi-rep stability" gate is
+NOT enforced at iter-completion unless the iter explicitly opts in.
 
 KV-size dimension was added 2026-05-02 when Protocol A's blockpool
 integration moved from Phase 4 (API-only) to Phase 6 (full CoW
@@ -72,13 +82,13 @@ write path). Prior to that date, slots stored an inline 8 B value;
 post Protocol A, slots store a CXL block pointer + size_class and
 the actual value lives in a per-host blockpool segment.
 
-A sweep that reports fewer than 240 unique cells (or fewer than 5
-reps per cell) is **not a valid scaling_ycsb run** and MUST NOT be
-cited as iter-completion evidence. See iter-4A first attempt for
-the cautionary case (only 4 cells × 1 rep reported, violating cell-
-count, multi-rep, AND kv-size gates; flagged as iter-execution-
-discipline violation per
-`CLAUDE.md`).
+A sweep that reports fewer than 240 unique cells is **not a valid
+scaling_ycsb run** and MUST NOT be cited as iter-completion
+evidence. See iter-4A first attempt for the cautionary case (only
+4 cells × 1 rep reported, violating cell-count AND kv-size gates;
+flagged as iter-execution-discipline violation per `CLAUDE.md`).
+Cell-count remains the primary completion criterion; rep-count is
+a per-experiment knob.
 
 ## 4. Client model
 
@@ -105,9 +115,9 @@ Output directory pattern: `logs/g34_scaling_sweep_<yyyymmdd_HHMMSS>/`.
 The orchestrator then copies the raw log + regenerated plots into
 **`docs/g34_scaling_ycsb_<yyyymmdd_HHMMSS>/`** (see § 6).
 
-Expected wall-clock: 3-4.5 h for the full 240-cell × 5-rep matrix
-(80 base cells × 3 KV sizes × 5 reps = 1200 SUMMARY.log lines) on
-an unloaded pair of g3/g4.
+Expected wall-clock: ~60-90 min for the full 240-cell single-rep
+matrix (80 base cells × 3 KV sizes × 1 rep = 240 SUMMARY.log lines)
+on an unloaded pair of g3/g4. Multi-rep experiments scale linearly.
 
 ## 6. Output layout
 
@@ -117,9 +127,8 @@ Every run writes to a fresh directory:
 docs/g34_scaling_ycsb_<timestamp>/
 ├── SUMMARY.log                    # raw, one line per (cell, rep)
 ├── plot_commit.txt                # git SHA + date + runner env
-├── A_thpt_workload{a,b,c,d,f}_kv{256,512,1024}.png   # 15 plots — protocol A throughput per (workload, KV size), 5-rep median
-├── A_thpt_workload{a,b,c,d,f}_kv*_band.png            # 15 plots — same with min/max shaded band
-├── A_lat_workload{a,b,c,d,f}_kv*_{read,write}.png  # up to 30 plots — A latency per (workload, KV size, op kind)
+├── A_thpt_workload{a,b,c,d,f}_kv{256,512,1024}.png   # 15 plots — protocol A throughput per (workload, KV size)
+├── A_lat_workload{a,b,c,d,f}_kv*_{read,write}.png    # up to 30 plots — A latency per (workload, KV size, op kind)
 ├── cache_off/
 │   └── same plot layout for cache-off subset
 ├── extra/
@@ -128,6 +137,15 @@ docs/g34_scaling_ycsb_<timestamp>/
 │   └── A_scaling_efficiency.png               # peak T thpt / single-T thpt across workloads
 └── (auxiliary: cache_speedup_A_*.png, summary_table.md, gap_to_target.md)
 ```
+
+When `REPS > 1` is explicitly opted-in, additionally produce:
+
+```
+├── A_thpt_workload*_kv*_band.png   # 15 plots — same as throughput plots with min/max shaded band
+```
+
+(`_band.png` only meaningful when REPS > 1; single-rep runs omit
+this variant.)
 
 (workloadc has only reads → no `_write.png`; other workloads have both
 `_read.png` and `_write.png`.)
@@ -192,7 +210,8 @@ Reference figure (the look every scaling_ycsb plot should match):
 ### `extra/A_target_*.png` — gap-to-target plots
 
 - 5 throughput plots, one per workload.
-- Each plot shows Protocol A's 5-rep median throughput line plus a
+- Each plot shows Protocol A's throughput line (single-rep
+  observations OR multi-rep median, whichever the run used) plus a
   horizontal red dashed line at **20 Mops/s** (the design target per
   `docs/design_goals.md`).
 - The gap (target − peak observed) is annotated at the rightmost
@@ -218,7 +237,9 @@ YCSB opt=A cache=<0|1> num_hosts=<H> threads=<T> threads_eff=<T'> kv_size=<256|5
      # <workload>_optA_t<T>_cache<on|off>_kv<256|512|1024>_rep<r>
 ```
 
-`rep` ∈ {1..5} identifies which repetition of the cell this line is.
+`rep` is the 1-based repetition index of the cell this line is.
+For default sweeps `rep=1` always; multi-rep experiments produce
+N lines per cell (`rep=1..N`).
 `kv_size` ∈ {256, 512, 1024} identifies the value-byte size class
 the runner used for this cell.
 
@@ -240,14 +261,23 @@ aggregated across clients via:
 - `p50`: median of per-client p50 values (across the `2×T` workers).
 - `p99`: max of per-client p99 values (conservative; captures tails).
 
-Across reps for the same cell (5 reps):
+Across reps for the same cell (only applies when REPS > 1; default
+single-rep sweeps skip this section):
 
-- Headline throughput: **median of 5**. Min/max shown as a band on
+- Headline throughput: **median of N**. Min/max shown as a band on
   `*_band.png` plots.
-- Headline latency p50/p99: median of 5.
+- Headline latency p50/p99: median of N.
 - A cell where `(max − min) / median > 0.20` is flagged in
   `summary_table.md` as **unstable**; user is asked whether to
   re-run that cell with more reps.
+
+For single-rep sweeps (REPS=1, default), each cell's headline
+throughput / latency is the single observed value. No min/max
+bands; no unstable-cell flag (need ≥ 2 reps to compute spread).
+Single-rep numbers should be treated as **indicative**, not
+steady-state — when a number drives a major decision (e.g. paper
+headline, "did the optimization work" verdict), the relevant
+cells should be re-run with REPS = 5+ explicitly.
 
 ## 10. Run index
 
@@ -265,9 +295,14 @@ and what the sweep was intended to validate.
 
 - **Short runs (200k ops) underestimate steady-state** at T=86 by
   roughly 40-60 % due to `max_wall / avg_wall` ratio sensitivity to
-  OS jitter. The 240-cell × 5-rep sweep is the "headline" result; for
-  "final paper-grade" numbers on key cells, follow up with a 2M-ops
-  sustained smoke (see `plot_smoke_2M.py`).
+  OS jitter. The 240-cell single-rep matrix is the standard result;
+  for "final paper-grade" numbers on key cells, follow up with a
+  2M-ops sustained smoke (see `plot_smoke_2M.py`) and/or a
+  multi-rep experiment (REPS=5+).
+- **Single-rep is the default** (set 2026-05-02). Multi-rep
+  experiments are explicit opt-ins, not the headline cadence. A
+  single-rep number that swings between runs is normal — multi-rep
+  is the tool to investigate or commit to a stable number.
 - **Workload e (scan) is skipped** until scan is implemented; plots
   silently omit workloade.
 
@@ -290,8 +325,10 @@ Every Protocol A sweep MUST report the gap to these two targets in
 A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
 
 1. A `docs/g34_scaling_ycsb_<timestamp>/` directory exists with
-   ≥ 240 unique cells × 5 reps (= 1200 SUMMARY.log lines, ignoring
-   FAILs and reruns).
+   ≥ 240 unique cells (cell-count is the headline gate; reps are
+   per-experiment so a default 1-rep sweep produces 240
+   SUMMARY.log lines, while an opt-in 5-rep sweep produces 1200).
+   FAILs and reruns excluded.
 2. `gap_to_target.md` is generated and present.
 3. The iter summary doc cites the `<timestamp>` of that directory.
 

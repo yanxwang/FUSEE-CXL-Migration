@@ -413,8 +413,10 @@ ACK).
    instrumentation. If > 8 Mops/s observed and worker p99
    latency degrades > 2× from T=64 — flag as saturation, K-shard.
 4. Hash-diff battery (re-enabled after Phase 5): 5 reps × T={2,4,
-   8,16} hash-diff. Final bucket array byte-identical between
-   hosts. Validates write path didn't regress.
+   8,16} hash-diff (multi-rep is appropriate here — this is an
+   explicit correctness experiment, not the standard sweep). Final
+   bucket array byte-identical between hosts. Validates write path
+   didn't regress.
 
 **Success criterion**: 100k rw race test PASS (zero monotonicity
 violation); workload-a 50k T=2 smoke completes; dispatcher rate
@@ -448,6 +450,8 @@ invariant CI tests.
 1. Build all 5 protocol_a_*.cc tests on g3 + g4. Zero compile errors.
 2. Run hash-diff battery: 5 reps × T={2,4,8,16,32} × workloadA
    100k UPDATEs = 25 runs, 25/25 PASS (cross-host bytes match).
+   Multi-rep here is an explicit correctness experiment per spec
+   §3 reps-policy carve-out, NOT the iter cadence.
 3. Run rw race test 5 times back-to-back, 25/25 PASS (zero
    monotonicity violation).
 4. Run protocol_a_invariant_check: AP13 trip wire fires; I3
@@ -502,7 +506,7 @@ violations; spec text reads correctly.
 
 ## Phase 7: Full sweep + iter-completion gate
 
-**Goal**: run the full 1200-cell × 5-rep × 3-KV-size sweep per
+**Goal**: run the full 240-cell × 1-rep × 3-KV-size sweep per
 `docs/scaling_ycsb_spec.md §3` and emit all required artifacts +
 plots. Verify iter-completion gate (§13) passes.
 
@@ -512,10 +516,8 @@ plots. Verify iter-completion gate (§13) passes.
 - MODIFIED `scripts/run_iter4A_redo_sweep.sh` → `run_iter5A_sweep.sh`:
   - Loop over KV_SIZES="256 512 1024".
   - Set MAX_OPS=200000 (spec value, not 50000).
-  - **REPS=1** (per QR5; 1 rep only this iter — 5-rep multi-rep
-    stability gate G2 is suspended for iter-5A and re-instated in
-    iter-6A once the dispatcher channel + blockpool path have
-    multi-rep history).
+  - **REPS=1** (per QR5 / spec §3 standing default; multi-rep is a
+    per-experiment opt-in, not the iter cadence).
   - Output dir `docs/g34_scaling_ycsb_<ts>/`.
   - At end, invoke `iter5A_summarize.py` + `plot_iter5A.py` (rename
     + parameterize for KV size) to generate all spec §6 plots.
@@ -527,11 +529,11 @@ plots. Verify iter-completion gate (§13) passes.
 **Validation experiment**:
 1. Full sweep: 1 protocol × 5 workloads × 8 T × 2 cache × 3 KV
    sizes × 1 rep = **240 SUMMARY.log lines**. **0 FAILs target**;
-   any FAILs investigated. (Per QR5 the 5-rep gate is suspended;
-   spec §13 iter-completion gate is correspondingly relaxed for
-   iter-5A only — iter-6A restores 5-rep.)
-2. All 6 validation gates G1, G3-G6 reported in `gap_to_target.md`.
-   G2 (multi-rep) explicitly marked DEFERRED-iter-6A.
+   any FAILs investigated. Spec §13 iter-completion gate is on
+   cell-count, not rep-count, so 240 single-rep cells satisfies it.
+2. Validation gates G1, G3-G6 reported in `gap_to_target.md`.
+   G2 (multi-rep stability) is opt-in not enforced; flagged in
+   `gap_to_target.md` as "single-rep run; G2 not measured".
 3. Plots generated per §6: per-KV-size A_thpt_workload<wl>_kv<X>,
    A_lat per (wl, KV size, op), extra/A_target_workload<wl>_kv<X>,
    extra/A_kv_size_compare_workload<wl>, A_scaling_efficiency.
@@ -547,7 +549,7 @@ references the timestamped output dir.
 
 **Bottleneck check**: per `docs/scaling_ycsb_spec.md` expected
 ~50-90 min for the 240-cell single-rep matrix at MAX_OPS=200k
-(was 3-4.5h for the 1200-cell × 5-rep matrix); if exceeds 2h,
+(spec §5 estimate ~60-90 min); if exceeds 2h,
 identify cause.
 
 ---
@@ -616,7 +618,7 @@ If any criterion fails, the phase is not done.
 | QR2 | Phase 4 rw race test: monotonically increasing values, or richer pattern (random key chosen + post-hoc total-order verification)? | Monotonic (simpler oracle, sufficient for §I9 strict-A invariant) |
 | QR3 | Phase 6 AP16 hook: full grep-based static check, or document-only checklist? | Document checklist + manual grep audit script. Full static check is iter-7 if false-negative rate observed |
 | QR4 | Phase 7 KV size grid: 256/512/1024 (3 sizes per spec) or include 8 (legacy inline)? | 3 sizes per spec; legacy 8 dropped (was iter-4 backward-compat artifact) |
-| QR5 | Phase 7 reps per cell | **REPS=1** (user, 2026-05-02). 5-rep G2 multi-rep stability gate suspended for iter-5A; re-instated iter-6A. Total cells 240 not 1200. |
+| QR5 | Phase 7 reps per cell | **REPS=1** (user, 2026-05-02). Single-rep is the **standing default for ALL iters**, not just iter-5A — multi-rep is per-experiment opt-in (e.g., paper-grade headline, stability investigation). Spec §3 + §9 + §13 updated to make this permanent. Total cells 240. |
 | QR6 | Cell-isolation cleanup (the 2 first-rep timeouts) — fold into Phase 7 or a separate Phase? | Fold into Phase 7 sweep script (`sleep 0.2; chmod 666 /dev/dax0.0` between cells) |
 | QR7 | Phase 1: when do hypotheses get exhausted? | **No phase budget.** Persistence wins (user, 2026-05-02): break, collect data, find exact hung code first; then hypothesize. Phase 1 ends only when root cause is named + A-B confirmed. Only escalate on physical impossibility (testbed unreachable). |
 | QR8 | Phase 5: keep iter-4A-redo's `protocol_a_ycsb.cc` (custom runner) OR finally integrate into `cxl_ycsb_runner.cc` (the C/B-shaped runner)? | Keep `protocol_a_ycsb.cc` separate; the unified runner is iter-7+ effort |
@@ -628,7 +630,7 @@ If any criterion fails, the phase is not done.
 - **7 phases**, each with concrete code + test + experiment
 - **~1000 LOC delta** across blockpool fix + invalidate channel + tests
 - **6 invariants/AP** newly enforced (I9 strict-A, I10 commit point, AP14, AP15, AP16, G6)
-- **2 hard blockers (P1 + P2) closed**, plus **most of P3-P11** from iter-4A-redo's secondary deficit list folded in (P3 → Phase 5; P4/P5 → Phase 7; P6 → Phase 7 metrics; P7 → Phase 7 sweep script; P8 acceptable per §11; P9 → Phase 6; P10 → Phase 4; P11 → Phase 6). G2 multi-rep stability is **deferred to iter-6A** per QR5.
+- **2 hard blockers (P1 + P2) closed**, plus **most of P3-P11** from iter-4A-redo's secondary deficit list folded in (P3 → Phase 5; P4/P5 → Phase 7; P6 → Phase 7 metrics; P7 → Phase 7 sweep script; P8 acceptable per §11; P9 → Phase 6; P10 → Phase 4; P11 → Phase 6). G2 multi-rep stability is now **opt-in not iter-default** per spec §3 update — invoked when a specific experiment requires it, not as standard iter cadence.
 - **20 Mops/s gap closure** explicitly OUT of scope (iter-6A), so this iter has a clear "done" criterion that doesn't depend on hitting the absolute throughput target
 
 ---
