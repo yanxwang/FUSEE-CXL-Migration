@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_dram_cache_test.dir/cxl_dram_cache_test.cc.o -o cxl_dram_cache_test  ../src/libfusee_cxl.a -lpthread 

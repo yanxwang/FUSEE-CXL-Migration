@@ -15,6 +15,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from plot_style import apply_style  # noqa: E402
+apply_style()
+
 YCSB = re.compile(
     r"^YCSB\s+opt=(?P<opt>[ABC])\s+cache=(?P<c>[01])\s+"
     r"(?:value_size=(?P<vs>\d+)\s+)?"

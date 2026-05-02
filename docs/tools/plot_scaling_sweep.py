@@ -24,6 +24,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from plot_style import apply_style, COLORS  # noqa: E402
+apply_style()
+
 YCSB = re.compile(
     r"^YCSB\s+opt=(?P<opt>[ABC])\s+cache=(?P<c>[01])\s+"
     r"(?:value_size=(?P<vs>\d+)\s+)?"
@@ -66,8 +70,9 @@ def plot_thpt(opt, wl, Ts, thpts, out_path):
     # commented for regen.
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ys = [t / 1e6 for t in thpts]  # Mops/s
+    # Per plot_style: A is the focus protocol → accent red; B/C → greys.
     ax.plot(Ts, ys, "o-", lw=2, markersize=7,
-            color={"A":"#3182bd","B":"#e6550d","C":"#31a354"}[opt])
+            color=COLORS[opt])
     ax.set_xscale("log", base=2)
     ax.set_xticks(Ts); ax.set_xticklabels([str(t) for t in Ts])
     # LOG-Y (commented; uncomment to re-enable):
@@ -95,9 +100,15 @@ def plot_lat(opt, wl, Ts, series_avg, series_p50, series_p99, out_path,
     n_ts = len(Ts)
     x = np.arange(n_ts)
     w = 0.27
-    ax.bar(x - w, series_avg, w, label="avg", color="#6baed6")
-    ax.bar(x,     series_p50, w, label="p50", color="#fd8d3c")
-    ax.bar(x + w, series_p99, w, label="p99", color="#74c476")
+    # Per plot_style Style B: 3-tone greyscale, accent on p99 (the
+    # tail-latency stat we usually care about most).
+    from plot_style import STYLE_B
+    ax.bar(x - w, series_avg, w, label="avg", color=STYLE_B[0],
+           edgecolor="#222", linewidth=0.6)
+    ax.bar(x,     series_p50, w, label="p50", color=STYLE_B[1],
+           edgecolor="#222", linewidth=0.6)
+    ax.bar(x + w, series_p99, w, label="p99", color=STYLE_B[2],
+           edgecolor="#222", linewidth=0.6)
     # LOG-Y (commented; uncomment to re-enable):
     #   def sanitize(vs): return [max(v, 0.01) for v in vs]
     #   ax.bar(x - w, sanitize(series_avg), ...)

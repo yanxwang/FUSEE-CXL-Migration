@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_bucket_lock_test.dir/cxl_bucket_lock_test.cc.o -o cxl_bucket_lock_test  ../src/libfusee_cxl.a -lpthread 

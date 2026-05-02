@@ -1,0 +1,28 @@
+# FUSEE-CXL testbed hardware bench (g3 only, single-host)
+# host=g3 (debian-615-uintr, kernel 6.15)
+# CPU: dual-socket 86-core Intel Xeon (NUMA node 0 = 172 total logical, node 1 = CXL)
+# CXL: /dev/dax0.0 (devdax mode, 512 GiB, target_node=1 in system-ram mode)
+# tool: tests/bench_cxl_dram.c, region=8 GiB per test
+# date: 2026-04-24
+
+### DRAM (NUMA node 0, local)
+T=1   seq_read   9820 MB/s   seq_write   7257 MB/s   rand_read   99.7 Mops/s (5640 MB/s)   lat_idle 121 ns   lat_flush 194 ns
+T=4   seq_read  32836 MB/s   seq_write  29580 MB/s   rand_read  356.7 Mops/s (22051 MB/s)   lat_idle 129 ns   lat_flush 252 ns
+T=8   seq_read  60447 MB/s   seq_write  51010 MB/s   rand_read  683.3 Mops/s (55664 MB/s)   lat_idle 124 ns   lat_flush 217 ns
+T=16  seq_read 106081 MB/s   seq_write  75058 MB/s   rand_read 1374.4 Mops/s (84578 MB/s)   lat_idle 129 ns   lat_flush 255 ns
+T=32  seq_read 158128 MB/s   seq_write 101452 MB/s   rand_read 2516.0 Mops/s (156506 MB/s)  lat_idle 123 ns   lat_flush 217 ns
+T=64  seq_read 217071 MB/s   seq_write 182817 MB/s   rand_read 4548.4 Mops/s (261670 MB/s)  lat_idle 123 ns   lat_flush 207 ns
+T=86  seq_read 238881 MB/s   seq_write 209114 MB/s   rand_read 5489.7 Mops/s (328121 MB/s)  lat_idle 131 ns   lat_flush 246 ns
+
+### CXL (/dev/dax0.0 devdax, single-host, node 1)
+T=1   seq_read   6625 MB/s   seq_write   7873 MB/s   rand_read   32.2 Mops/s (2055 MB/s)    lat_idle 590 ns   lat_flush 1102 ns
+T=4   seq_read  18589 MB/s   seq_write  16469 MB/s   rand_read  138.2 Mops/s (8691 MB/s)    lat_idle 621 ns   lat_flush 1147 ns
+T=8   seq_read  21073 MB/s   seq_write  14565 MB/s   rand_read  261.1 Mops/s (16458 MB/s)   lat_idle 588 ns   lat_flush  727 ns
+T=16  seq_read  22559 MB/s   seq_write  17685 MB/s   rand_read  406.3 Mops/s (25672 MB/s)   lat_idle 629 ns   lat_flush 1150 ns
+T=32  seq_read  23451 MB/s   seq_write  21750 MB/s   rand_read  427.6 Mops/s (26282 MB/s)   lat_idle 606 ns   lat_flush 1150 ns
+T=64  seq_read  24003 MB/s   seq_write  14770 MB/s   rand_read  403.0 Mops/s (26109 MB/s)   lat_idle 608 ns   lat_flush 1149 ns
+T=86  seq_read  24405 MB/s   seq_write  14128 MB/s   rand_read  416.1 Mops/s (26354 MB/s)   lat_idle 555 ns   lat_flush 1120 ns
+
+### cross-host CXL access (from Phase-1 LFM anatomy, not re-measured)
+single peer_scan (clflushopt + mfence + load of peer-written CL) p50 = 2820 ns = 2.82 µs
+uncontended LFM acquire (2×RTT) = 4.37 µs

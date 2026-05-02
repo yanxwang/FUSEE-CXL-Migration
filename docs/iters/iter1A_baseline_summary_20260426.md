@@ -205,6 +205,12 @@ removes that scaling cost entirely.
 - `docs/iters/iter1A_baseline_summary_20260426.md` — this doc.
 - `logs/g34_iter1A_baseline_A_20260426_022130/` — 40-cell sweep
   output (32 OK + 8 FAIL).
+- `docs/iters/task_plan_20260426_iter2A_perhost_wire_compress.md`
+  — **iter-2A plan** (drafted 2026-04-26): wires Solution-1
+  dispatch + replicator (A and B), implements Solution-2 entry
+  compression 32 B → 16 B, full 80-cell A-only scaling_ycsb
+  sweep ×2 (Solution 1 alone + Solution 1+2), decomp re-runs at
+  T=4/16/64.
 
 ### Modified files
 

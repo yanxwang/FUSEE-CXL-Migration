@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_ycsb_runner_B.dir/cxl_ycsb_runner.cc.o -o cxl_ycsb_runner_B  ../src/libfusee_cxl.a -lpthread 

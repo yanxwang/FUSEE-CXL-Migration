@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_atomic_xhost.dir/cxl_atomic_xhost.cc.o -o cxl_atomic_xhost  ../src/libfusee_cxl.a -lpthread 

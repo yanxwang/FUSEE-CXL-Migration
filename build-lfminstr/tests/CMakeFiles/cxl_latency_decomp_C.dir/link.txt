@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_latency_decomp_C.dir/cxl_latency_decomp_C.cc.o -o cxl_latency_decomp_C  ../src/libfusee_cxl_decomp.a -lpthread 

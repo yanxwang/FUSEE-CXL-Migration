@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_kv_bench_mp_C.dir/cxl_kv_bench_mp.cc.o -o cxl_kv_bench_mp_C  ../src/libfusee_cxl.a -lpthread 

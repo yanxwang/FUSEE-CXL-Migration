@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/cxl_xhost_test.dir/cxl_xhost_test.cc.o -o cxl_xhost_test  ../src/libfusee_cxl.a -lpthread 

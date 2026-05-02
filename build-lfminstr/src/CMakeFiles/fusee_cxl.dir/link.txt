@@ -1,0 +1,2 @@
+/usr/bin/ar qc libfusee_cxl.a CMakeFiles/fusee_cxl.dir/cxl_mm.cc.o CMakeFiles/fusee_cxl.dir/cxl_bucket_lock.cc.o CMakeFiles/fusee_cxl.dir/cxl_kv_ops_C.cc.o CMakeFiles/fusee_cxl.dir/cxl_kv_ops_A.cc.o CMakeFiles/fusee_cxl.dir/cxl_kv_ops_B.cc.o CMakeFiles/fusee_cxl.dir/cxl_oplog.cc.o CMakeFiles/fusee_cxl.dir/cxl_batch_ring.cc.o CMakeFiles/fusee_cxl.dir/cxl_latency_decomp_probe.cc.o CMakeFiles/fusee_cxl.dir/home/yanwang/cxl_shm_profiling/locks/lfm_lock.c.o CMakeFiles/fusee_cxl.dir/ticket_lock_fusee_patched.c.o
+/usr/bin/ranlib libfusee_cxl.a

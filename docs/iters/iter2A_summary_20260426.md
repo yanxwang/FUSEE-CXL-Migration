@@ -1,10 +1,58 @@
 # iter-2A — Solution-1 wire-up + Solution-1 perf evaluation (partial)
 
+> **🚫 STATUS: REVERTED 2026-04-27**.
+> Source-level revert: `src/cxl_kv_ops_A.{cc,h}` returned to
+> commit `1ab30d7` (post-iter-1A) end state; `cxl_per_host_ring.h`
+> declarations remain dead code pending Phase 1 redesign.
+>
+> **Two reasons for revert**:
+> 1. **Strict-A semantics violated**. The wire's
+>    `replicator_loop` published `ack_seq` immediately after
+>    pushing DramInvalQueue entries — without waiting for local
+>    clients to consume the inval. Subsequent reads on local
+>    clients could return stale values, breaking linearizability.
+>    A protocol's defining property (sync consensus → strict
+>    linearizability) was silently degraded to LRC. Not documented.
+> 2. **Architecture mis-implementation**. User's intent for
+>    "per-host ring" was always **N producers → 1 sender thread → CXL
+>    → 1 receiver thread → 1:N invalidation** (a true N:1:1:N
+>    aggregation). This iter implemented a half-aggregated form:
+>    N producers directly contend on shared MPSC ring tail;
+>    receiver still serial-pushes N-1 DramInvalQueue. Neither true
+>    aggregation nor strict semantics — both wrong.
+>
+> **Superseded by**: `task_plan_20260427_iter2A_revised_n11n_atomic.md`
+> (full N:1:1:N + atomic_store invalidation via x86 coherence,
+> preserves strict A).
+>
+> **Kept as historical record** (NOT deleted) — illustrates the
+> two failure modes for future reference.
+
 **Date**: 2026-04-26
-**Plan**: `docs/iters/task_plan_20260426_iter2A_perhost_wire_compress.md`
-(scope-compressed: testbed work done in a 7h45min window;
-Solution-2 + B-wire deferred to iter-3A per Q-ε descope ladder).
+**Plan**: `docs/iters/task_plan_20260426_iter2A_perhost_wire_compress.md`.
 **Branch**: `feat/cxl-migration` (commit prefix `[iter2A-wire]`).
+
+> **⚠ Methodology-violation post-mortem (added 2026-04-26)**:
+> This iter shipped only Phase 1 of the planned 9. The descope
+> reasoning at the time ("result is unambiguous, not worth 3+ h
+> testbed time") **violated** the now-codified rule
+> `docs/refs/optimization_methodology.md` §1.5 ("Execute every
+> planned phase within the deadline") and is the cautionary
+> precedent in §6.8.
+>
+> **Concrete violation**: Phase 1 finished at 06:27 (commit
+> `4f05b83`); deadline was 11:59 (5h 31min remaining). The
+> planned 80-cell sweep + decomp + B-wire **fit the remaining
+> window** but were skipped. Worse, the diagnostic ("single-
+> receiver fan-out is the new bottleneck") used to justify the
+> descope had **no receiver-side instrumentation** — the µs/entry
+> numbers were hand-calculated from component costs, not
+> measured. So the descope rationale was itself unverified.
+>
+> iter-3A's Phase 0 explicitly remediates this: add receiver-side
+> per-entry instrumentation + queue-depth probe + re-run T=4
+> cell + archive raw log, BEFORE any optimisation. See iter-3A
+> plan when drafted.
 
 ---
 

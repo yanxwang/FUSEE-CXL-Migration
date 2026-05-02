@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# iter-4A Phase 6 hash-diff battery for CxlKvStoreA_v2.
+# iter-4A Phase 6 hash-diff battery for CxlKvStoreA.
 # 5 reps × T={2,4,8,16} × workload-equivalent on each host:
 # both hosts run worker forks; each writes only its owned keys.
 # Final bucket bytes compared via cmp.
@@ -11,7 +11,7 @@ OPS=${OPS:-10000}
 BUCKET_BYTES=$((NB * 128))   # 128 B per bucket (CxlKvBucket)
 DIFF_OFFSET=16
 
-echo "## Phase 6 hash-diff battery (CxlKvStoreA_v2 owner-self) ##"
+echo "## Phase 6 hash-diff battery (CxlKvStoreA owner-self) ##"
 echo "## ops=$OPS num_buckets=$NB"
 fail=0; pass=0
 for rep in 1 2 3 4 5; do
@@ -20,8 +20,8 @@ for rep in 1 2 3 4 5; do
     H0=/tmp/iter4A_p6_h0_r${rep}_T${T}.bin
     H1=/tmp/iter4A_p6_h1_r${rep}_T${T}.bin
     L0=$(basename $H0); L1=$(basename $H1)
-    H0_CMD="FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=$T FUSEE_RUN_COOKIE=$cookie FUSEE_FINAL_STATE_DUMP=$H0 /root/FUSEE_CXL/build-cxl/tests/protocol_a_v2_2host_test $DEV $NB $OPS"
-    H1_CMD="FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=$T FUSEE_RUN_COOKIE=$cookie FUSEE_FINAL_STATE_DUMP=$H1 /root/FUSEE_CXL/build-cxl/tests/protocol_a_v2_2host_test $DEV $NB $OPS"
+    H0_CMD="FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=$T FUSEE_RUN_COOKIE=$cookie FUSEE_FINAL_STATE_DUMP=$H0 /root/FUSEE_CXL/build-cxl/tests/protocol_a_2host_test $DEV $NB $OPS"
+    H1_CMD="FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=$T FUSEE_RUN_COOKIE=$cookie FUSEE_FINAL_STATE_DUMP=$H1 /root/FUSEE_CXL/build-cxl/tests/protocol_a_2host_test $DEV $NB $OPS"
 
     timeout 60 ssh g3 "$H0_CMD" > /tmp/iter4A_p6_g3_r${rep}_T${T}.log 2>&1 &
     sleep 0.3

@@ -9,398 +9,439 @@
 
 \section{Design}
 
-\subsection{System Model and Assumptions}
+\subsection{System Model}
+\label{sec:model}
 
-We target a system with $H$ unified compute nodes (each running both
-client logic and KV-store services), all sharing a CXL Type-3 memory
-expander connected through a PCIe switch. We assume:
+We target a cluster of $H$ peer compute nodes sharing a CXL Type-3
+memory expander over a PCIe switch. Each node runs application
+workers that issue KV operations directly against the shared CXL
+store, and owns a static shard of the keyspace.
 
-\textbf{(A1) No cross-host cache coherence on the shared device.} CXL
-Type-3 lacks a global coherence domain spanning multiple hosts. A
-write performed by host $A$'s CPU does not automatically invalidate
-host $B$'s cached copy of the same physical line; visibility must be
-established through explicit cache-line management instructions
-(\texttt{clflushopt}) and store fences (\texttt{sfence}). Likewise,
-no cross-host atomic primitive is available: a \texttt{lock cmpxchg}
-instruction is hardware-atomic within a single host's coherence
-domain but provides no guarantees against a concurrent
-\texttt{lock cmpxchg} from another host on the same physical address.
+\paragraph{Hardware constraints.}
 
-\textbf{(A2) CXL bandwidth is the binding throughput constraint.} On
-the testbed (Intel Xeon, 2 hosts), the CXL write bandwidth ceiling
-under user-space \texttt{movnt} streaming is approximately
-$12.5~\text{GB/s}$ per host, with idle load latency
-$\approx 600~\text{ns}$. By contrast, local DRAM offers
-$\approx 134~\text{ns}$ idle latency and $\approx 392~\text{GB/s}$
-read bandwidth---a $4.5\times$ latency advantage and $7.6\times$
-bandwidth advantage over CXL.
+\textbf{(C1) No cross-host coherence or atomicity on the shared
+device.} CXL Type-3 provides no global coherence domain across
+hosts: a write by host~$A$ does not invalidate host~$B$'s cached
+copy of the same line, and \texttt{lock}-prefixed atomics hold only
+within a single host's coherence domain. Cross-host visibility and
+mutual exclusion must therefore be built in software, on top of
+\texttt{clflushopt}, \texttt{sfence}, and plain
+\texttt{load}/\texttt{store}.
 
-\textbf{(A3) Strict linearizability is required.} A write must become
-visible to every host's subsequent read in real time after the write
-returns success. Operations to the same key must appear in a single
-total order across the cluster.
+\textbf{(C2) CXL is markedly slower than local DRAM in both latency
+and bandwidth} (Table~\ref{tab:hw}). The realistic per-host write
+ceiling on devdax under user-space AVX-512 NT-stream with per-4~KiB
+\texttt{sfence} is $\sim 12.5~\text{GB/s}$---roughly $4\times$ below
+mlc's NT-write peak. We attribute this gap primarily to devdax
+exposing the device as a single uninterleaved region (forfeiting
+the kernel-managed channel striping that mlc's system-ram
+measurement enjoys), with \texttt{sfence} pacing as a secondary
+contributor; the two contributions are not independently measured.
 
-These assumptions force three architectural decisions. First, since
-no cross-host hardware atomic exists, software protocols on
-\texttt{load}/\texttt{store}/\texttt{clflushopt}/\texttt{sfence}
-substitute for the hardware CAS that prior RDMA-based systems rely
-on~\cite{fusee}. Second, since CXL latency is over $4\times$ local
-DRAM, locality matters: any read served from local DRAM is roughly
-$5\times$ faster than the equivalent read forced through the CXL
-fabric. Third, since CXL bandwidth is finite at $\sim 12.5~\text{GB/s}$
-per host, write-path byte amplification (e.g., redundant cache-line
-flushes, broadcast invalidations) directly caps achievable throughput.
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+                              & DRAM (node 0) & CXL (node 1) & DRAM / CXL \\
+\midrule
+Idle load latency             & 134.3~ns      & 604.0~ns     & $4.50\times$ \\
+Peak read BW (mlc)            & 391.8~GB/s    & 51.6~GB/s    & $7.60\times$ \\
+Peak NT-write BW (mlc)        & 330.2~GB/s    & 54.2~GB/s    & $6.09\times$ \\
+Userspace NT-write (devdax)   & ---           & 12.5~GB/s    & --- \\
+\bottomrule
+\end{tabular}
+\caption{Memory ceilings on the g3 + g4 testbed (Intel Xeon, dual
+host, shared CXL Type-3 expander). Rows~1--3 measured with Intel
+MLC; row~4 measured with our AVX-512 NT-stream microbenchmark.}
+\label{tab:hw}
+\end{table}
+
+\paragraph{Consistency goal.}
+Operations on the same key appear in a single total order across
+the cluster, and a write, once acknowledged, is visible to every
+subsequent read on every host (\emph{strict linearizability}).
+
+
 
 \subsection{Architecture Overview}
+\label{sec:arch}
 
-We adopt three guiding principles, motivated directly by (A1)-(A3):
+The design rests on three principles, each addressing one of the
+constraints in \S{}3.1:
 
-\textbf{(P1) CXL is the authoritative store; DRAM is a software-managed
-cache.} The hashtable index and all variable-length value blocks
-reside in shared CXL memory as the single source of truth. Each host's
-DRAM holds a partial replica of recently-accessed entries, treated
-strictly as a coherence-managed cache: hits are served at DRAM speed
-($\sim 50~\text{ns}$); misses pay one cross-host round-trip plus a
-CXL fetch ($\sim 2{-}3~\text{µs}$).
+\textbf{(P1) CXL is the authoritative store; DRAM is a
+software-managed cache} (addresses C2). The hashtable index and all
+value blocks reside in the shared CXL region as the single source of
+truth; each host's DRAM holds a partial replica of recently-accessed
+entries, treated as a coherence-managed cache. Reads are served
+locally on cache hit and otherwise fall through to a CXL fetch. No
+host owns an authoritative DRAM replica---``ownership'' is a
+write-routing role, not a storage tier.
 
-\textbf{(P2) Static key-space partitioning routes every write to a
-unique owner host.} A sharding function $\sigma: K \to H$ assigns
-each key to exactly one host. All updates to a key are executed on
-its owner host; clients on other hosts that issue a write to a
-non-owned key forward the operation through a one-way message channel.
-The owner host serializes concurrent writes to the same key with a
-host-local spinlock and commits the new value to CXL with a
-single-host atomic compare-and-swap. \emph{Cross-host mutual exclusion
-between writers is therefore eliminated by construction:} no writer
-on host $B$ ever competes with a writer on host $A$ for the same key.
+\textbf{(P2) Static sharding routes every write to a single owner
+host} (addresses C1). A sharding function $\sigma : K \to H$ assigns
+each key to exactly one owner; all updates to a key execute on its
+owner. Clients on non-owner hosts forward writes through a one-way
+message channel (P3 below). \emph{Cross-host writer--writer mutual
+exclusion is thereby eliminated by construction}: no two hosts ever
+contend for the same slot, so the per-slot commit reduces to a
+single-host atomic operation that C1 already permits.
 
-\textbf{(P3) Inter-host communication is aggregated into a fixed
-$N{:}1{:}1{:}N$ topology.} Workers within a host first feed messages
-to a per-host \emph{sender} thread (an $N{:}1$ aggregation through a
-DRAM MPSC queue); the sender thread is the sole producer on a
-per-(src, dst) SPSC ring in CXL memory; the receiving host's
-\emph{receiver} thread is the sole consumer. The receiver dispatches
-each message to local workers within the destination host (a
-$1{:}N$ fan-out via DRAM). This avoids the $O(N^2)$ traffic that
-arises if every client communicates directly with every remote
-client; the cost of the design is two extra hand-offs per round-trip,
-which we measure empirically at $\approx 1~\text{µs}$ each.
+\textbf{(P3) Inter-host messages flow through a fixed
+$N{:}1{:}1{:}N$ aggregation} (addresses C1, scaling). Workers within
+a host first feed messages into a per-host \emph{sender} thread
+(an $N{:}1$ DRAM MPSC); the sender is the sole producer on a
+per-pair SPSC ring in CXL; the destination's \emph{receiver} thread
+is the sole consumer and fans the message out to local workers
+($1{:}N$ DRAM). This serves three purposes: it avoids the
+$O(H^2 \cdot N^2)$ wiring of all-to-all worker-to-worker channels;
+it gives invalidations a single arrival point per host so that one
+acknowledgement covers all same-host sharers; and it provides the
+natural serialization point at which a writer awaits invalidation
+completion before committing (the strict-linearizability barrier of
+\S{}3.4.4).
 
-Figure~\ref{fig:arch} illustrates the resulting layered system: CXL
-memory holds the hashtable, KV blocks (immutable; new blocks
-allocated on every update), per-(src, dst) SPSC rings, and acknowledgment
-channels. Each host's DRAM holds a sharding lookup table, a per-slot
-directory tracking which hosts cache each entry, and a value cache
-mapped \texttt{MAP\_SHARED} across all worker processes on the same
-host. The protocol thereby trades a slightly more elaborate software
-stack for the elimination of three classes of overhead: cross-host
-cache coherence (which CXL Type-3 does not provide), cross-host
-synchronization (eliminated by sharding), and broadcast invalidation
-($O(N)$ traffic per write reduced to $O(\text{sharers})$).
+Figure~\ref{fig:arch} shows the resulting layered system.
+\S{}3.3 details the on-CXL and on-DRAM data layout; \S{}3.4 walks
+through the read and write paths.
 
 \subsection{Memory Layout}
+\label{sec:layout}
 
-\textbf{CXL memory.} The shared region contains:
-(i)~the hashtable, a fixed array of $B$ buckets, each holding $S=7$
-slots, where each slot stores a key, a size class identifier, an
-owner-host tag, and a pointer to a value block;
-(ii)~the KV blockpool, partitioned into $H$ disjoint segments (one
-per owner host) with size-class-aware sub-allocation; only the
-owner host allocates from its own segment;
-(iii)~the SPSC rings, one per (source host, destination host, channel)
-triple, each carrying fixed-size 64-byte messages (invalidation,
-registration, eviction, write-forward, response);
-(iv)~the acknowledgment channels, mirroring the rings;
-(v)~per-host forward staging buffers, each owned by its forwarder
-host, used as a short-lived cross-host transfer area for value
-bytes carried by write-forward messages.
+Memory is split across two physical tiers (Table~\ref{tab:layout}):
+a single CXL region shared by all hosts holds the authoritative
+data, and per-host DRAM regions---each \texttt{MAP\_SHARED} across
+that host's worker processes only---hold the cache and the
+coordination metadata.
 
-Although CXL bytes are accessed across hosts, the only structures
-read or written by multiple hosts on the same physical addresses
-are the SPSC rings (with non-conflicting single-producer
-single-consumer semantics) and the hashtable slot pointers (with
-single-host-writer guaranteed by sharding). All other CXL
-state---KV blocks, ring entries, ack counters, staging
-buffers---is touched by at most one host on each address.
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Region} & \textbf{Tier} & \textbf{Approx.\ size} \\
+\midrule
+Hashtable          & CXL  & $B \cdot S \cdot 24$\,B \\
+KV blockpool       & CXL  & workload-dependent \\
+Forward staging    & CXL  & $\sim$1\,MB per forwarder \\
+SPSC rings + acks  & CXL  & $\propto H^2$ \\
+\midrule
+Sharding table     & DRAM & $H$ entries, read-only \\
+Slot directory     & DRAM & $B \cdot S \cdot 16$\,B \\
+Local KV cache     & DRAM & LRU-bounded \\
+\bottomrule
+\end{tabular}
+\caption{Physical memory layout. CXL = single region shared by all
+hosts; DRAM = per host, \texttt{MAP\_SHARED} across same-host
+worker processes.}
+\label{tab:layout}
+\end{table}
 
-\textbf{Per-host DRAM.} Each host allocates four
-\texttt{MAP\_SHARED} regions visible to all of its worker processes:
-(i)~a sharding lookup table (read-only after initialization);
-(ii)~a per-slot directory tracking the set of hosts caching each
-hashtable slot, the directory state, and a host-local spinlock;
-(iii)~the value cache, a hashmap from keys to value-byte buffers
-with a 1-byte ``stale'' flag co-located with each entry;
-(iv)~per-slot self-flags indicating whether the local host is
-currently registered as a sharer.
+\paragraph{CXL regions.}
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Hashtable}: $B$ buckets of $S$ slots ($S{=}7$ in our
+  implementation; bucket size is a tunable parameter). Each slot
+  stores a key, a size-class identifier, and a pointer to a value
+  block. Slot pointers are written by the owner host only; a
+  naturally aligned 8-byte store followed by
+  \texttt{clflushopt}+\texttt{sfence} suffices for atomic
+  cross-host publication---no cross-host atomic primitive is
+  required, since sharding eliminates any competing writer.
+\item \textbf{KV blockpool}: variable-size value blocks. The pool
+  is partitioned into $H$ disjoint segments, each segment owned by
+  one host: only that host's workers allocate from it. Within a
+  segment, allocation is size-classed (free lists at e.g.\ 64\,B,
+  128\,B, $\dots$, 1\,KB) to bound fragmentation; same-host workers
+  serialise on a DRAM-resident free-list spinlock. Cross-host
+  blockpool contention is therefore zero by construction.
+\item \textbf{Forward staging}: per-host buffer holding the value
+  bytes for cross-shard \emph{write} operations whose owner is
+  remote. The host's sender thread (\S{}3.2 P3), acting as
+  \emph{forwarder} in this role, writes the bytes here before
+  enqueueing the forward message; the message itself carries only
+  \emph{(op, key, pointer, size)} and never inline value bytes
+  (\S{}3.4.1). The staging slot is freed on the forward
+  acknowledgement. Reads do not stage---their cross-host message
+  is a cache-registration request carrying no value bytes.
+\item \textbf{SPSC rings + acks}: one SPSC message ring per ordered
+  host pair (no per-worker dimension), paired with a separate
+  acknowledgement counter that the receiver advances after
+  processing each message; ring head/tail manage slot reuse, while
+  the ack counter signals protocol-level completion to the sender.
+  Together they carry all $N{:}1{:}1{:}N$ traffic (\S{}3.5).
+\end{itemize}
 
-\textbf{Aggregation point.} Within each host, an MPSC queue in
-\texttt{MAP\_SHARED} DRAM is the sole hand-off between client workers
-and the per-host sender thread; entries carry message type, key,
-target host, and---for messages requiring large payload---a CXL
-pointer into the host's forward staging buffer rather than the bytes
-themselves. Inline payload is deliberately not supported: at the
-target value sizes ($\geq 256$~B), inline storage cannot fit in the
-fixed-size message slot, so a single out-of-band path keeps the
-protocol simple.
+\paragraph{Per-host DRAM regions.}
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Sharding table}: static $\sigma : K \to H$, populated
+  at startup, read-only thereafter.
+\item \textbf{Slot directory}: per-slot coherence state---sharer
+  bitmap, MESI state, host-local spinlock, and a self-flag (design
+  detailed below).
+\item \textbf{Local KV cache}: hashmap (key $\to$ local value
+  buffer) with a co-located 1-byte stale flag; serves cache-hit
+  reads at DRAM latency.
+\end{itemize}
+
+\paragraph{Slot directory: a software snoop filter with back
+invalidation.}
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \emph{Sharer bitmap = snoop filter.} A writer reads it to
+  send invalidations only to current sharers; never broadcasts.
+\item \emph{Invalidation + ACK = back invalidation.} The writer
+  withholds the slot-pointer CAS until every listed sharer ACKs;
+  this round-trip is the exclusive-acquire barrier of the write
+  path (\S{}3.4.4).
+\item \emph{MESI state ($S$/$I$/$M$).} Lets the next writer decide
+  in $O(1)$ whether any invalidation is needed at all.
+\item \emph{Self-flag.} Per-host counterpart of the bitmap; the
+  read fast path (\S{}3.4.3) checks it to confirm cache validity,
+  never queries a remote directory.
+\item \emph{Partitioned, not replicated.} Each entry lives only on
+  the DRAM of the host owning that slot's current key. No CXL or
+  peer replica. Safe because sharding (P2) makes the owner the
+  sole mutator---one home, no consistency protocol needed.
+\item \emph{DRAM, not CXL.} Directory traffic is hot and
+  owner-local (every miss, eviction, and write commit mutates it).
+  DRAM stores under hardware coherence: $\sim 50$\,ns; CXL
+  placement would need \texttt{clflushopt}+\texttt{sfence} per
+  mutation, $\sim 10\times$ cost. Peers never read remote
+  directories anyway---they receive state via targeted messages.
+\end{itemize}
+
+The layout enforces two cross-cutting invariants: (i)~every CXL
+address has at most one writer at any time---by owner-partitioning,
+by sharding, or by SPSC discipline---and (ii)~every DRAM region is
+touched only by same-host workers. Together they confine all
+cross-host coordination to the explicit message channels of
+\S{}3.5.
 
 \subsection{Protocol Mechanics}
+\label{sec:protocol}
 
 \subsubsection{Request routing}
 
-A client receiving an operation on key $k$ first computes
-$\sigma(k)$ to determine the owner host. If
-$\sigma(k) = \text{self}$, the worker executes the operation
-in-place. If $\sigma(k) \neq \text{self}$, the worker enqueues a
-forward request to the local sender thread, then spins on a
-DRAM acknowledgment slot until the owner returns a response. We use
-$\sigma(k) = \text{HighBits}(\text{FNV-1a}(k))$, which costs a
-single DRAM load on the read side and trivially partitions the key
-space when $H$ is fixed at boot. Consistent hashing is a
-straightforward replacement when $H$ becomes dynamic.
+Every operation begins with $\sigma(k)$, a single DRAM load
+against the sharding table. If $\sigma(k) = \text{self}$, the
+worker executes the operation locally. Otherwise routing diverges
+by op type:
 
-The cost of forwarding---$\sim 2{-}3~\text{µs}$ across the SPSC ring
-plus a return path---falls in the same envelope as the per-host
-mutex acquisition that an unsharded design would otherwise pay
-($\sim 1.5{-}2~\text{µs}$ for a Lamport's Fast Mutex acquire on
-non-coherent CXL memory under contention) and degrades far more
-gracefully under high concurrency: forward queues are sequential
-SPSC drains rather than the multi-line cache-coherence pingpong
-that plagues mutex-based designs at high thread counts.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Cross-shard write.} The worker pre-stages the value
+  bytes to its host's forward staging buffer on CXL, enqueues a
+  write-forward message \emph{(op, key, staging pointer, size)}
+  to the local sender, and spins on a DRAM ACK slot until the
+  owner responds. The owner reads the value bytes from staging
+  via \texttt{clflushopt}+load, executes the write
+  (\S{}3.4.4), and ACKs.
+\item \textbf{Cross-shard read.} The worker sends only a
+  cache-registration message; the owner returns
+  \emph{(slot pointer, value size)} and the requester self-fetches
+  the bytes from CXL (\S{}3.4.3). Reads are not forwarded as
+  full ops---only the registration crosses hosts.
+\end{itemize}
+
+We use $\sigma(k) = \text{HighBits}(\text{FNV-1a}(k))$ for fixed-$H$
+deployments; replacing it with consistent hashing for dynamic $H$
+is a drop-in change.
 
 \subsubsection{Software cache coherence}
 
-Each per-slot directory entry tracks an MESI-style state plus a
-bitmap of hosts caching the slot. We use only the \emph{Shared}
-and \emph{Invalid} states; the \emph{Modified} state appears
-transiently as the writer's intermediate state during the
-write commit sequence below. Reads do not consult the directory;
-instead, each host self-tracks its membership in the sharer set
-via a local flag set during cache fill and cleared during cache
-eviction. The directory thus serves only the writer's purpose
-of identifying which hosts must be invalidated.
+The slot directory's state evolves through three values: $I$ (no
+host caches), $S$ (one or more peers cache), and a transient $M$
+window during a write. Three operations drive transitions, each
+taken on the slot's owner host under the entry's host-local
+spinlock:
 
-\textbf{Per-slot vs.\ per-bucket granularity.} We chose per-slot
-directory tracking despite the higher metadata cost
-($B \times S \times 16~\text{B} = 7~\text{MB/host}$ at $B=2^{16}$,
-versus $1~\text{MB/host}$ for per-bucket). Per-bucket tracking
-introduces false sharing: an INSERT to slot 3 of bucket $b$ would
-invalidate any host caching slot 5 of $b$, even though those
-slots are independent. Under YCSB-style uniform key access, this
-amplifies invalidation traffic by $\approx S = 7\times$. The 7~MB
-storage cost is comparatively trivial.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \emph{Cache-registration} (read miss, \S{}3.4.3) adds the
+  requester's bit; $I \to S$ on the first registration.
+\item \emph{Cache-eviction} (local LRU pressure) clears the
+  evicting host's bit; $S \to I$ if the bitmap empties.
+\item \emph{Write commit} (\S{}3.4.4) drives $S \to M \to S$ (or
+  $\to I$); the writer holds the spinlock across the entire
+  invalidation-ACK round-trip, so concurrent registrations and
+  evictions on the same slot serialise behind the writer.
+\end{itemize}
+
+Readers never enter the state machine: they observe local validity
+through the self-flag, set on the registration response and cleared
+on eviction. On invalidation, the receiver thread flips a 1-byte
+stale flag co-located with the cache entry rather than erasing the
+entry from the hashmap; the read fast path's stale check is
+essentially free, and the invalidation receiver avoids the cost
+of a hashmap erase.
 
 \subsubsection{Read path}
 
-A read first checks the local cache (DRAM hashmap lookup, $\sim 50~\text{ns}$);
-if the entry is present and its stale flag is unset, the value bytes
-are returned directly. The fast path performs no atomic load on
-shared state, no fence, and no cache-line management instruction:
-the absence of those operations is precisely why the path achieves
-DRAM-class latency.
+\textbf{Fast path (cache hit, $\sim 50$\,ns).} Look up the local KV
+cache, check the stale flag, return the buffer. No atomic, no
+fence, no cache-line management---the absence of these is
+precisely why hits run at DRAM speed.
 
-On cache miss, the worker enqueues a registration request to the
-owner host through the local sender thread. The owner adds the
-requesting host to the slot's sharer bitmap and returns a small
-response carrying the slot's current pointer and value size. The
-requester then dereferences this CXL pointer through a sequence of
-\texttt{clflushopt} instructions followed by an \texttt{mfence} and
-plain loads, copying the value bytes from CXL into its local cache.
-We deliberately avoid any inline-payload variant in which the
-response itself carries value bytes: such a path saves at most one
-CXL load per cache miss, but introduces a second code path that
-must be reasoned about separately, and provides no benefit at the
-value sizes (256~B and above) targeted by our evaluation.
+\textbf{Slow path (cache miss).}
+\begin{enumerate}\setlength{\itemsep}{2pt}
+\item Enqueue a cache-registration message to the slot's owner.
+\item Spin on a DRAM ACK slot until the owner responds with
+  \emph{(slot pointer, value size)}.
+\item \texttt{clflushopt} the affected CXL cache lines,
+  \texttt{mfence}, copy the value bytes from CXL into the local KV
+  cache.
+\item Set the self-flag.
+\end{enumerate}
 
-The ordering invariant for cache-fill correctness is that the
-requester must be added to the sharer bitmap \emph{before} it
-populates its local cache; otherwise a concurrent write completing
-between the cache fill and the registration would not invalidate
-the new entry, leaving a stale read undetected. We achieve this
-ordering trivially: the owner updates the directory under its
-spinlock as part of processing the registration request, and the
-requester writes its cache only after observing the response.
+The response carries no inline value bytes; the requester
+self-fetches from CXL. A single out-of-band fetch path keeps the
+protocol simple at the cost of one CXL load per miss, which at our
+target sizes ($\geq 256$\,B) is amortised by the cross-host
+round-trip anyway.
+
+\textbf{Ordering invariant.} The owner adds the requester to the
+sharer bitmap \emph{before} returning the response, under the
+slot's spinlock. A concurrent write must acquire the same spinlock
+and therefore observes the new sharer; the requester's freshly
+filled cache entry is invalidated as part of that write's barrier
+(\S{}3.4.4). The fill cannot leave behind an undetected stale
+read.
 
 \subsubsection{Write path}
+\label{sec:writepath}
 
-Writes are always executed on the key's owner host. The owner-side
-worker:
-(1)~acquires the host-local spinlock on the slot's directory entry;
-(2)~allocates a new value block from its blockpool segment;
-(3)~writes the value bytes to the new block on CXL, using
-non-temporal stores plus \texttt{sfence} for blocks $\geq 256~\text{B}$
-and standard stores plus per-line \texttt{clflushopt} plus
-\texttt{sfence} for smaller blocks (rationale below);
-(4)~enqueues an invalidation message to each host in the
-sharer bitmap (excluding self) through the sender thread, and
-spins on a DRAM acknowledgment slot until all invalidations have
-been confirmed by the receiving hosts;
-(5)~atomically updates the slot's pointer field on CXL via
-\texttt{lock cmpxchg}, followed by \texttt{clflushopt} and
-\texttt{sfence};
-(6)~updates the directory state to reflect that only the writer
-host now caches the slot, and releases the spinlock;
-(7)~updates the local cache;
-(8)~enqueues the now-orphaned old block onto a lazy garbage-collection
-queue.
+A write to a key on its owner host proceeds in eight steps:
 
-Step 4 is the strict-linearizability barrier: by the time the writer
-proceeds past step 4, all hosts that previously cached the slot have
-removed it from their caches. Step 5 then makes the new value visible
-to any host that subsequently re-fetches.
+\begin{enumerate}\setlength{\itemsep}{2pt}
+\item \textbf{Acquire} the slot's host-local spinlock.
+\item \textbf{Allocate} a new value block from this host's
+  blockpool segment.
+\item \textbf{Write} the value bytes to the new block on CXL,
+  using non-temporal stores plus \texttt{sfence}.
+\item \textbf{Invalidate sharers}: enqueue an invalidation
+  message to every host in the bitmap (excluding self), and spin
+  on the local DRAM ACK slot until all return.
+\item \textbf{Commit}: \texttt{lock cmpxchg} the slot pointer to
+  the new block, then \texttt{clflushopt}+\texttt{sfence}.
+\item \textbf{Update} the directory: bitmap reduces to
+  $\{\text{self}\}$, MESI to $S$ (or $I$); release the spinlock.
+\item \textbf{Refresh} the local KV cache with the new value.
+\item \textbf{Retire} the old block to a lazy GC queue, drained
+  asynchronously once no reader could still hold its pointer.
+\end{enumerate}
 
-The single-host atomicity of \texttt{lock cmpxchg} suffices because
-sharding guarantees that no two hosts concurrently CAS the same
-slot pointer. Were sharding absent, this CAS would have to be
-replaced by a software cross-host mutex (e.g., Lamport's Fast
-Mutex), at a cost of approximately $1.5{-}2~\text{µs}$ per write
-under uncontended conditions and unbounded latency under
-contention. Sharding eliminates that cost entirely.
+Steps 4 and 5 are the protocol's commit point. \emph{Step 4 is
+the strict-linearizability barrier}: until every previous sharer
+ACKs, no host can serve a stale read of this slot. \emph{Step 5
+publishes the new value}: any host that subsequently re-fetches
+follows the new pointer; any reader whose copy was invalidated in
+step 4 finds its stale flag set and re-enters the slow path
+(\S{}3.4.3), where it serialises against in-flight writes via the
+same spinlock.
 
 \subsubsection{Storage: copy-on-write blocks}
 
-We allocate a fresh value block for every UPDATE rather than
-modifying the existing block in place. This decision aligns with
-the prior design of FUSEE~\cite{fusee} as well as standard
-practice in persistent and disaggregated KV stores
-(e.g., LSM-trees, B$^w$-tree, Bigtable's MVCC). Three reasons drive
-this choice over an in-place alternative.
+UPDATE allocates a fresh value block rather than overwriting
+in-place. This serves two correctness ends. \emph{Crash
+consistency}: blocks larger than 8\,B cannot be published as a
+single observable unit on CXL, so an in-place overwrite interrupted
+by a crash leaves a torn block; CoW makes the slot-pointer CAS
+(step 5 of \S{}3.4.4) the sole commit point, so readers always
+observe the old or new block, never a partial write.
+\emph{Reader/writer isolation}: a CoW block is immutable once any
+pointer to it has been published, so concurrent reads on the slow
+path (\S{}3.4.3) need no value-byte synchronisation---they follow
+whichever pointer they observed and read a consistent snapshot. CoW
+also avoids a bimodal in-place fast path that would otherwise be
+needed for same-size updates and would carry its own
+crash-consistency argument.
 
-First, value blocks larger than 8~bytes cannot be updated atomically
-on CXL: the platform offers no instruction to publish more than 8
-contiguous bytes as a single observable unit, and a partial write
-interrupted by a crash leaves a torn block. CoW restores
-crash-consistency by treating the slot pointer's CAS as the single
-commit point, ensuring readers always observe either the old or
-new block, never a partially-written one.
-
-Second, concurrent readers proceeding through a slot pointer
-inherently observe an immutable block---the writer of a CoW system
-never mutates a block once any reader could potentially follow a
-pointer to it. This frees the read path from any value-byte
-synchronization and lets us defer GC until reference safety is
-clearly established.
-
-Third, in-place update would require a fallback to allocate-new-block
-whenever a new value's size class exceeds the old, producing a
-bimodal latency distribution---a regression that reviewer scrutiny
-of an in-place design would invariably surface.
-
-The blockpool itself is partitioned across owner hosts: each host
-owns one disjoint segment of the CXL blockpool region and manages
-its segment's free list in its own DRAM, eliminating cross-host
-free-list contention.
+The blockpool is partitioned across owner hosts: each owner
+allocates from its own CXL segment with size-class sub-allocation
+and keeps the free list in DRAM, eliminating cross-host free-list
+contention.
 
 \subsection{Cross-Host Communication via $N{:}1{:}1{:}N$ Aggregation}
+\label{sec:comm}
 
-The protocol has four message types: invalidation, cache-registration,
-cache-eviction, and write-forwarding. All four flow through the
-same shared infrastructure: a DRAM aggregator queue per host (an
-MPSC structure shared by client workers and the per-host sender
-thread); a CXL SPSC ring per (source host, destination host,
-channel); a CXL acknowledgment channel per ring; and a DRAM
-worker-acknowledgment buffer per host.
+The protocol carries four message types over the same
+infrastructure: invalidation, cache-registration, cache-eviction,
+and write-forwarding. All four follow the same data flow:
 
-When a client initiates a request, it enqueues into the local
-aggregator queue using a \texttt{fetch\_add} on the queue's tail
-counter (a hardware-atomic operation in DRAM). The local sender
-thread drains the aggregator and batches up to $K$ messages per
-destination before issuing a single batch publish to the destination's
-SPSC ring; the writes to the ring are followed by a single
-\texttt{sfence} per batch rather than per message, amortizing the
-fence cost over $K$ entries. Receivers read entries through
-\texttt{clflushopt}-mediated loads, dispatch by message type, apply
-the effect to local state, and advance the acknowledgment channel
-counter.
+\begin{enumerate}\setlength{\itemsep}{2pt}
+\item \textbf{Worker $\to$ sender} (DRAM, hardware-coherent):
+  workers \texttt{fetch\_add} a tail counter on the per-host MPSC
+  aggregator; the sender thread drains it and batches up to $K$
+  messages per destination.
+\item \textbf{Sender $\to$ receiver} (CXL, SPSC): the batched
+  entries are written to the per-pair ring; a single
+  \texttt{sfence} terminates the batch.
+\item \textbf{Receiver $\to$ worker} (DRAM): the receiver
+  dispatches each message to its local effect (directory update,
+  cache stale-flag set, response delivery), then advances the ack
+  counter once per batch.
+\end{enumerate}
 
-The aggregation provides three benefits:
-\textbf{(a)}~Within each host, multi-producer client traffic
-contends only on a DRAM cache line---hardware-coherent and fast
-(\textasciitilde 5~ns)---rather than on a CXL line that would otherwise
-suffer cross-host coherence pingpong.
-\textbf{(b)}~Per-CXL-batch \texttt{sfence} amortization: a single
-fence drains an arbitrary number of preceding writes, rather than
-each writer paying its own fence.
-\textbf{(c)}~The receiver-side acknowledgment is also batched
-(one counter advance per drained batch), reducing the ack-channel
-update frequency by the same factor $K$.
+Three properties matter:
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \emph{DRAM-only MPSC contention.} Multi-producer worker
+  traffic contends on a single DRAM cache line---hardware-coherent
+  at $\sim 5$\,ns---rather than on a CXL line.
+\item \emph{Per-batch \texttt{sfence}.} One fence drains the batch
+  rather than every producer paying its own.
+\item \emph{Per-batch ack advance.} CXL ack-counter traffic scales
+  with the number of batches, not the number of messages.
+\end{itemize}
 
-The cost is one extra hand-off per direction (worker
-$\rightarrow$ sender, receiver $\rightarrow$ worker), measured at
-$\approx 1~\text{µs}$ per hand-off. This is acceptable in the
-context of a strict-linearizability protocol whose round-trip
-latency budget is dominated by the CXL load-store cycle anyway.
+The cost is two extra hand-offs per round-trip ($\sim 1$\,µs each,
+measured), absorbed by the strict-A protocol's CXL-bound
+round-trip budget.
 
 \subsection{Synchronization Primitives}
 
-Three classes of synchronization are used in the protocol, each
-matched to its memory location:
+Three primitives, each matched to where its data lives:
 
-\textbf{Host-local atomics on shared DRAM.} Directory entries,
-the cache hashmap, and the worker-acknowledgment buffer all reside
-in \texttt{MAP\_SHARED} DRAM regions visible to every worker on the
-same host. These structures are protected by \texttt{pthread\_spinlock\_t}
-(with \texttt{PTHREAD\_PROCESS\_SHARED} attribute) or
-\texttt{std::atomic} operations. Hardware coherence on the same
-host's coherence domain makes these primitives no more expensive
-than their thread-only equivalents.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \textbf{Host-local spinlock on shared DRAM}
+  (\texttt{pthread\_spinlock\_t} with \texttt{PROCESS\_SHARED}).
+  Protects the slot directory against same-host worker contention;
+  hardware coherence within one host's domain makes it no costlier
+  than its thread-only equivalent.
+\item \textbf{Single-host CAS on CXL} (\texttt{lock cmpxchg}).
+  Updates the slot pointer at write commit (\S{}3.4.4). CXL
+  Type-3 has no cross-host atomic semantics, but sharding (P2)
+  guarantees a single-host writer per slot, so single-host
+  atomicity suffices.
+\item \textbf{Lock-free SPSC on CXL.} Tail and head counters with
+  \texttt{clflushopt}+\texttt{sfence} ordering between an entry
+  write and the tail advance; SP/SC discipline removes any need
+  for mutex or cross-host atomic.
+\end{itemize}
 
-\textbf{Single-host CAS on CXL.} The hashtable slot pointer is
-updated via \texttt{\_\_atomic\_compare\_exchange\_n} (compiling to
-\texttt{lock cmpxchg}). Although CXL Type-3 does not provide
-cross-host atomic semantics, sharding guarantees a single-host
-writer per slot, and \texttt{lock cmpxchg} is hardware-atomic
-within a single host's coherence domain.
-
-\textbf{Lock-free SPSC rings on CXL.} The cross-host message
-infrastructure exploits the single-producer single-consumer
-discipline imposed by the architecture: each ring has one writer
-(the source host's sender thread) and one reader (the destination
-host's receiver thread). Tail and head counters are
-\texttt{std::atomic<uint64\_t>} on CXL, with
-\texttt{clflushopt}+\texttt{sfence} ordering between the producer's
-entry write and tail advance. No mutex, no compare-and-swap, no
-cross-host atomic primitive is required.
-
-A consequence of the above is that Lamport's Fast Mutex, which
-served as the cross-host critical-section primitive in the
-predecessor design, is unused in the normal write path of this
-protocol. The mutex implementation is retained as a fallback for
-degraded operating modes and for the (frozen) baseline protocol.
+Lamport's Fast Mutex, the predecessor design's cross-host
+critical-section primitive, is therefore unused on the normal path
+of this protocol; it is retained only as a fallback for degraded
+modes.
 
 \subsection{Design Choices Discussion}
 
-We summarize the four most consequential decisions and their
-alternatives.
+The four most consequential decisions and their abandoned
+alternatives, summarised:
 
-\textbf{Per-slot vs.\ per-bucket directory tracking.} Per-bucket
-tracking would reduce metadata by $S = 7\times$ but multiply
-invalidation traffic by the same factor under YCSB-style access
-patterns, since a write to one slot would invalidate all hosts
-caching any slot of the same bucket. The 7~MB DRAM cost of per-slot
-tracking is negligible against the 86 cores per host on our
-testbed.
-
-\textbf{Lazy stale flag vs.\ physical eviction on invalidation.}
-We mark cache entries as stale rather than removing them. The 1-byte
-flag check on the read fast path is co-located on the same cache
-line as the value pointer and is therefore essentially free. This
-mirrors hardware MESI behavior, in which an invalidated line stays
-in the cache until reused, and substantially simplifies the
-invalidation path: the receiver thread updates a single byte rather
-than performing a hashmap erase.
-
-\textbf{Static sharding vs.\ consistency hashing.} On a fixed-size
-testbed (two hosts), static high-bits hashing imposes no cost
-beyond a single DRAM load per request and divides the key space
-exactly in half. Consistency hashing is a strict generalization
-that would let the system tolerate dynamic node membership; we
-view this as an orthogonal extension and out of scope for the
-current design.
-
-\textbf{Copy-on-write vs.\ in-place updates.} Discussed above
-(\S{}5): CoW preserves crash-consistency for blocks larger than
-8 bytes, frees the read path of value-byte synchronization, and
-matches FUSEE's original design. In-place updates would offer
-marginal latency gains for small blocks at the cost of a
-two-path architecture and a class of crash-consistency reviewer
-attacks we cannot easily counter.
+\begin{itemize}\setlength{\itemsep}{2pt}
+\item \emph{Per-slot vs.\ per-bucket directory.} Per-slot, to
+  avoid a $\sim S{=}7\times$ false-invalidation amplification under
+  uniform key access; the $\sim$7\,MB / host metadata cost is
+  negligible (\S{}3.3).
+\item \emph{Lazy stale flag vs.\ physical eviction.} Lazy, since
+  the 1-byte stale check is co-located on the cache entry and
+  costs no extra fence; mirrors hardware MESI's
+  invalidate-but-keep-line behaviour (\S{}3.4.2).
+\item \emph{Static sharding vs.\ consistent hashing.} Static for
+  the fixed-$H$ testbed---a single DRAM load per request;
+  consistent hashing is a drop-in replacement when $H$ becomes
+  dynamic (\S{}3.4.1).
+\item \emph{Copy-on-write vs.\ in-place updates.} CoW, for crash
+  consistency of $> 8$\,B blocks and to keep value bytes immutable
+  for concurrent readers; in-place would require a second
+  size-class fallback path and a separate crash-consistency
+  argument (\S{}3.4.5).
+\end{itemize}

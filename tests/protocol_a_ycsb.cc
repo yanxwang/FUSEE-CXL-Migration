@@ -1,0 +1,509 @@
+// iter-4A-redo: Protocol A YCSB sweep runner.
+//
+// 2-host workload-spec-driven runner for the new directory-based
+// Protocol A code path. Cross-host coordination via run_cookie + 2-bit
+// barrier in CXL header. Each host forks NUM_THREADS workers; each
+// worker takes a global slice of trans_ops via i mod (2*T) == global_id.
+//
+// Output: one SUMMARY-format line per run on stdout (per spec §8):
+//   YCSB opt=A cache=<0|1> num_hosts=2 threads=<T> threads_eff=<T> rep=<r>
+//        load_ops=<N_load> load_thpt=<kops/s>
+//        trans_ops=<N_trans> trans_wall_max=<seconds> trans_agg_thpt=<kops/s>
+//        w_avg_ns=<...> w_p50_ns=<...> w_p99_ns=<...>
+//        r_avg_ns=<...> r_p50_ns=<...> r_p99_ns=<...>
+//        # <workload>_optA_t<T>_cache<on|off>_rep<r>
+//
+// Usage: FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=<0|1> FUSEE_NUM_THREADS=<T>
+//        FUSEE_RUN_COOKIE=<ns> FUSEE_CACHE=<0|1> FUSEE_REP=<r>
+//        FUSEE_WORKLOAD_NAME=<wl>
+//        ./protocol_a_ycsb <dev> <load_file> <trans_file> <num_buckets> <max_ops>
+
+#include "cxl_cache_pool.h"
+#include "cxl_directory.h"
+#include "cxl_forward_ring.h"
+#include "cxl_hashtable.h"
+#include "cxl_kv_blockpool.h"
+#include "cxl_kv_blockpool_freelist.h"
+#include "cxl_kv_ops_A.h"
+#include "cxl_mm.h"
+#include "cxl_sharding.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <fcntl.h>
+#include <fstream>
+#include <random>
+#include <string>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
+
+extern "C" {
+#include "common.h"
+}
+
+using namespace fusee;
+
+namespace {
+
+uint64_t now_ns() {
+  timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+uint64_t hash_str(const std::string &s) {
+  uint64_t h = 0xcbf29ce484222325ULL;
+  for (unsigned char c : s) { h ^= c; h *= 0x100000001b3ULL; }
+  if (h == 0) h = 1;
+  return h;
+}
+
+enum OpKind : uint8_t { OP_INSERT, OP_READ, OP_UPDATE, OP_DELETE, OP_SKIP };
+OpKind parse_op(const std::string &s) {
+  if (s == "INSERT") return OP_INSERT;
+  if (s == "READ") return OP_READ;
+  if (s == "UPDATE") return OP_UPDATE;
+  if (s == "DELETE") return OP_DELETE;
+  return OP_SKIP;
+}
+struct Op { OpKind kind; uint64_t key; };
+
+std::vector<Op> load_ops_from_file(const std::string &path) {
+  std::vector<Op> out;
+  std::ifstream f(path);
+  if (!f) {
+    fprintf(stderr, "open %s: %s\n", path.c_str(), strerror(errno));
+    return out;
+  }
+  std::string line;
+  while (std::getline(f, line)) {
+    if (line.empty()) continue;
+    size_t p1 = line.find_first_of(" \t"); if (p1 == std::string::npos) continue;
+    size_t p2 = line.find_first_not_of(" \t", p1); if (p2 == std::string::npos) continue;
+    size_t p3 = line.find_first_of(" \t", p2);
+    std::string op_tok = line.substr(0, p1), key_tok;
+    if (p3 == std::string::npos) key_tok = line.substr(p2);
+    else {
+      size_t p4 = line.find_first_not_of(" \t", p3);
+      if (p4 == std::string::npos) continue;
+      key_tok = line.substr(p4);
+    }
+    while (!key_tok.empty() &&
+           (key_tok.back()==' ' || key_tok.back()=='\t' ||
+            key_tok.back()=='\n' || key_tok.back()=='\r')) {
+      key_tok.pop_back();
+    }
+    OpKind k = parse_op(op_tok);
+    if (k == OP_SKIP) continue;
+    out.push_back({k, hash_str(key_tok)});
+  }
+  return out;
+}
+
+uint64_t quantile_ns(std::vector<uint64_t> &v, double q) {
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  return v[(size_t)(q * (v.size() - 1))];
+}
+
+constexpr int kMaxClients = 256;
+
+struct alignas(64) WorkerStats {
+  cacheline_u64 done;
+  cacheline_u64 trans_ops;
+  cacheline_u64 trans_wall_ns;
+  cacheline_u64 w_count;
+  cacheline_u64 w_sum_ns;
+  cacheline_u64 w_p50_ns;
+  cacheline_u64 w_p99_ns;
+  cacheline_u64 r_count;
+  cacheline_u64 r_sum_ns;
+  cacheline_u64 r_p50_ns;
+  cacheline_u64 r_p99_ns;
+};
+
+}  // anonymous namespace
+
+int main(int argc, char **argv) {
+  if (argc < 6) {
+    fprintf(stderr,
+      "usage: %s <dev> <load_file> <trans_file> <num_buckets> <max_ops>\n",
+      argv[0]);
+    return 2;
+  }
+  const char *dev = argv[1];
+  const char *load_path = argv[2];
+  const char *trans_path = argv[3];
+  uint32_t num_buckets = (uint32_t)strtoul(argv[4], nullptr, 0);
+  uint64_t max_ops = strtoull(argv[5], nullptr, 0);
+
+  int num_hosts = 1, host_id = 0, num_threads = 1, rep = 1;
+  uint64_t cookie = 0;
+  bool cache_on = false;
+  std::string wl_name = "wl";
+  if (const char *e = getenv("FUSEE_NUM_HOSTS")) num_hosts = atoi(e);
+  if (const char *e = getenv("FUSEE_HOST_ID")) host_id = atoi(e);
+  if (const char *e = getenv("FUSEE_NUM_THREADS")) num_threads = atoi(e);
+  if (const char *e = getenv("FUSEE_RUN_COOKIE")) cookie = strtoull(e, nullptr, 0);
+  if (const char *e = getenv("FUSEE_REP")) rep = atoi(e);
+  if (const char *e = getenv("FUSEE_CACHE")) cache_on = (e[0] == '1');
+  if (const char *e = getenv("FUSEE_WORKLOAD_NAME")) wl_name = e;
+
+  if (num_threads > kMaxClients) num_threads = kMaxClients;
+
+  // Parse workload traces.
+  auto load_ops = load_ops_from_file(load_path);
+  auto trans_ops = load_ops_from_file(trans_path);
+  if (max_ops > 0) {
+    if (load_ops.size() > max_ops) load_ops.resize(max_ops);
+    if (trans_ops.size() > max_ops) trans_ops.resize(max_ops);
+  }
+
+  // CXL region layout:
+  //   [4 KB header][bucket array][KvBlockPool region][ForwardRingMatrix][stats]
+  std::size_t bucket_bytes = sizeof(CxlKvBucket) * num_buckets;
+  const uint32_t kBlockSize = 256;  // iter-4A-redo: single 256 B size class
+  uint64_t want_blocks = std::max((uint64_t)64,
+                                   (uint64_t)trans_ops.size() * 2 +
+                                   (uint64_t)load_ops.size());
+  if (want_blocks > 1ULL << 23) want_blocks = 1ULL << 23;
+  std::size_t pool_bytes =
+      CxlKvBlockPool::bytes_for((uint32_t)want_blocks, kBlockSize, num_hosts);
+  std::size_t fr_bytes = forward_ring_matrix_bytes();
+  std::size_t stats_bytes = sizeof(WorkerStats) * 2 * kMaxClients;
+  std::size_t header_bytes = 4096;
+  std::size_t total = header_bytes + bucket_bytes + pool_bytes + fr_bytes
+                    + stats_bytes + 4096;
+  total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
+
+  CXLRegion r{};
+  if (cxl_region_init(&r, dev, total) < 0) {
+    fprintf(stderr, "cxl_region_init failed (need %zu B)\n", total);
+    return 1;
+  }
+
+  struct alignas(64) Header {
+    cacheline_u64 run_cookie;
+    cacheline_u64 init_done;
+    cacheline_u64 trans_go;
+  };
+  Header *hdr = reinterpret_cast<Header *>(r.base);
+  CxlKvBucket *buckets = reinterpret_cast<CxlKvBucket *>(
+      reinterpret_cast<char *>(r.base) + header_bytes);
+  void *pool_mem = reinterpret_cast<char *>(buckets) + bucket_bytes;
+  void *fr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
+  WorkerStats *stats = reinterpret_cast<WorkerStats *>(
+      reinterpret_cast<char *>(fr_mem) + fr_bytes);
+
+  bool is_host_primary = (host_id == 0);
+  if (is_host_primary) {
+    CACHELINE_STORE(&hdr->init_done, 0ULL);
+    CACHELINE_STORE(&hdr->trans_go, 0ULL);
+    CACHELINE_STORE(&hdr->run_cookie, cookie);
+    flush_line(hdr); store_fence();
+    std::memset(stats, 0, stats_bytes);
+    flush_region(stats, stats_bytes); store_fence();
+  } else {
+    while (true) {
+      flush_line(hdr); full_fence();
+      if (CACHELINE_LOAD(&hdr->run_cookie) == cookie) break;
+      __builtin_ia32_pause();
+    }
+  }
+
+  // DRAM regions PRE-FORK.
+  ShardingTable st;
+  sharding_init(&st, (uint32_t)num_hosts);
+
+  void *dir_mem = mmap(nullptr,
+                       slot_directory_bytes(num_buckets, kCxlKvSlotsPerBucket),
+                       PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (dir_mem == MAP_FAILED) { fprintf(stderr, "mmap dir failed\n"); return 1; }
+  SlotDirectory dir;
+  slot_directory_init(&dir, dir_mem, num_buckets, kCxlKvSlotsPerBucket);
+
+  void *cache_mem = mmap(nullptr, cache_pool_bytes(num_buckets),
+                         PROT_READ | PROT_WRITE,
+                         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (cache_mem == MAP_FAILED) { fprintf(stderr, "mmap cache failed\n"); return 1; }
+  KvCachePool cache;
+  cache_pool_init(&cache, cache_mem, num_buckets);
+
+  BlockFreeList fl;
+  block_freelist_init(&fl);
+
+  CxlKvBlockPool pool;
+  if (pool.attach(pool_mem, pool_bytes,
+                  (uint32_t)want_blocks, kBlockSize,
+                  host_id, num_hosts, is_host_primary) != 0) {
+    fprintf(stderr, "pool.attach failed\n");
+    return 1;
+  }
+
+  // Fork num_threads-1 children. Parent has client_id=0.
+  std::vector<pid_t> children;
+  int client_id = 0;
+  for (int i = 1; i < num_threads; i++) {
+    pid_t p = fork();
+    if (p < 0) { perror("fork"); return 1; }
+    if (p == 0) { client_id = i; children.clear(); break; }
+    children.push_back(p);
+  }
+
+  bool is_primary_client = (host_id == 0) && (client_id == 0);
+  bool is_host_primary_client = (client_id == 0);
+
+  CxlKvStoreA store;
+  if (is_primary_client) {
+    if (store.attach(buckets, num_buckets, host_id, num_hosts,
+                     /*init_region=*/true,
+                     &st, &dir, &cache, &fl, &pool) != 0) {
+      fprintf(stderr, "primary attach failed\n"); return 1;
+    }
+    ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
+    if (store.enable_forward(fr, /*init=*/true, /*spawn_responder=*/true) != 0) {
+      fprintf(stderr, "primary enable_forward failed\n"); return 1;
+    }
+    uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
+    CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
+    flush_line(&hdr->init_done); store_fence();
+  } else {
+    // Children of host 0: wait for primary's bit 0.
+    if (host_id == 0) {
+      while (true) {
+        flush_line(&hdr->init_done); full_fence();
+        if ((CACHELINE_LOAD(&hdr->init_done) & 0x1ULL) != 0) break;
+        __builtin_ia32_pause();
+      }
+    }
+    if (store.attach(buckets, num_buckets, host_id, num_hosts,
+                     /*init_region=*/false,
+                     &st, &dir, &cache, &fl, &pool) != 0) {
+      fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
+      return 1;
+    }
+    if (host_id == 1 && client_id == 0) {
+      // host 1 primary: enable forward (no init), spawn responder.
+      ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
+      if (store.enable_forward(fr, /*init=*/false, /*spawn_responder=*/true) != 0) {
+        fprintf(stderr, "[h1 primary] enable_forward failed\n"); return 1;
+      }
+      uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
+      CACHELINE_STORE(&hdr->init_done, cur | 0x2ULL);
+      flush_line(&hdr->init_done); store_fence();
+    }
+    if (host_id == 1 && client_id != 0) {
+      while (true) {
+        flush_line(&hdr->init_done); full_fence();
+        if ((CACHELINE_LOAD(&hdr->init_done) & 0x2ULL) != 0) break;
+        __builtin_ia32_pause();
+      }
+    }
+  }
+  (void)cache_on;  // Protocol A's cache is always-on; FUSEE_CACHE no-op
+                   // here, retained only for SUMMARY.log compat.
+
+  // Cross-host primary barrier: both hosts inited.
+  if (is_host_primary_client) {
+    if (host_id == 0) {
+      while (true) {
+        flush_line(&hdr->init_done); full_fence();
+        if ((CACHELINE_LOAD(&hdr->init_done) & 0x2ULL) != 0) break;
+        __builtin_ia32_pause();
+      }
+      CACHELINE_STORE(&hdr->trans_go, cookie);
+      flush_line(&hdr->trans_go); store_fence();
+    } else {
+      while (true) {
+        flush_line(&hdr->trans_go); full_fence();
+        if (CACHELINE_LOAD(&hdr->trans_go) == cookie) break;
+        __builtin_ia32_pause();
+      }
+    }
+  }
+
+  // -------- LOAD phase: each host primary loads its own owned keys. --------
+  uint64_t load_thpt_kops = 0;
+  if (is_host_primary_client) {
+    uint64_t t0 = now_ns();
+    uint64_t loaded = 0;
+    for (auto &op : load_ops) {
+      if (op.kind != OP_INSERT) continue;
+      if (host_of(&st, op.key) != (uint32_t)host_id) continue;
+      store.insert(op.key, op.key ^ 0xCAFEULL);
+      loaded++;
+    }
+    uint64_t t1 = now_ns();
+    if (t1 > t0) load_thpt_kops = loaded * 1000000ULL / ((t1 - t0) / 1000ULL + 1);
+  }
+
+  // Cross-host barrier: both hosts done loading.
+  if (is_host_primary_client) {
+    uint64_t my_bit = (host_id == 0) ? 0x10ULL : 0x20ULL;
+    uint64_t peer_bit = (host_id == 0) ? 0x20ULL : 0x10ULL;
+    uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
+    CACHELINE_STORE(&hdr->init_done, cur | my_bit);
+    flush_line(&hdr->init_done); store_fence();
+    while (true) {
+      flush_line(&hdr->init_done); full_fence();
+      if ((CACHELINE_LOAD(&hdr->init_done) & peer_bit) != 0) break;
+      __builtin_ia32_pause();
+    }
+  } else {
+    // Children: wait for own host's primary load-done bit.
+    uint64_t my_bit = (host_id == 0) ? 0x10ULL : 0x20ULL;
+    while (true) {
+      flush_line(&hdr->init_done); full_fence();
+      if ((CACHELINE_LOAD(&hdr->init_done) & my_bit) != 0) break;
+      __builtin_ia32_pause();
+    }
+  }
+
+  // -------- TRANS phase --------
+  const int global_id = host_id * num_threads + client_id;
+  const int total_workers = num_hosts * num_threads;
+
+  std::vector<uint64_t> w_lat, r_lat;
+  w_lat.reserve(trans_ops.size() / total_workers + 16);
+  r_lat.reserve(trans_ops.size() / total_workers + 16);
+
+  uint64_t t_start = now_ns();
+  uint64_t my_count = 0;
+  for (size_t i = 0; i < trans_ops.size(); i++) {
+    if ((int)(i % (size_t)total_workers) != global_id) continue;
+    auto &op = trans_ops[i];
+    uint64_t v;
+    uint64_t a = now_ns(), b;
+    int rc;
+    if (op.kind == OP_READ) {
+      rc = store.search(op.key, &v);
+      b = now_ns();
+      if (rc == 0) r_lat.push_back(b - a);
+    } else if (op.kind == OP_UPDATE) {
+      rc = store.update(op.key, op.key ^ 0xBEEFULL);
+      b = now_ns();
+      if (rc == 0) w_lat.push_back(b - a);
+    } else if (op.kind == OP_INSERT) {
+      rc = store.insert(op.key, op.key ^ 0xCAFEULL);
+      b = now_ns();
+      if (rc == 0) w_lat.push_back(b - a);
+    } else if (op.kind == OP_DELETE) {
+      rc = store.remove(op.key);
+      b = now_ns();
+      if (rc == 0) w_lat.push_back(b - a);
+    } else {
+      continue;
+    }
+    (void)rc;
+    my_count++;
+  }
+  uint64_t t_end = now_ns();
+  uint64_t my_wall_ns = t_end - t_start;
+
+  // Publish stats.
+  WorkerStats *me = &stats[host_id * kMaxClients + client_id];
+  uint64_t w_count = w_lat.size();
+  uint64_t r_count = r_lat.size();
+  uint64_t w_sum_ns = 0; for (auto x : w_lat) w_sum_ns += x;
+  uint64_t r_sum_ns = 0; for (auto x : r_lat) r_sum_ns += x;
+  uint64_t w_p50 = quantile_ns(w_lat, 0.50);
+  uint64_t w_p99 = quantile_ns(w_lat, 0.99);
+  uint64_t r_p50 = quantile_ns(r_lat, 0.50);
+  uint64_t r_p99 = quantile_ns(r_lat, 0.99);
+  CACHELINE_STORE(&me->trans_ops, my_count);
+  CACHELINE_STORE(&me->trans_wall_ns, my_wall_ns);
+  CACHELINE_STORE(&me->w_count, w_count);
+  CACHELINE_STORE(&me->w_sum_ns, w_sum_ns);
+  CACHELINE_STORE(&me->w_p50_ns, w_p50);
+  CACHELINE_STORE(&me->w_p99_ns, w_p99);
+  CACHELINE_STORE(&me->r_count, r_count);
+  CACHELINE_STORE(&me->r_sum_ns, r_sum_ns);
+  CACHELINE_STORE(&me->r_p50_ns, r_p50);
+  CACHELINE_STORE(&me->r_p99_ns, r_p99);
+  CACHELINE_STORE(&me->done, 1ULL);
+  flush_line(me); store_fence();
+
+  if (client_id != 0) { _exit(0); }
+  for (auto p : children) waitpid(p, nullptr, 0);
+
+  // Cross-host barrier 3: aggregation.
+  if (is_host_primary_client) {
+    uint64_t my_bit = (host_id == 0) ? 0x40ULL : 0x80ULL;
+    uint64_t peer_bit = (host_id == 0) ? 0x80ULL : 0x40ULL;
+    uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
+    CACHELINE_STORE(&hdr->init_done, cur | my_bit);
+    flush_line(&hdr->init_done); store_fence();
+    while (true) {
+      flush_line(&hdr->init_done); full_fence();
+      if ((CACHELINE_LOAD(&hdr->init_done) & peer_bit) != 0) break;
+      __builtin_ia32_pause();
+    }
+  }
+
+  store.stop_responder();
+
+  if (is_primary_client) {
+    flush_region(stats, stats_bytes); full_fence();
+    uint64_t total_trans_ops = 0, max_wall_ns = 0;
+    uint64_t total_w_count = 0, total_w_sum_ns = 0;
+    uint64_t total_r_count = 0, total_r_sum_ns = 0;
+    std::vector<uint64_t> all_w_p50, all_w_p99, all_r_p50, all_r_p99;
+    for (int h = 0; h < num_hosts; h++) {
+      for (int c = 0; c < num_threads; c++) {
+        WorkerStats *ws = &stats[h * kMaxClients + c];
+        total_trans_ops += CACHELINE_LOAD(&ws->trans_ops);
+        uint64_t w = CACHELINE_LOAD(&ws->trans_wall_ns);
+        if (w > max_wall_ns) max_wall_ns = w;
+        total_w_count += CACHELINE_LOAD(&ws->w_count);
+        total_w_sum_ns += CACHELINE_LOAD(&ws->w_sum_ns);
+        total_r_count += CACHELINE_LOAD(&ws->r_count);
+        total_r_sum_ns += CACHELINE_LOAD(&ws->r_sum_ns);
+        all_w_p50.push_back(CACHELINE_LOAD(&ws->w_p50_ns));
+        all_w_p99.push_back(CACHELINE_LOAD(&ws->w_p99_ns));
+        all_r_p50.push_back(CACHELINE_LOAD(&ws->r_p50_ns));
+        all_r_p99.push_back(CACHELINE_LOAD(&ws->r_p99_ns));
+      }
+    }
+    auto agg_p50 = [](std::vector<uint64_t> &v) {
+      std::sort(v.begin(), v.end());
+      return v.empty() ? 0 : v[v.size() / 2];
+    };
+    auto agg_p99 = [](std::vector<uint64_t> &v) {
+      uint64_t m = 0; for (auto x : v) if (x > m) m = x; return m;
+    };
+    uint64_t w_avg = total_w_count ? (total_w_sum_ns / total_w_count) : 0;
+    uint64_t r_avg = total_r_count ? (total_r_sum_ns / total_r_count) : 0;
+    uint64_t w_p50_a = agg_p50(all_w_p50);
+    uint64_t w_p99_a = agg_p99(all_w_p99);
+    uint64_t r_p50_a = agg_p50(all_r_p50);
+    uint64_t r_p99_a = agg_p99(all_r_p99);
+    double trans_wall_s = max_wall_ns / 1e9;
+    uint64_t trans_agg_kops = max_wall_ns ?
+        (total_trans_ops * 1000000ULL / (max_wall_ns / 1000ULL + 1)) : 0;
+
+    fprintf(stdout,
+        "YCSB opt=A cache=%d num_hosts=%d threads=%d threads_eff=%d rep=%d "
+        "load_ops=%zu load_thpt=%lu "
+        "trans_ops=%lu trans_wall_max=%.6f trans_agg_thpt=%lu "
+        "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
+        "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu "
+        "# %s_optA_t%d_cache%s_rep%d\n",
+        cache_on ? 1 : 0, num_hosts, num_threads, num_threads, rep,
+        load_ops.size(), load_thpt_kops,
+        total_trans_ops, trans_wall_s, trans_agg_kops,
+        w_avg, w_p50_a, w_p99_a,
+        r_avg, r_p50_a, r_p99_a,
+        wl_name.c_str(), num_threads, cache_on ? "on" : "off", rep);
+    fflush(stdout);
+  }
+
+  cxl_region_destroy(&r);
+  return 0;
+}
