@@ -54,7 +54,7 @@ required plot set (see §6), plus this spec.
 |---|---|---|
 | Protocols | A (only) | `OPTS="A"` |
 | Workloads | a, b, c, d, f (e **skipped**: scan unimplemented) | `WORKLOADS="workloada workloadb workloadc workloadd workloadf"` |
-| Clients per host (T) | 1, 2, 4, 8, 16, 32, 64, 86 | `THREADS="1 2 4 8 16 32 64 86"` |
+| Clients per host (T) | 1, 2, 4, 8, 16, 32, 64 | `THREADS="1 2 4 8 16 32 64"` |
 | Cache modes | on, off (**on first, off second**) | `CACHE_MODES="on off"` |
 | KV value sizes | 256, 512, 1024 B (per Protocol A blockpool) | `KV_SIZES="256 512 1024"` |
 | Reps per cell | **1** (default; specific experiments may override) | `REPS=1` |
@@ -63,8 +63,19 @@ required plot set (see §6), plus this spec.
 | Hosts | 2 (g3 + g4, role-mode) | `HOST0=g3 HOST1=g4` |
 | Per-run timeout | 600 s | `TIMEOUT_S=600` |
 
-**Total runs**: 1 × 5 × 8 × 2 × 3 × 1 = **240** cell-runs (240 unique
+**Total runs**: 1 × 5 × 7 × 2 × 3 × 1 = **210** cell-runs (210 unique
 cells × 1 rep). Headline numbers are single-rep observations.
+
+**T grid rationale (set 2026-05-02 post-iter-5A)**: each host has
+86 CPU cores. T_max=64 reserves 22 cores per host for
+non-worker system threads — currently 1 forward responder + 1
+inval cache_dispatcher (= 2); future K-shard dispatchers, K-shard
+responders, sender/receiver pools, GC threads. The 22-core budget
+prevents the bi-modal "T=86 collapses while T=64 hits 17.9 Mops/s"
+artifact iter-5A surfaced (dispatcher CPU starvation when worker
+count == core count). A separate **system-thread scaling experiment**
+(varying K-shard count, dispatcher count, etc.) uses this 22-core
+budget; results documented per-experiment outside scaling_ycsb spec.
 
 **Reps policy (set 2026-05-02)**: standard sweep is 1 rep per cell.
 Multi-rep (REPS=N, N>1) is reserved for **specific experiments
@@ -82,7 +93,7 @@ write path). Prior to that date, slots stored an inline 8 B value;
 post Protocol A, slots store a CXL block pointer + size_class and
 the actual value lives in a per-host blockpool segment.
 
-A sweep that reports fewer than 240 unique cells is **not a valid
+A sweep that reports fewer than 210 unique cells is **not a valid
 scaling_ycsb run** and MUST NOT be cited as iter-completion
 evidence. See iter-4A first attempt for the cautionary case (only
 4 cells × 1 rep reported, violating cell-count AND kv-size gates;
@@ -115,8 +126,8 @@ Output directory pattern: `logs/g34_scaling_sweep_<yyyymmdd_HHMMSS>/`.
 The orchestrator then copies the raw log + regenerated plots into
 **`docs/g34_scaling_ycsb_<yyyymmdd_HHMMSS>/`** (see § 6).
 
-Expected wall-clock: ~60-90 min for the full 240-cell single-rep
-matrix (80 base cells × 3 KV sizes × 1 rep = 240 SUMMARY.log lines)
+Expected wall-clock: ~50-80 min for the full 210-cell single-rep
+matrix (70 base cells × 3 KV sizes × 1 rep = 210 SUMMARY.log lines)
 on an unloaded pair of g3/g4. Multi-rep experiments scale linearly.
 
 ## 6. Output layout
@@ -191,7 +202,7 @@ Reference figure (the look every scaling_ycsb plot should match):
 ### X-axis
 
 - `#clients per host`, log-scale base 2 (values 1, 2, 4, 8, 16, 32,
-  64, 86).
+  64).
 
 ### Throughput plots
 
@@ -293,9 +304,9 @@ and what the sweep was intended to validate.
 
 ## 11. Known caveats
 
-- **Short runs (200k ops) underestimate steady-state** at T=86 by
-  roughly 40-60 % due to `max_wall / avg_wall` ratio sensitivity to
-  OS jitter. The 240-cell single-rep matrix is the standard result;
+- **Short runs (200k ops) underestimate steady-state** at T=64 by
+  roughly 30-50 % due to `max_wall / avg_wall` ratio sensitivity to
+  OS jitter. The 210-cell single-rep matrix is the standard result;
   for "final paper-grade" numbers on key cells, follow up with a
   2M-ops sustained smoke (see `plot_smoke_2M.py`) and/or a
   multi-rep experiment (REPS=5+).
@@ -325,9 +336,9 @@ Every Protocol A sweep MUST report the gap to these two targets in
 A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
 
 1. A `docs/g34_scaling_ycsb_<timestamp>/` directory exists with
-   ≥ 240 unique cells (cell-count is the headline gate; reps are
-   per-experiment so a default 1-rep sweep produces 240
-   SUMMARY.log lines, while an opt-in 5-rep sweep produces 1200).
+   ≥ 210 unique cells (cell-count is the headline gate; reps are
+   per-experiment so a default 1-rep sweep produces 210
+   SUMMARY.log lines, while an opt-in 5-rep sweep produces 1050).
    FAILs and reruns excluded.
 2. `gap_to_target.md` is generated and present.
 3. The iter summary doc cites the `<timestamp>` of that directory.
