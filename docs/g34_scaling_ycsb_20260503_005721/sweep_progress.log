@@ -3,3 +3,10 @@
 [sweep] 40/210 done (2 fails); elapsed 2270s
 [sweep] 60/210 done (2 fails); elapsed 2913s
 [sweep] 80/210 done (3 fails); elapsed 3643s
+[sweep] 100/210 done (4 fails); elapsed 4471s
+[sweep] 120/210 done (4 fails); elapsed 4971s
+[sweep] 140/210 done (6 fails); elapsed 6721s
+[sweep] 160/210 done (9 fails); elapsed 9562s
+[sweep] 180/210 done (9 fails); elapsed 11266s
+[sweep] 200/210 done (10 fails); elapsed 12190s
+[sweep] DONE 210 runs, 10 fails, total 12254s

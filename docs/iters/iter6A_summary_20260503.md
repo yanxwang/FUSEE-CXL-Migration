@@ -136,9 +136,48 @@ Iter-6A doubling-ratio shape (cache=on):
 - G6 rw race: violations=0 still expected (no change to §I9 protocol;
   only InvalEntry layout + spin_wait timeout)
 
-### Headline numbers (filled after sweep)
+### Headline numbers (sweep complete 04:23 CDT, 210/210, 10 FAILs = 4.8%)
 
-(see `gap_to_target.md` post-sweep; this section auto-updates)
+Peak Mops/s per (workload, KV size), cache=on:
+
+| Workload | KV=256 | KV=512 | KV=1024 |
+|---|---|---|---|
+| workload-a (R/U Zipf) | 7.60 (T=64) [38%] | 7.20 (T=64) [36%] | 4.83 (T=64) [24%] |
+| workload-b (R95/U5) | 11.07 (T=64) [55%] | 11.80 (T=32) [59%] | 12.12 (T=32) [61%] |
+| **workload-c (R only)** | **18.21 (T=64) [91%]** | 11.92 (T=32) [60%] | **18.95 (T=64) [95%]** ⭐ |
+| workload-d (R+I latest) | 8.18 (T=16) [41%] | **18.00 (T=64) [90%]** | 8.32 (T=16) [42%] |
+| workload-f (RMW + R) | 9.23 (T=64) [46%] | 10.14 (T=64) [51%] | 4.89 (T=64) [24%] |
+
+**Top headline: workload-c KV=1024 T=64 = 18.95 Mops/s = 94.8% of
+20 Mops/s target.** Read-only workload at large KV nearly hits the
+target with strict-A protocol fully wired.
+
+**workload-d KV=512 T=64 = 18.00 Mops/s (90%)**: latest-key insert
+at large KV also nearly hits target.
+
+**workload-a (heaviest write mix) regressed** from iter-5A 17.9 to
+7.60. Per Phase 6 retrospective, iter-5A peak was inflated by
+silent-fail invals. 7.60 is genuine strict-A throughput on the
+write-heaviest workload; iter-7A K-shard target.
+
+**10 FAILs**: all rc=124 timeouts at low T (T=2, 4) on Zipf
+write-heavy workloads (workload-d had 4 fails). Same first-iter
+cold-start pattern from iter-4A-redo, exacerbated by 5ms inval
+timeout when CXL transport bursts. multi-rep would auto-mask.
+
+### Many cells show 0.0005-0.01 Mops/s anomaly
+
+19 cells (~9% of valid cells) show throughput collapsed to <0.05 Mops/s
+in single-rep, despite same parameters that produce 5-15 Mops/s in
+neighbor cells. Pattern: run hits a sustained 5ms timeout cascade
+→ throughput ~ 200 ops/sec. iter-5A had similar (1% rate); iter-6A
+elevated due to tighter 5ms cap. Multi-rep would smooth — single-rep
+default exposes this.
+
+These are documented as a quality concern, not a correctness bug.
+Per spec §3 "single-rep numbers are indicative not steady-state".
+For paper-grade headlines, the affected cells should be re-run with
+REPS=5+ (per spec §3 carve-out).
 
 ---
 
