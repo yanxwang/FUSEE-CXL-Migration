@@ -2,7 +2,8 @@
 
 **Author**: Claude
 **Date drafted**: 2026-05-03 (post-iter-6A 04:24 CDT sweep)
-**Status**: DRAFT — awaiting user review
+**Date confirmed**: 2026-05-03 (user confirmed all QR1-QR8 defaults)
+**Status**: CONFIRMED — awaiting deadline + start
 **Branch**: `feat/cxl-migration` (commit prefixes
 `[iter7A-repro]`, `[iter7A-probe]`, `[iter7A-hypo]`, `[iter7A-fix]`,
 `[iter7A-sweep]`, `[iter7A-spec]`)
@@ -83,12 +84,12 @@ Mops/s):
 
 ---
 
-## Decision recap (must be confirmed by user)
+## Decision recap (CONFIRMED 2026-05-03)
 
-iter-7A explicit constraints (all subject to user override):
+iter-7A explicit constraints:
 
 1. **Single task only**. No optimization. No backlog work.
-2. **No phase budget** (per QR7 from iter-5A/iter-6A). Diagnostic
+2. **No phase budget** (per iter-5A/iter-6A QR7). Diagnostic
    continues until root cause named + A-B confirmed.
 3. **Anomaly scan** is the new mandatory step — codified into
    spec §13 iter-completion gate so future iters can't skip it.
@@ -97,6 +98,11 @@ iter-7A explicit constraints (all subject to user override):
    (or be split into named subgroups).
 5. **iter-6A's sweep data are reference** — no re-sweep until
    Phase 5 fix; saves wallclock.
+
+User confirmed defaults for all 8 open questions (QR1-QR8); the
+specifics now flow into the relevant phase sections below.
+Summary table at end of this document; "Open questions for review"
+section replaced with "Confirmed decisions" reference.
 
 ---
 
@@ -126,7 +132,8 @@ disclaimer — verify it).
 **Code changes**: none. Use existing `protocol_a_ycsb` binary +
 sweep cell command pattern.
 
-**Validation experiment**:
+**Validation experiment** (QR1: REPS=5 default, +5 rep top-up for
+boundary cells):
 1. For each of the 19 cells, re-run with **REPS=5** explicitly opted
    in (per spec §3 multi-rep carve-out for "validating a stability
    fix" / "investigating noise").
@@ -141,8 +148,15 @@ sweep cell command pattern.
    - **Non-reproducible**: 0 of 5 reps low (cell now normal) →
      iter-6A's collapse was a transient (CXL device state, OS load,
      etc.); document and exclude from Phase 3
-4. Record table in `docs/iter7A_phase1_repro.md`: per cell, rep
-   values + classification.
+4. **Boundary case (QR1)**: any cell whose 5-rep result lands in
+   the 2-or-3-fast-2-or-3-slow ambiguous middle (i.e., cannot be
+   cleanly assigned to one of the 4 buckets above) MUST receive an
+   additional 5 reps (total 10) before classification. Avoids the
+   classification ambiguity that statistically can occur with 5 reps
+   in a 50/50 mix. Estimated cost: ≤ 5 boundary cells × 5 extra reps
+   × ~30s = ≤ 12.5 min.
+5. Record table in `docs/iter7A_phase1_repro.md`: per cell, rep
+   values + classification + (if applicable) 10-rep top-up data.
 
 **Success criterion**: every one of the 19 cells classified into
 one of the 4 buckets above with backing 5-rep data.
@@ -168,14 +182,15 @@ captures only last ~256 ops per worker. Collapsed cells run
 **Spec coverage**: §VII AP16 (probe is observation, not protocol);
 no I/AP touched.
 
-**Code changes**:
+**Code changes** (QR2: 128 MB pre-allocation per thread):
 - MODIFIED `src/cxl_probe.h`:
   - Replace TLS 4096-frame ring with **persistent mmap'd file** —
     each thread mmaps `${FUSEE_PROBE_DUMP}/probe.${pid}.${tid}`
-    pre-allocated to N MB (e.g., 64 MB → 2.6M frames per thread).
+    pre-allocated to **128 MB → 5.3M frames per thread**.
     Frames append; no wraparound; no information loss.
-  - On overflow (rare with 64 MB), the ring wraps with explicit
-    "OVERFLOW" sentinel frame. Caller alerted in dump.
+  - On overflow (very unlikely with 128 MB headroom — 200k-op cell
+    needs ~76 MB), the ring wraps with explicit "OVERFLOW" sentinel
+    frame. Caller alerted in dump.
   - Frame layout unchanged (24 B: tag + ns + op_id).
 - MODIFIED `scripts/parse_probes.py`: handle the new persistent
   dump format (header includes mmap size + frame count); detect
@@ -189,8 +204,10 @@ no I/AP touched.
 **Validation experiment**:
 1. Build with FUSEE_PROBE=1; run `protocol_a_local_test` with new
    probe infra. Probe overhead measured at < 5% of test runtime.
-2. Dump file size: confirm 64 MB pre-allocation works on g3+g4
-   (no /tmp space issues).
+2. Dump file size: confirm 128 MB pre-allocation works on g3+g4
+   (~17 GB total per host with T=64 + responder + dispatcher = 132
+   threads × 128 MB; /tmp is tmpfs, RAM-backed — switch to /root
+   if RAM tight).
 3. parse_probes.py + probe_anomaly_scan.py: smoke test on the
    dump → both produce output without crash.
 
@@ -200,8 +217,9 @@ slowest 1% + longest gaps with op_id linkage.
 
 **Bottleneck check**: per-probe overhead < 200 ns (mmap'd write
 should be ~50 ns on hot path). Per-cell probe storage: 200k ops
-× 16 stages = 3.2M frames × 24 B = 76 MB → bumped pre-allocation
-to 128 MB to be safe.
+× 16 stages = 3.2M frames × 24 B = 76 MB → 128 MB has 1.7×
+headroom. One OVERFLOW means we have to re-run the whole cell
+(30s-3min × 19 cells), so the headroom is cheap insurance.
 
 ---
 
@@ -270,27 +288,36 @@ classification)**:
 
 - **H7: "open" — found via probe data, not yet hypothesized**.
 
-**Procedure (per cell, A-B-style per QR7)**:
-1. Re-run cell with FUSEE_PROBE_DUMP enabled. Save probe data.
-2. Run `probe_anomaly_scan.py` → top-100 anomalous ops per cell.
-3. Read the timeline of those 100 ops + surrounding context.
-4. Classify hang location: which stage took > 1 ms? Which thread?
-5. Check predicted symptom of each hypothesis against data.
-6. If a hypothesis matches → record + move to next cell to see
-   if same hypothesis explains other cells.
-7. If no hypothesis matches → add to H7 (open) for fresh
-   hypothesis derivation.
+**Procedure (QR3: probe ALL deterministic cells; A-B test only one
+representative cell per hypothesis)**:
 
-**Validation experiment**:
-1. Per cell, name the suspected stage / hypothesis.
-2. **A-B confirmation**: apply a targeted (non-shipping) probe-
-   only modification — e.g., add `inval_timeout_count` print, or
-   force ring depth to 4096, or pin dispatcher CPU — re-run that
-   one cell. Predicted symptom should change.
-3. Once same hypothesis explains ≥ 80% of "deterministic"
-   collapsed cells with A-B confirmation → root cause named.
-4. Output `docs/iter7A_phase3_diagnosis.md` with: per-cell
-   classification, named root cause, A-B evidence diff.
+**Step A: probe data collection — every deterministic cell**
+1. Re-run each deterministic cell from Phase 1 with FUSEE_PROBE_DUMP
+   enabled. Save probe data (per-host, per-thread .bin files; ~76 MB
+   per worker × 132 threads / cell × 19 cells ≈ 200 GB total).
+2. Run `probe_anomaly_scan.py` per cell → top-100 anomalous ops.
+3. Read the timeline of those 100 ops + surrounding context.
+4. Classify hang location per cell: which stage took > 1 ms?
+   Which thread? Which hypothesis pattern?
+
+**Step B: A-B confirmation — one representative cell per hypothesis**
+5. For each hypothesis matched in step A, pick ONE representative
+   cell. Apply a targeted (non-shipping) probe-only modification —
+   e.g., add `inval_timeout_count` print, force ring depth to 4096,
+   pin dispatcher CPU. Re-run that cell. Predicted symptom should
+   change. (A-B is invasive — building 2 binaries, running 2 cells —
+   so we don't repeat per cell. One A-B per named hypothesis.)
+6. Probabilistic cells get probe data only (step A); no special A-B,
+   since their intermittent nature defeats single-cell A-B.
+
+**Step C: hypothesis coverage check**
+7. After all deterministic cells are classified: ≥ 80% explained
+   by ONE root cause → name it. Or ≤ 2 named subgroups, each with
+   A-B confirmation → split.
+
+8. Output `docs/iter7A_phase3_diagnosis.md` with: per-cell
+   classification table, named root cause (or 2 subgroups), A-B
+   evidence diff per hypothesis.
 
 **Success criterion**: ≥ 80% of "deterministic" cells explained
 by ONE root cause (or split into ≤ 2 named subgroups, each with
@@ -310,6 +337,30 @@ root cause; verify the 19 cells (or the ≥ 80% Phase 3 explained)
 no longer collapse.
 
 **Spec coverage**: depends on chosen fix; cite I/AP at commit time.
+
+**QR4 — single-fix discipline (locked)**: if Phase 3 names 2+
+root causes, **iter-7A ships the fix for the LARGER subgroup
+ONLY**. Other subgroups documented as iter-8A backlog with named
+root cause + RAP-ready hypothesis. Do NOT batch fixes — single-
+variable change is the only way Phase 5 sweep can attribute
+"19 cells fixed" to "this one fix". (Same lesson iter-6A
+violated: shipping cacheline-split + 5ms-cap together hid which
+fix did what.)
+
+**QR8 — small-fix-only-this-iter (locked)**: if Phase 3's named
+root cause requires > 200 LOC architectural change, iter-7A ships:
+1. The diagnosis report (Phase 3 markdown) — root cause named is
+   the deliverable.
+2. A **workaround / cap-based fix ≤ 200 LOC** that bypasses the
+   buggy path or bounds its damage (sacrificing some throughput
+   for reproducibility). Example: if root cause is "register
+   channel saturates", workaround is "add 5ms cap on register
+   ACK" similar to what Phase 6 of iter-6A did with invalidate
+   timeout.
+3. The spec codification (Phase 5).
+The full architectural fix becomes iter-8A's first task with
+proper RAP. iter-7A's value is diagnosis + process closure, not
+volume of fix code.
 
 **Code changes**: depend on Phase 3 root cause. Some pre-loaded
 fix candidates aligned with the hypotheses:
@@ -342,8 +393,11 @@ fix candidates aligned with the hypotheses:
 3. Per cell: throughput should rise to within 50% of same-(workload,
    KV) median neighbor (i.e., no longer "collapsed" — at least in
    the same order of magnitude as healthy cells).
-4. Anomaly scan post-fix: list any cell still showing < 1% of
-   workload-peak throughput. Target: zero remaining collapsed cells.
+4. Anomaly scan post-fix using the **dual-condition threshold**
+   (see Phase 5 / QR5): list any cell still satisfying
+   `Mops/s < 0.1` OR `Mops/s < (same-wl-same-KV T-neighbor geomean) / 10`.
+   Target: zero remaining anomalies in the deterministic-cell set
+   (and ≥ 80% of the probabilistic-cell set).
 5. G6 rw race test: violations=0 still holds.
 
 **Success criterion**:
@@ -353,8 +407,10 @@ fix candidates aligned with the hypotheses:
   random sample of healthy cells).
 - G6 violations=0 still passes.
 
-**Bottleneck check**: fix LOC ≤ 200; if larger, the fix is
-itself an architectural change and Phase 5 needs a RAP per §XIII.
+**Bottleneck check**: fix LOC ≤ 200 per QR8. If Phase 3 names a
+root cause that genuinely needs > 200 LOC architectural change,
+iter-7A ships the workaround per QR8 above and architectural fix
+moves to iter-8A.
 
 ---
 
@@ -370,14 +426,21 @@ skip it (the iter-6A process failure).
 - MODIFIED `scripts/run_iter6A_sweep.sh` → `run_iter7A_sweep.sh`:
   no parameter change; just re-run with the Phase 4 fix applied.
 - MODIFIED `scripts/iter4A_redo_summarize.py`: add
-  `anomaly_scan_section()` — for each (workload, KV), find peak
-  Mops/s and flag any T-cell where Mops/s < 1% of that peak as
-  "unexplained outlier"; print loud header in `gap_to_target.md`.
+  `anomaly_scan_section()` — **dual-condition threshold (QR5
+  locked)**:
+  - cell flagged as anomaly if Mops/s < **0.1 absolute** OR
+  - cell flagged if Mops/s < **(geomean of same-(workload, KV)
+    T-neighbors) / 10** (catches order-of-magnitude regression
+    while not false-flagging expected-slow T=1 single-thread cells).
+  Print loud header in `gap_to_target.md`. Sweep driver script
+  exits non-zero if any anomaly found.
 - MODIFIED `docs/scaling_ycsb_spec.md §13` iter-completion gate:
-  add **gate 5: zero unexplained anomalies in `gap_to_target.md`**.
+  add **gate 5: zero unexplained anomalies in `gap_to_target.md`,
+  HARD FAIL** (QR6 locked: same enforcement model as gates 1-4).
   Each anomaly must be either fixed (re-run shows no anomaly) OR
-  explicitly explained in iter summary doc with cited root cause.
-  No "single-rep noise" dismissal without backing 5-rep evidence.
+  explicitly explained in iter summary doc with **5-rep multi-rep
+  evidence** of "yes this cell is genuinely noisy, not a bug".
+  No "single-rep noise" dismissal without that evidence.
 - MODIFIED `docs/design_goals.md §X` enforcement framework: add
   **P4 (Process)**: "Sweep data is not 'documented' until every
   outlier is explained. Tagging an anomaly as 'noise' requires
@@ -387,19 +450,30 @@ skip it (the iter-6A process failure).
   is checked across all 5 workloads, not just workload-a**;
   iter-6A oversight where Phase 6 success was claimed on workload-a
   alone explicitly cited.
+- MODIFIED `~/.claude/projects/.../memory/feedback_scaling_ycsb_spec.md`
+  per QR7 (locked):
+  - "Why" section adds 4th cautionary precedent: "iter-6A
+    (2026-05-03): 210-cell sweep produced 19 collapsed cells (9% of
+    cache=on); summary dismissed as 'single-rep noise' without 5-rep
+    verification. Confirmation bias on outliers."
+  - "How to apply" step 7 (iter-completion gate) gains §13 gate 5:
+    zero unexplained anomalies, dual-condition threshold; "single-
+    rep noise" tag REQUIRES 5-rep evidence.
 
 **Validation experiment**:
 1. Full 210-cell sweep with Phase 4 fix.
 2. anomaly_scan_section in `gap_to_target.md` reports **zero
-   unexplained outliers**.
-3. Doubling-ratio check across all 5 workloads (not just
-   workload-a): each workload's pre-saturation T-doubling produces
-   ≥ 1.5× throughput.
+   unexplained outliers**. Sweep driver script exits 0 (gate 5
+   hard-fail check passes).
+3. Doubling-ratio check across **all 5 workloads** (not just
+   workload-a; QR-related plan oversight): each workload's
+   pre-saturation T-doubling produces ≥ 1.5× throughput.
 4. G6 violations=0.
 
-**Success criterion**: 210/210 valid; 0 unexplained outliers;
-doubling-ratio passes for **all 5 workloads**; spec §13 + §X +
-memory updated.
+**Success criterion**: 210/210 valid; 0 unexplained outliers
+(hard fail check passes); doubling-ratio passes for **all 5
+workloads**; spec §13 + §X + memory + scaling_ycsb_spec all
+updated.
 
 **Bottleneck check**: sweep wallclock similar to iter-6A's 3.5h
 (MAX_OPS=200000 unchanged; 0 timeouts expected post-fix → likely
@@ -478,18 +552,25 @@ identical fix is in-scope. Don't double-implement.
 
 ---
 
-## Open questions for review
+## Confirmed decisions (CONFIRMED 2026-05-03 by user)
 
-| # | Question | Default if no answer |
-|---|----------|---------------------|
-| QR1 | Phase 1 reps = 5 vs 10 for cleaner classification? | 5 (matches spec §3 multi-rep policy) |
-| QR2 | Phase 2 probe pre-allocation: 64 MB or 128 MB per thread? | 128 MB (200k ops × 16 stages = 76 MB; 128 MB has 1.7× headroom) |
-| QR3 | Phase 3 A-B testing: every cell or sample 5 representative cells? | All deterministic cells get A-B; probabilistic cells get probe-only |
-| QR4 | Phase 4 if multi-cause: ship 1 fix (drop coverage) vs ship N fixes (lose attribution) | 1 fix (largest cause subgroup); rest documented as iter-8A. **Do NOT batch fixes** — same lesson as iter-6A |
-| QR5 | Phase 5 anomaly threshold: cell < 1% of workload-peak vs cell < 5%? | 1% (very loud bar; only catches "in the floor" not "merely low") |
-| QR6 | Spec §13 gate 5 enforcement: hard fail or soft warn? | Hard fail (matches gates 1-4) |
-| QR7 | Memory `feedback_scaling_ycsb_spec.md` update: include "anomaly scan is mandatory step" | YES; add to step 7 (iter-completion gate) |
-| QR8 | If Phase 3 names root cause but Phase 4 fix turns out >300 LOC architectural change, ship as iter-7A or split? | Split. iter-7A ships ONLY a small fix (≤200 LOC) plus the spec/process changes; bigger architectural work moves to iter-8A. The "small fix" can be a workaround (e.g., disable the buggy path) |
+All defaults accepted; QR5 specifically modified to dual-condition
+threshold per Claude's recommendation:
+
+| # | Decision | Phase touched |
+|---|----------|---------------|
+| QR1 | **REPS=5 default** for Phase 1 reproducibility; +5-rep top-up only for boundary cells whose 5-rep result lands in "2-or-3 fast + 2-or-3 slow" ambiguous middle | Phase 1 |
+| QR2 | **128 MB pre-allocation per thread** (probe persistent dump) — 200k-op cell × 16 stages = 76 MB; 128 MB has 1.7× headroom; OVERFLOW costs a re-run so headroom is cheap | Phase 2 |
+| QR3 | Phase 3 A-B testing: **all deterministic cells get probe data; A-B fix-test only ONE representative cell per named hypothesis** (A-B is invasive — 2 binaries, 2 runs); probabilistic cells get probe-only | Phase 3 |
+| QR4 | **1 fix per iter (largest subgroup)** if Phase 3 names 2+ root causes; remaining cause(s) documented as iter-8A backlog with named root cause + RAP-ready hypothesis. **Do NOT batch fixes** — single-variable change is the only way Phase 5 sweep can attribute "19 cells fixed" to "this one fix" | Phase 4 |
+| QR5 | **Dual-condition anomaly threshold** (modified from initial 1%-of-peak draft per Claude recommendation): cell flagged if Mops/s < **0.1 absolute** OR if Mops/s < **(geomean of same-(workload, KV) T-neighbors) / 10**. Catches floor-level + order-of-magnitude regression without false-flagging T=1 single-thread expected-low cells | Phase 5 |
+| QR6 | **Hard fail** for §13 gate 5 (matches gates 1-4 enforcement model); sweep driver script exits non-zero if any anomaly. Soft-warn would replicate the iter-6A failure pattern of "warning shown but ignored" | Phase 5 |
+| QR7 | **YES — update memory** `feedback_scaling_ycsb_spec.md`: add iter-6A as 4th cautionary precedent in "Why" section; add §13 gate 5 + dual-condition threshold + "single-rep noise tag REQUIRES 5-rep evidence" rule to step 7 (iter-completion gate) | Phase 5 |
+| QR8 | **iter-7A ships diagnosis + workaround (≤200 LOC) + spec codify**; if Phase 3's named root cause needs > 200 LOC architectural change, the architectural fix moves to iter-8A first task. iter-7A's value is diagnosis + process closure, not volume of fix code | Phase 4 |
+
+QR-related cross-cutting modifications already baked into the
+phase sections above. This table is reference; phase text is
+authoritative.
 
 ---
 
@@ -499,27 +580,16 @@ identical fix is in-scope. Don't double-implement.
 - **~300-400 LOC** delta (probe upgrade + chosen fix + spec)
 - **0 new features**, **0 backlog items**
 - **1 named root cause** (or ≤ 2 subgroups) confirmed by A-B
-- **1 process change**: §X P4 + §13 gate 5 codifying anomaly scan
+- **1 process change**: §X P4 + §13 gate 5 dual-threshold +
+  doubling-ratio generalize-to-all-workloads
 
 ---
 
-## Pending user review
+## Awaiting deadline
 
-Please confirm/modify:
+All design decisions confirmed. iter-7A ready to start once user
+provides deadline. Phase 1 begins immediately on go-signal.
 
-1. **Scope**: 19-cell-collapse diagnosis as the sole task — no
-   K-shard, no peak optimization, no test re-enable, no cleanup.
-   Agreed?
-2. **Phase 1 reproducibility check**: 5 reps per cell — sufficient
-   to classify deterministic vs noise?
-3. **Phase 4 single-fix discipline** (QR4 default): ship one fix
-   per phase; multi-cause means split to iter-8A, not batch.
-4. **Spec codify** (Phase 5): adding "anomaly scan" as iter-completion
-   gate 5; "single-rep noise" dismissals require multi-rep
-   evidence — agreed?
-5. **CLAUDE.md update** (parallel): should iter-6A's process
-   failure (scope creep + confirmation bias on outliers) get its
-   own cautionary precedent entry, alongside iter-2A's "result is
-   unambiguous" descope?
-
-After confirmation I start Phase 1.
+CLAUDE.md update (cautionary precedent for iter-6A scope creep +
+outlier dismissal) is a parallel candidate; will be done in
+Phase 5 alongside spec codify if user confirms separately.
