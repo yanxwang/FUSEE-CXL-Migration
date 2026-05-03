@@ -1,0 +1,4 @@
+ff24d7594577c44d17dc901ca44c4230c01ed576
+build_date=Sun May  3 12:57:21 AM CDT 2026
+iter=iter-6A
+fix=InvalEntry 2-cacheline split + 5ms inval timeout (was 200ms)

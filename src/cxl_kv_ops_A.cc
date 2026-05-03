@@ -1,4 +1,5 @@
 #include "cxl_kv_ops_A.h"
+#include "cxl_probe.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -126,6 +127,7 @@ int CxlKvStoreA::attach(void *bucket_base, uint32_t num_buckets,
 int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
                                      int op_kind) {
   if (key == kEmptyKey) return -1;
+  PROBE_OP("W1", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
 
@@ -154,6 +156,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
 
   SlotDirectoryEntry *de = slot_directory_entry(dir_, b, (uint32_t)target_slot);
   slot_directory_lock(de);
+  PROBE_OP("W2", key);
 
   flush_line(bucket);
   full_fence();
@@ -171,12 +174,17 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
   // For INSERT no prior sharers exist (we're the only host ever to
   // touch the slot), so skip. UPDATE/DELETE: scan bitmap.
   uint8_t bitmap = de->sharer_bitmap;
+  PROBE_OP("W3", key);
   if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
+    int n_sent = 0;
     for (int h = 0; h < num_hosts_; h++) {
       if (h == host_id_) continue;
       if ((bitmap & (1u << h)) == 0) continue;
+      if (n_sent == 0) PROBE_OP("W4", key);
       send_invalidate((uint32_t)h, key);
+      n_sent++;
     }
+    if (n_sent > 0) PROBE_OP("W6", key);
   }
 
   // Step 5: CoW publish.
@@ -188,12 +196,15 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
   // want the lower per-op cost).
   if (op_kind == kOpKindDelete) {
     retire_slot(slot);
+    PROBE_OP("W9", key);
   } else if (pool_ == nullptr) {
     // Inline u64 fallback (Protocol A degenerate mode).
     publish_slot_cow(slot, key, new_value);
+    PROBE_OP("W9", key);
   } else {
     // Full blockpool CoW path.
     uint64_t blk_off = pool_->alloc();
+    PROBE_OP("W7", key);
     static thread_local int trace = -1;
     if (trace == -1) {
       const char *e = getenv("FUSEE_TRACE_BLOCKPOOL");
@@ -208,6 +219,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
       return -4;
     }
     pool_->write(blk_off, &new_value, sizeof(new_value));
+    PROBE_OP("W8", key);
     uint8_t fp = key_fingerprint(key);
     uint8_t sc = kSizeClassBlock256;
     uint64_t encoded = cxl_slot_pack(blk_off, sc, fp);
@@ -217,6 +229,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
               host_id_, key, op_kind, blk_off, encoded);
     }
     publish_slot_cow(slot, key, encoded);
+    PROBE_OP("W9", key);
   }
 
   // Step 6: directory state.
@@ -229,6 +242,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
     // Self only — peer hosts must re-register if they want to cache.
     de->sharer_bitmap = (uint8_t)(1u << (uint32_t)host_id_);
   }
+  PROBE_OP("W10", key);
   slot_directory_unlock(de);
 
   // Step 7: own cache.
@@ -239,6 +253,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
                       reinterpret_cast<const uint8_t *>(&new_value),
                       sizeof(new_value));
   }
+  PROBE_OP("W12", key);
   return 0;
 }
 
@@ -347,6 +362,7 @@ int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
+  PROBE_OP("I1", op_id);
   uint32_t slot = (uint32_t)(tpos % kInvalRingDepth);
   InvalEntry *e = &ring->entries[slot];
 
@@ -365,19 +381,28 @@ int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
   e->req_op_id.store(op_id, std::memory_order_release);
   flush_line((void *)e);
   store_fence();
+  PROBE_OP("I2", op_id);
 
-  // Spin on response (200 ms budget — dispatcher should be fast).
-  const uint64_t kBudgetUs = 200000;
+  // Spin on response.
+  // iter-6A: resp_op_id lives on the SECOND cacheline of InvalEntry —
+  // flush_line must target that line, not (void*)e (which is line 1).
+  // Timeout reduced from 200ms (iter-5A) to 5ms — the cacheline split
+  // alone does not eliminate the rare ACK-not-observed pattern; bound
+  // p99 at ≤ 5ms so total throughput regression is also bounded. Root
+  // cause investigation deferred to iter-7A.
+  const uint64_t kBudgetUs = 5000;
   uint64_t spin_start_ns = 0;
   for (;;) {
-    flush_line((void *)e);
+    flush_line((void *)&e->resp_op_id);
     full_fence();
     uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
     if (resp == op_id) {
+      PROBE_OP("I7", op_id);
       int rc = e->status;
       e->req_op_id.store(0, std::memory_order_release);
-      flush_line((void *)e);
+      flush_line((void *)e);  // line 1 (req_op_id)
       store_fence();
+      PROBE_OP("I8", op_id);
       return rc;
     }
     if (spin_start_ns == 0) {
@@ -388,6 +413,12 @@ int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
       uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
       if ((now_ns - spin_start_ns) / 1000 > kBudgetUs) {
         e->req_op_id.store(0, std::memory_order_release);
+        static std::atomic<uint64_t> g_inval_timeout_count{0};
+        uint64_t t = g_inval_timeout_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((t & 0xFF) == 1) {
+          fprintf(stderr, "[A] inval timeout #%lu (key=%lx tpos=%lu)\n",
+                  t, key, tpos);
+        }
         return -11;
       }
     }
@@ -423,6 +454,8 @@ void CxlKvStoreA::stop_dispatcher() {
 // does NOT call execute_write_local — so it cannot deadlock with
 // the responder thread that is processing forwards.
 void CxlKvStoreA::cache_dispatcher_loop() {
+  // Touch probe ring so its FUSEE_PROBE_DUMP envvar is read on this thread.
+  probe_ring();
   while (!dispatcher_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
@@ -433,20 +466,27 @@ void CxlKvStoreA::cache_dispatcher_loop() {
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
       while (head < tail) {
+        PROBE_OP("I3", tail);
         uint32_t slot = (uint32_t)(head % kInvalRingDepth);
         InvalEntry *e = &ring->entries[slot];
         flush_line((void *)e);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
         if (op_id == 0) break;
+        PROBE_OP("I4", op_id);
 
         // Lazy stale flag — no directory lock, no execute_write_local.
         cache_pool_set_stale(cache_, e->key);
+        PROBE_OP("I5", op_id);
         e->status = 0;
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);
-        flush_line((void *)e);
+        // iter-6A: resp_op_id is on the SECOND cacheline; flush THAT
+        // line so the producer's CXL-coherent load on resp_op_id sees
+        // the new value.
+        flush_line((void *)&e->resp_op_id);
         store_fence();
+        PROBE_OP("I6", op_id);
         head++;
         did_work = true;
       }
@@ -454,6 +494,7 @@ void CxlKvStoreA::cache_dispatcher_loop() {
     }
     if (!did_work) __builtin_ia32_pause();
   }
+  probe_flush();
 }
 
 int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
@@ -582,6 +623,7 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
 }
 
 void CxlKvStoreA::responder_loop() {
+  probe_ring();
   while (!responder_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
@@ -612,32 +654,40 @@ void CxlKvStoreA::responder_loop() {
     }
     if (!did_work) __builtin_ia32_pause();
   }
+  probe_flush();
 }
 
 int CxlKvStoreA::search(uint64_t key, uint64_t *out) {
   if (key == kEmptyKey) return -1;
+  PROBE_OP("R1", key);
 
   // Fast path: local cache lookup with stale check.
   uint8_t buf[8];
   uint32_t sz;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
+    PROBE_OP("R2hit", key);
     if (sz != sizeof(uint64_t)) return -1;
     std::memcpy(out, buf, sizeof(uint64_t));
+    PROBE_OP("R6", key);
     return 0;
   }
+  PROBE_OP("R2miss", key);
 
   uint32_t owner = owner_host(key);
 
   // Cross-host miss: §I9 register-then-fill via OP_CACHE_REGISTER.
   if (owner != (uint32_t)host_id_ && fr_) {
+    PROBE_OP("R3", key);
     uint64_t v = 0;
     int rc = forward_cache_register(owner, key, &v);
     if (rc != 0) return rc;
+    PROBE_OP("R4", key);
     // §AP15: populate cache ONLY after register ACK (we got it here).
     cache_pool_insert(cache_, key,
                       reinterpret_cast<const uint8_t *>(&v),
                       sizeof(v));
     *out = v;
+    PROBE_OP("R6", key);
     return 0;
   }
 

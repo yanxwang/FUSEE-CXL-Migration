@@ -27,6 +27,7 @@
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_kv_ops_A.h"
 #include "cxl_mm.h"
+#include "cxl_probe.h"
 #include "cxl_sharding.h"
 
 #include <algorithm>
@@ -330,7 +331,8 @@ int main(int argc, char **argv) {
                    // here, retained only for SUMMARY.log compat.
 
   // Cross-host primary barrier: both hosts inited.
-  if (is_host_primary_client) {
+  // (Skipped entirely when num_hosts == 1 — no peer to wait for.)
+  if (is_host_primary_client && num_hosts > 1) {
     if (host_id == 0) {
       while (true) {
         flush_line(&hdr->init_done); full_fence();
@@ -364,16 +366,19 @@ int main(int argc, char **argv) {
   }
 
   // Cross-host barrier: both hosts done loading.
+  // (Skipped for primary cross-host wait when num_hosts == 1.)
   if (is_host_primary_client) {
     uint64_t my_bit = (host_id == 0) ? 0x10ULL : 0x20ULL;
     uint64_t peer_bit = (host_id == 0) ? 0x20ULL : 0x10ULL;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | my_bit);
     flush_line(&hdr->init_done); store_fence();
-    while (true) {
-      flush_line(&hdr->init_done); full_fence();
-      if ((CACHELINE_LOAD(&hdr->init_done) & peer_bit) != 0) break;
-      __builtin_ia32_pause();
+    if (num_hosts > 1) {
+      while (true) {
+        flush_line(&hdr->init_done); full_fence();
+        if ((CACHELINE_LOAD(&hdr->init_done) & peer_bit) != 0) break;
+        __builtin_ia32_pause();
+      }
     }
   } else {
     // Children: wait for own host's primary load-done bit.
@@ -449,11 +454,15 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&me->done, 1ULL);
   flush_line(me); store_fence();
 
-  if (client_id != 0) { _exit(0); }
+  if (client_id != 0) {
+    probe_flush();
+    _exit(0);
+  }
+  probe_flush();
   for (auto p : children) waitpid(p, nullptr, 0);
 
-  // Cross-host barrier 3: aggregation.
-  if (is_host_primary_client) {
+  // Cross-host barrier 3: aggregation. Skipped when num_hosts == 1.
+  if (is_host_primary_client && num_hosts > 1) {
     uint64_t my_bit = (host_id == 0) ? 0x40ULL : 0x80ULL;
     uint64_t peer_bit = (host_id == 0) ? 0x80ULL : 0x40ULL;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);

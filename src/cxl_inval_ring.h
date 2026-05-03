@@ -35,17 +35,26 @@ namespace fusee {
 constexpr int kInvalMaxHosts = 4;
 constexpr int kInvalRingDepth = 256;
 
-// 64-byte cacheline. One full line per slot to avoid producer/consumer
-// false sharing (same lesson as ForwardEntry / PerHostInvalEntry).
+// iter-6A Phase 5/6: 128 B (2 cachelines) — req on first, resp on
+// second. Producer never writes line 2; consumer never writes line 1.
+// Fixes producer-consumer cacheline ping-pong over CXL Type 3 (no
+// cross-host coherence) which iter-5A's packed 1-line layout
+// suffered: 200ms tail timeouts on producer's spin_wait observing ACK.
+//
+// See docs/iters/iter6A_phase5_rap.md for the RAP justifying this
+// layout. Same lever as PerHostSpscRing's tail/head separation.
 struct alignas(64) InvalEntry {
+  // First cacheline — producer-owned (host that calls send_invalidate).
   std::atomic<uint64_t> req_op_id;   // 0 = empty; non-zero = pending
   uint64_t key;                      // target key to mark stale
+  uint8_t  _pad_p[64 - 8 - 8];
+  // Second cacheline — consumer-owned (cache_dispatcher_loop).
   std::atomic<uint64_t> resp_op_id;  // matches req_op_id when ACKed
-  int32_t status;                    // 0 = ack OK
-  uint8_t  _pad[64 - 8 - 8 - 8 - 4];
+  int32_t  status;                   // 0 = ack OK
+  uint8_t  _pad_c[64 - 8 - 4];
 };
-static_assert(sizeof(InvalEntry) == 64,
-              "InvalEntry must be exactly one cacheline");
+static_assert(sizeof(InvalEntry) == 128,
+              "InvalEntry must be exactly two cachelines (iter-6A layout)");
 
 struct alignas(64) InvalRing {
   std::atomic<uint64_t> tail;        // producer cursor (CXL-flushed)
