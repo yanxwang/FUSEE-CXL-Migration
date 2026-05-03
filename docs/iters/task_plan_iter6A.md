@@ -40,6 +40,17 @@ If a phase wants to claim "the bottleneck is X" it MUST have:
 No optimization phase ships until the bottleneck is named with
 direct measurement.
 
+**iter-6A user-visible success criterion (added per user
+instruction 2026-05-02)**: workload-a throughput must show
+**reasonable linear scaling** across T ∈ {1, 2, 4, 8, 16, 32, 64}
+— each pre-saturation doubling of T yields ≥ 1.5× throughput, no
+regression after saturation. The bi-modal "T=64 stands alone,
+others collapse" shape iter-5A produced is explicitly forbidden.
+Concrete table in Phase 6 §3. Even if absolute peak doesn't reach
+the 20 Mops/s target this iter, fixing the shape is the gating
+deliverable — you cannot optimize a bi-modal curve, you must fix
+its shape first.
+
 ---
 
 ## Decision recap (incorporated into this plan)
@@ -369,20 +380,49 @@ based on candidate templates above.
 1. Run probe-instrumented sweep on workload-a T ∈ {1, 2, 4, 8, 16,
    32, 64}, KV=256, 50k ops. Compare per-stage breakdown vs
    Phase 4 baseline.
-2. **Pass criterion**: the targeted stage's p99 must drop ≥ 5×
-   for the fix to count as "working". Total per-op wall-clock must
-   drop in proportion (not just one stage's number drops while
-   another absorbs the lost time).
-3. G6 rw race test: violations=0 still holds (no §I9 regression).
-4. G1 hash-diff battery (if 3 tempdisabled tests re-enabled in
+2. **Pass criterion (per-stage)**: the targeted stage's p99 must
+   drop ≥ 5× for the fix to count as "working". Total per-op
+   wall-clock must drop in proportion (not just one stage's number
+   drops while another absorbs the lost time).
+3. **Pass criterion (scaling shape) — added per user 2026-05-02**:
+   workload-a throughput must show **monotonically non-decreasing
+   scaling** across T ∈ {1, 2, 4, 8, 16, 32, 64}, with each
+   doubling of T producing **at least 1.5× throughput** until
+   saturation kicks in (defined as "the doubling-step where
+   throughput growth first drops below 1.5×; everything before
+   must satisfy 1.5×; everything after must still be
+   non-decreasing"). Concretely:
+
+   | T transition | Min ratio (pre-saturation) | Min ratio (post-saturation) |
+   |---|---|---|
+   | T=1→2 | ≥ 1.5× | n/a — saturation cannot start at T=2 |
+   | T=2→4 | ≥ 1.5× OR mark T=2 as saturation point | ≥ 1.0× |
+   | T=4→8 | ≥ 1.5× OR mark T=4 as saturation point | ≥ 1.0× |
+   | T=8→16 | ≥ 1.5× OR mark T=8 as saturation point | ≥ 1.0× |
+   | T=16→32 | ≥ 1.5× OR mark T=16 as saturation point | ≥ 1.0× |
+   | T=32→64 | ≥ 1.5× OR mark T=32 as saturation point | ≥ 1.0× |
+
+   The bi-modal "T=64=17.9, T=others<0.5" pattern from iter-5A is
+   explicitly forbidden — that's the failure shape iter-6A must
+   eliminate. The reference acceptable shape is iter-5A workload-c
+   cache=on (read-only): 0.67 → 1.40 → 2.40 → 3.83 → 5.33 → 7.83
+   → 11.66 (each step 1.5-2.1×; saturation never visible up to
+   T=86). Workload-a after iter-6A fix should follow a similar
+   shape, peak somewhere ≤ 20 Mops/s.
+
+4. G6 rw race test: violations=0 still holds (no §I9 regression).
+5. G1 hash-diff battery (if 3 tempdisabled tests re-enabled in
    parallel — see Phase 8): 25/25 PASS.
 
 **Success criterion**: stage-targeted p99 drops ≥ 5×; total per-op
-latency drops accordingly; correctness gates G1 + G6 still pass.
+latency drops accordingly; **scaling shape passes the doubling-ratio
+table above**; correctness gates G1 + G6 still pass.
 
 **Bottleneck check**: confirm the bottleneck has ACTUALLY moved by
 re-running Phase 4 probes. The new dominant stage tells us "what
-to fix in iter-7A".
+to fix in iter-7A". If the scaling shape passes but absolute peak
+is still below 20 Mops/s, the next-iter optimization candidate is
+named (the new dominant stage); iter-6A is still ✓ done.
 
 ---
 
@@ -406,8 +446,13 @@ Verify gates per spec §13.
    sweep). If exceeds 6h, escalate to user.
 2. **Per workload, peak Mops/s reported in `gap_to_target.md`**.
 3. Workload-a peak should be ≥ iter-5A's 17.9 Mops/s (no
-   regression from the fix); ideally also workload-a T ∈ {1, 2, 4,
-   8, 16, 32} are no longer collapsed.
+   regression from the fix); also workload-a T ∈ {1, 2, 4, 8, 16,
+   32} are no longer collapsed and follow Phase 6's
+   doubling-ratio table (≥ 1.5× per pre-saturation doubling,
+   monotonically non-decreasing post-saturation). This is the
+   **iter-6A primary success criterion** at the sweep level —
+   iter-6A is not COMPLETE if workload-a still shows the bi-modal
+   pattern (T=64 dominant, others collapsed).
 4. G1 (hash-diff): re-enabled tests pass (Phase 8).
 5. G2 (multi-rep): not enforced (single-rep default).
 6. G3 (AP13 trip-wire): SIGABRT verified.
@@ -495,6 +540,7 @@ show stage p99 drops ≥ 5× before declaring success.
 | Phase 4 finds 2+ comparable bottlenecks | Med | Phase 5 ships 2 RAPs; both fixes implemented in Phase 6 with separate commits + separate measurement |
 | Phase 4 finds NO single dominant stage (latency uniformly distributed) | Low | The 130× regression has to land somewhere; if Phase 4 shows uniform distribution, the probe granularity is wrong (re-add finer probes within suspect stages) |
 | Phase 6 fix moves bottleneck without reducing total latency | Med | Phase 6 §2 success criterion explicitly requires total latency to drop, not just one stage; if violated, Phase 5 RAP gets revisited |
+| Phase 6 fix passes per-stage p99 ≥ 5× criterion BUT scaling shape still bi-modal | Med-High | Phase 6 §3 doubling-ratio table is now an INDEPENDENT gate — fix can be "successful per stage" yet still fail iter-6A if workload-a T=1..32 still collapse. In that case Phase 5 RAP revisited or a SECOND fix added before sweep. Per-stage win without scaling-shape win = 0 user-visible gain. |
 | Phase 7 sweep at MAX_OPS=200000 exceeds 6h | Med-High | iter-5A sweep at MAX_OPS=50000 was 1.7h; 4× ops → 6.8h estimated. If exceeds, escalate user (drop to 100000 vs 200000 explicitly approved by user, or split into 2 sub-sweeps) |
 | Phase 8 BucketLockTable removal breaks an unnoticed dependency | Low | Build + run all unit tests; revert if regression |
 | Phase 4 finds the bug is in iter-5A's `protocol_a_rw_race_test` (G6 violations=0 was wrong) | Low | If discovered, escalate to user — §I9 strict-A claim has to be revisited |
@@ -513,6 +559,8 @@ show stage p99 drops ≥ 5× before declaring success.
 | QR6 | Phase 5 K-shard variant (C-A): K=2, K=4, or measure-then-pick? | Measure: Phase 4 names dispatcher saturation rate; K = ceil(saturation / per-dispatcher capacity) |
 | QR7 | Phase 6 success threshold "stage p99 ≥ 5×" — too aggressive? Too lax? | 5× = canonical "useful" threshold (matches iter-3A K-channel pattern); revisit only if Phase 4 shows the bottleneck is intrinsically <2× improvable |
 | QR8 | If Phase 4 shows ACK lost (I7 200ms timeout), does iter-6A also need a "timeout fail-loud" change so writer doesn't silently fall through and break §I9? | YES — see also Phase 8; this is a critical correctness fix that should ride alongside the perf fix |
+| QR9 | Doubling-ratio threshold: 1.5× pre-saturation is the canonical "useful" scaling threshold. Too strict? Too lax? | 1.5× is a published-paper-standard floor (any lower and the fix wouldn't be defensible as "scaling"). If Phase 4 shows the bottleneck has hard 1/T-1/(T+1) overhead structure that physically can't beat 1.3×, escalate to user before Phase 6 |
+| QR10 | If iter-6A peaks at e.g. 10 Mops/s but scaling shape passes — call iter-6A done? Or hold for 20 Mops/s peak? | iter-6A done if shape passes AND peak ≥ iter-5A's 17.9 Mops/s. The 20 Mops/s absolute target is the iter-7A goal once shape is correct. Shape-correct ≥ peak-only because shape problems block all further optimization (you can't optimize a bi-modal curve, you have to fix shape first) |
 
 ---
 
@@ -523,6 +571,9 @@ show stage p99 drops ≥ 5× before declaring success.
 - **4 invariants/AP** (re-)validated (I6, I9, I10, AP16)
 - **6 validation gates** (G1, G3-G6) reported in completion gate
 - **NO optimization phase ships before bottleneck named with µs-precision measurement**
+- **iter-6A user-visible exit gate**: workload-a throughput shape
+  shows ≥ 1.5× per pre-saturation doubling of T; bi-modal pattern
+  eliminated; peak ≥ iter-5A's 17.9 Mops/s
 
 ---
 
