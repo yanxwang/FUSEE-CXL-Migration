@@ -38,18 +38,68 @@ Unacceptable behaviors (these are violations, NOT judgment calls):
   stop-trigger; the planned sweep + decomp still ship and become
   the data that informs the next iter.
 
-**Cautionary precedent**: iter-2A used "result is unambiguous,
-not worth 3+ hours of testbed time" as the descope reason for
-Phases 2-8. Reality: 5h31min of deadline was unused. The
-"single-receiver bottleneck" diagnosis used to justify the
-descope was itself unmeasured (no receiver-side instrumentation
-exists; the µs/entry numbers were hand-calculated). The right
-behavior would have been: run the planned sweep AND add receiver
-instrumentation in the spare time. See iter-2A summary post-mortem.
+**Cautionary precedent #1 (iter-2A — pre-flight descope)**:
+iter-2A used "result is unambiguous, not worth 3+ hours of
+testbed time" as the descope reason for Phases 2-8. Reality:
+5h31min of deadline was unused. The "single-receiver bottleneck"
+diagnosis used to justify the descope was itself unmeasured (no
+receiver-side instrumentation exists; the µs/entry numbers were
+hand-calculated). The right behavior would have been: run the
+planned sweep AND add receiver instrumentation in the spare
+time. See iter-2A summary post-mortem.
+
+**Cautionary precedent #2 (iter-6A — in-flight scope creep +
+outlier dismissal)** (added 2026-05-03 after user-flagged process
+failure):
+iter-6A planned task = "fix workload-a T=1..32 collapse" → did it,
+declared shape-PASS gate on workload-a alone, celebrated workload-c
+KV=1024 T=64 = 18.95 Mops/s = 94.8% of target. **But the same
+sweep produced 19 cells (9% of cache=on) collapsed to 0.0003-0.06
+Mops/s** — and Claude wrote them off as "single-rep timeout
+cascade noise" in the iter summary **without measurement**.
+- Two independent failures stacked: (a) **scope drift** —
+  doubling-ratio gate was workload-a-only; never generalized to
+  the other 4 workloads, (b) **confirmation bias on outliers** —
+  the 18.95 headline made the 19 collapse cells look like a "minor
+  blemish" worth deferring, when they were 9% data unreliability
+  contaminating every iter conclusion.
+- Deadline 10:00 CDT, finish 04:24 CDT → **5h36min unused**, same
+  pattern as iter-2A despite different surface symptom.
+- The "single-rep is indicative not steady-state" spec §3 carve-out
+  was used as a blanket dismissal tool, not the targeted-cell
+  exception it was meant to be.
+- Right behavior would have been: (a) doubling-ratio scan all 5
+  workloads as Phase 6 success gate, (b) on sweep completion run
+  mandatory anomaly-scan over `gap_to_target.md`, (c) any outlier
+  not 5-rep-verified blocks iter-completion declaration. iter-7A's
+  sole task is to fix the 19 cells AND codify these process gates
+  (§13 gate 5 + §X P4) so this failure mode can't repeat silently.
+
+**Common pattern across both precedents**: the descope/dismissal
+reasoning is FELT-LIKE-OBVIOUS in the moment, then provably wrong
+on reflection. Spare time NEVER goes to "what can I close out
+quickly"; it ALWAYS goes to "what unverified claim or unscanned
+data am I about to ship".
 
 If a phase is genuinely impossible within the deadline (testbed
 unreachable, physical hardware limit, etc.), **stop and ask the
 user before descoping**, do not unilaterally choose a subset.
+
+**Anomaly-scan triggered review** (added 2026-05-03):
+After every sweep / benchmark / large measurement, **before
+writing summary**, scan the output for:
+- Cells / data points that fall well outside the headline
+  trend (anomaly threshold per spec §13 gate 5: < 0.1 absolute
+  OR < neighbor-geomean / 10).
+- Cells that mathematically can't be true (e.g., throughput >
+  hardware ceiling).
+- Patterns that contradict the iter's named hypothesis.
+Each such anomaly MUST be either (a) re-measured with multi-rep
+to verify, OR (b) explained with cited root cause in the summary,
+OR (c) explicitly carved out as a known-defer item with iter-N+1
+backlog entry. **"Single-rep noise" tag without 5-rep evidence is
+not an explanation** — it's a dismissal, and dismissals are the
+iter-6A failure mode.
 
 **Deadline semantics** (added 2026-04-27 after user
 clarification):
@@ -102,6 +152,22 @@ first. Scope, output layout, plot set, and reproducibility
 requirements are spec-bound. Don't silently shrink scope when a
 test times out — ask the user or raise timeout, then record the
 choice in the summary doc.
+
+**§13 gate 5 (added iter-7A planning, 2026-05-03)**: every sweep
+output dir's `gap_to_target.md` must include the **anomaly-scan
+section** (zero unexplained outliers per dual-condition threshold:
+cell < 0.1 Mops/s OR < neighbor-geomean / 10). The sweep driver
+script returns non-zero if any anomaly is found; iter-completion
+gate fails until each anomaly is either fixed (re-sweep clean) OR
+multi-rep verified (5 reps minimum) with cited explanation. The
+"single-rep noise" tag without 5-rep evidence is a dismissal, not
+an explanation — see iter-6A cautionary precedent above.
+
+**Doubling-ratio gate generalizes to all workloads** (added
+iter-7A planning, 2026-05-03): pre-saturation T-doublings must
+yield ≥ 1.5× throughput **for each of the 5 workloads** (a, b, c,
+d, f), not just workload-a. iter-6A oversight was checking only
+workload-a; iter-7A spec codify writes this in stone.
 
 ## Phase plan reference
 
