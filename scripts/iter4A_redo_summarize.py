@@ -102,6 +102,43 @@ def write_summary_table(rows, path):
                     f"| {'YES' if r['unstable'] else 'no'} |\n")
 
 
+def anomaly_scan(rows):
+    """iter-7A §13 gate 5: dual-condition threshold for outliers.
+
+    Cell flagged if Mops/s < 0.1 absolute OR Mops/s < (geomean of
+    same-(wl, kv) T-neighbors) / 10. Returns list of anomalies.
+    """
+    import math
+    by_group = {}
+    for r in rows:
+        key = (r["workload"], r["kv"], r["cache"])
+        by_group.setdefault(key, []).append(r)
+    anomalies = []
+    for key, runs in by_group.items():
+        runs.sort(key=lambda r: r["T"])
+        for i, r in enumerate(runs):
+            mops = r["thpt_med_mops"]
+            if mops <= 0:
+                continue  # FAILs handled separately
+            # Find same-(wl, kv) T-neighbors (other Ts).
+            neighbors = [x["thpt_med_mops"] for j, x in enumerate(runs) if j != i and x["thpt_med_mops"] > 0]
+            geomean = 0
+            if len(neighbors) >= 2:
+                logs = [math.log(v) for v in neighbors]
+                geomean = math.exp(sum(logs) / len(logs))
+            cond1 = mops < 0.1
+            cond2 = geomean > 0 and mops < geomean / 10
+            if cond1 or cond2:
+                reason = []
+                if cond1: reason.append("< 0.1 abs")
+                if cond2: reason.append(f"< neighbor-geomean({geomean:.3f})/10")
+                anomalies.append({
+                    "wl": r["workload"], "kv": r["kv"], "T": r["T"],
+                    "cache": r["cache"], "mops": mops, "reason": "; ".join(reason),
+                })
+    return anomalies
+
+
 def write_gap_to_target(rows, path):
     """Distance to 20 Mops/s per (workload, KV, T) cell. Cache=on only for headlines."""
     with open(path, "w") as f:
@@ -141,8 +178,32 @@ def main():
     rows, unstable = summarize(by_cell, outdir)
     write_summary_table(rows, outdir / "summary_table.md")
     write_gap_to_target(rows, outdir / "gap_to_target.md")
+    # iter-7A §13 gate 5 anomaly scan, appended to gap_to_target.md.
+    anomalies = anomaly_scan(rows)
+    with open(outdir / "gap_to_target.md", "a") as f:
+        f.write("\n\n## §13 gate 5 anomaly scan (dual-condition threshold)\n\n")
+        f.write("Threshold: cell flagged if Mops/s < 0.1 absolute OR < (same-(wl, kv) T-neighbor geomean) / 10.\n\n")
+        if not anomalies:
+            f.write("**ZERO unexplained anomalies.** §13 gate 5: PASS.\n")
+        else:
+            f.write(f"**{len(anomalies)} anomaly cells** flagged (HARD FAIL on §13 gate 5 unless explained):\n\n")
+            f.write("| Workload | KV | T | Cache | Mops/s | Reason |\n")
+            f.write("|---|---|---|---|---|---|\n")
+            for a in anomalies:
+                f.write(f"| {a['wl']} | {a['kv']} | {a['T']} | {a['cache']} | "
+                        f"{a['mops']:.4f} | {a['reason']} |\n")
+            f.write("\n**Per spec §13 gate 5 (added iter-7A 2026-05-03)**: each anomaly "
+                    "must be explained with **5-rep multi-rep evidence** of \"genuine "
+                    "noise, not a bug\", OR the iter cannot be marked COMPLETE. "
+                    "\"Single-rep noise\" tag without 5-rep evidence is the iter-6A "
+                    "failure pattern explicitly forbidden.\n")
     print(f"wrote summary_table.md ({len(rows)} cells, {len(unstable)} unstable)")
     print(f"wrote gap_to_target.md")
+    if anomalies:
+        print(f"§13 gate 5: {len(anomalies)} anomalies flagged")
+        sys.exit(1)
+    else:
+        print(f"§13 gate 5: PASS (zero anomalies)")
     if unstable:
         print(f"unstable cells (> 20% spread): {unstable}")
 

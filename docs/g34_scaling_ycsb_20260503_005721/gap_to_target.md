@@ -121,3 +121,63 @@ Peak Mops/s per (workload, KV size), cache=on.
 | workloadf | 256 | 64 | 9.2289 | 46.14% |
 | workloadf | 512 | 64 | 10.1384 | 50.69% |
 | workloadf | 1024 | 64 | 4.8878 | 24.44% |
+
+
+## §13 gate 5 anomaly scan (dual-condition threshold)
+
+Threshold: cell flagged if Mops/s < 0.1 absolute OR < (same-(wl, kv) T-neighbor geomean) / 10.
+
+**48 anomaly cells** flagged (HARD FAIL on §13 gate 5 unless explained):
+
+| Workload | KV | T | Cache | Mops/s | Reason |
+|---|---|---|---|---|---|
+| workloada | 256 | 1 | off | 0.0144 | < 0.1 abs; < neighbor-geomean(0.926)/10 |
+| workloada | 256 | 2 | off | 0.0815 | < 0.1 abs |
+| workloada | 512 | 1 | off | 0.0141 | < 0.1 abs; < neighbor-geomean(0.297)/10 |
+| workloada | 512 | 2 | off | 0.0754 | < 0.1 abs |
+| workloada | 512 | 64 | off | 0.0050 | < 0.1 abs; < neighbor-geomean(0.352)/10 |
+| workloada | 1024 | 1 | off | 0.0141 | < 0.1 abs; < neighbor-geomean(1.130)/10 |
+| workloada | 1024 | 2 | off | 0.0817 | < 0.1 abs; < neighbor-geomean(0.843)/10 |
+| workloada | 256 | 1 | on | 0.0139 | < 0.1 abs; < neighbor-geomean(0.259)/10 |
+| workloada | 256 | 16 | on | 0.0005 | < 0.1 abs; < neighbor-geomean(0.594)/10 |
+| workloada | 512 | 1 | on | 0.0142 | < 0.1 abs; < neighbor-geomean(0.963)/10 |
+| workloada | 512 | 2 | on | 0.0764 | < 0.1 abs |
+| workloada | 1024 | 1 | on | 0.0144 | < 0.1 abs; < neighbor-geomean(0.232)/10 |
+| workloada | 1024 | 2 | on | 0.0775 | < 0.1 abs |
+| workloada | 1024 | 16 | on | 0.0005 | < 0.1 abs; < neighbor-geomean(0.406)/10 |
+| workloadb | 256 | 1 | off | 0.0409 | < 0.1 abs; < neighbor-geomean(0.875)/10 |
+| workloadb | 256 | 64 | off | 0.0079 | < 0.1 abs; < neighbor-geomean(1.149)/10 |
+| workloadb | 512 | 1 | off | 0.0426 | < 0.1 abs; < neighbor-geomean(3.098)/10 |
+| workloadb | 1024 | 1 | off | 0.0404 | < 0.1 abs; < neighbor-geomean(2.845)/10 |
+| workloadb | 256 | 1 | on | 0.0412 | < 0.1 abs; < neighbor-geomean(0.787)/10 |
+| workloadb | 256 | 4 | on | 0.0004 | < 0.1 abs; < neighbor-geomean(1.735)/10 |
+| workloadb | 512 | 1 | on | 0.0410 | < 0.1 abs; < neighbor-geomean(2.985)/10 |
+| workloadb | 1024 | 1 | on | 0.0404 | < 0.1 abs; < neighbor-geomean(0.695)/10 |
+| workloadb | 1024 | 64 | on | 0.0096 | < 0.1 abs; < neighbor-geomean(0.927)/10 |
+| workloadc | 1024 | 64 | off | 0.0078 | < 0.1 abs; < neighbor-geomean(5.590)/10 |
+| workloadc | 256 | 16 | on | 0.0014 | < 0.1 abs; < neighbor-geomean(6.197)/10 |
+| workloadc | 512 | 64 | on | 0.0106 | < 0.1 abs; < neighbor-geomean(5.521)/10 |
+| workloadc | 1024 | 4 | on | 0.0005 | < 0.1 abs; < neighbor-geomean(2.800)/10 |
+| workloadc | 1024 | 16 | on | 0.0587 | < 0.1 abs; < neighbor-geomean(1.066)/10 |
+| workloadd | 256 | 8 | off | 0.0007 | < 0.1 abs; < neighbor-geomean(0.773)/10 |
+| workloadd | 256 | 64 | off | 0.0055 | < 0.1 abs; < neighbor-geomean(0.469)/10 |
+| workloadd | 1024 | 4 | off | 0.0003 | < 0.1 abs; < neighbor-geomean(0.387)/10 |
+| workloadd | 1024 | 32 | off | 0.0031 | < 0.1 abs; < neighbor-geomean(0.268)/10 |
+| workloadd | 1024 | 64 | off | 0.0055 | < 0.1 abs; < neighbor-geomean(0.244)/10 |
+| workloadd | 256 | 32 | on | 0.0010 | < 0.1 abs; < neighbor-geomean(1.128)/10 |
+| workloadd | 256 | 64 | on | 0.0055 | < 0.1 abs; < neighbor-geomean(0.802)/10 |
+| workloadd | 512 | 32 | on | 0.0009 | < 0.1 abs; < neighbor-geomean(5.641)/10 |
+| workloadd | 1024 | 4 | on | 0.0003 | < 0.1 abs; < neighbor-geomean(0.278)/10 |
+| workloadd | 1024 | 32 | on | 0.0045 | < 0.1 abs; < neighbor-geomean(0.166)/10 |
+| workloadd | 1024 | 64 | on | 0.0055 | < 0.1 abs; < neighbor-geomean(0.160)/10 |
+| workloadf | 256 | 1 | off | 0.0092 | < 0.1 abs; < neighbor-geomean(1.710)/10 |
+| workloadf | 512 | 1 | off | 0.0089 | < 0.1 abs; < neighbor-geomean(1.661)/10 |
+| workloadf | 1024 | 1 | off | 0.0094 | < 0.1 abs; < neighbor-geomean(1.809)/10 |
+| workloadf | 256 | 1 | on | 0.0093 | < 0.1 abs; < neighbor-geomean(0.472)/10 |
+| workloadf | 256 | 8 | on | 0.0003 | < 0.1 abs; < neighbor-geomean(0.820)/10 |
+| workloadf | 512 | 1 | on | 0.0090 | < 0.1 abs; < neighbor-geomean(0.101)/10 |
+| workloadf | 512 | 16 | on | 0.0007 | < 0.1 abs; < neighbor-geomean(0.156)/10 |
+| workloadf | 512 | 32 | on | 0.0011 | < 0.1 abs; < neighbor-geomean(0.143)/10 |
+| workloadf | 1024 | 1 | on | 0.0094 | < 0.1 abs; < neighbor-geomean(2.089)/10 |
+
+**Per spec §13 gate 5 (added iter-7A 2026-05-03)**: each anomaly must be explained with **5-rep multi-rep evidence** of "genuine noise, not a bug", OR the iter cannot be marked COMPLETE. "Single-rep noise" tag without 5-rep evidence is the iter-6A failure pattern explicitly forbidden.

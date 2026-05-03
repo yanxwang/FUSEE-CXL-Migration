@@ -348,7 +348,33 @@ A protocol-A iter cannot be marked COMPLETE in its summary doc unless:
    iter-4A "Phase 8 hash-diff PASS but OP_CACHE_REGISTER never wired"
    was undetectable from hash-diff alone; G6 closes that hole.
    First enforced from iter-5A onwards.
+5. **Gate 5 — anomaly-scan zero unexplained outliers (iter-7A
+   2026-05-03)**: `gap_to_target.md` MUST include the
+   `## §13 gate 5 anomaly scan` section. **Hard fail** rule:
+   sweep is invalid if any cell in the section is unexplained.
+   - Anomaly threshold is **dual-condition**: cell flagged if
+     `Mops/s < 0.1 absolute` OR `Mops/s < (geomean of same-(workload,
+     KV) T-neighbors) / 10`.
+   - Each anomaly must be either:
+     (a) FIXED — re-run shows no anomaly, OR
+     (b) EXPLAINED with **5-rep multi-rep evidence** of "yes this
+         cell is genuinely noisy, not a bug". The iter summary
+         doc cites the 5-rep numbers + median + spread, OR
+     (c) explicitly carved out as known-defer with iter-N+1 backlog
+         entry.
+   - **"Single-rep noise" tag without 5-rep evidence is forbidden.**
+     This is the iter-6A failure pattern: 19 cells dismissed as
+     "single-rep timeout cascade noise" without verification. iter-7A
+     verified 22/25 of those self-resolved on retry, but the
+     dismissal-without-evidence was the actual process bug.
 
 Iters that report fewer cells (e.g., iter-4A's 4-cell × 1-rep
 preview) violate this gate and must catch up before the next iter
 starts.
+
+**Doubling-ratio check (all 5 workloads, iter-7A 2026-05-03)**:
+the iter-6A Phase 6 doubling-ratio gate (≥ 1.5× per pre-saturation
+T) was applied **only to workload-a**. From iter-7A onwards, the
+doubling-ratio check is across **all 5 workloads** (a, b, c, d, f).
+A scaling-shape regression on any single workload is a HARD FAIL —
+no "but workload-a is fine" defense allowed.

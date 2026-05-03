@@ -1,108 +1,117 @@
 #ifndef FUSEE_CXL_PROBE_H_
 #define FUSEE_CXL_PROBE_H_
 
-// iter-6A Phase 2: per-stage µs timestamp probes.
+// iter-7A Phase 2: persistent mmap'd probe — captures FULL op history
+// of a 200k-op cell. Replaces iter-6A's TLS 4096-frame ring (which
+// only kept the last ~256 ops per worker, way too small to diagnose
+// the 19 collapsed cells where the slowest ops occur randomly).
 //
-// Compile-time gated: when FUSEE_PROBE is undefined or 0, all PROBE()
-// macros expand to a single inlined branch on a TLS bool — overhead
-// is negligible (~1 ns / probe / disabled). When FUSEE_PROBE=1 at
-// build, PROBE() emits one frame to a TLS ring buffer (4096 frames
-// default, oldest-evicted on wraparound). Frames are flushed to a
-// per-thread file at thread exit (via pthread cleanup) OR on demand
-// via probe_dump_all().
+// Per-thread mmap'd file at $FUSEE_PROBE_DUMP/probe.{pid}.{tid},
+// pre-allocated to 128 MB → 5.3M frames per thread (200k op × 16
+// stages = 3.2M frames = 76 MB needs no overflow).
 //
-// Usage in code:
-//   PROBE("W1");   // tag, no op_id (free-form stage marker)
-//   PROBE_OP("W7", op_id);   // tag + op_id (group by request)
+// Frame format (24 B):
+//   char tag[8]   (zero-padded)
+//   uint64 ns     (CLOCK_MONOTONIC nanoseconds)
+//   uint64 op_id  (caller-supplied op identifier)
 //
-// At runtime: set FUSEE_PROBE_DUMP=/tmp/probe_h0_T8.bin to enable
-// dump on thread exit. Otherwise frames discarded silently.
+// File header (16 B):
+//   uint32 magic = "PROB"
+//   uint32 frame_capacity (= ring_bytes / 24)
+//   uint64 frame_count (atomic; updated on emit)
 //
-// Frame format: 24 bytes (tag pointer + ns + op_id) → 4096 × 24 =
-// 96 KB TLS / thread.
+// On overflow (extremely unlikely with 1.7× headroom), we emit one
+// last "OVRFLOW" sentinel frame and stop.
+//
+// Design note: this is per-thread (not shared), so no atomic
+// contention on the head index. Each thread has its own mmap'd
+// region. Total disk: 132 threads × 128 MB = 17 GB on tmpfs (g3+g4
+// /tmp is tmpfs 126 GB, plenty).
 
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <ctime>
 #include <unistd.h>
 
 namespace fusee {
 
-constexpr int kProbeRingDepth = 4096;
+constexpr std::size_t kProbeDumpBytes = 128ULL * 1024 * 1024;  // 128 MB
+constexpr std::size_t kProbeHeaderBytes = 16;
+constexpr std::size_t kProbeFrameBytes = 24;
+constexpr std::size_t kProbeFrameCapacity =
+    (kProbeDumpBytes - kProbeHeaderBytes) / kProbeFrameBytes;
 
-struct ProbeFrame {
-  const char *tag;
-  uint64_t    ns;
-  uint64_t    op_id;
+struct ProbeHeader {
+  uint32_t magic;       // "PROB" = 0x424F5250 (little-endian)
+  uint32_t capacity;
+  uint64_t count;
 };
 
 class ProbeRing {
  public:
-  ProbeRing() : head_(0), enabled_(false) {
+  ProbeRing() : base_(nullptr), header_(nullptr), enabled_(false), overflowed_(false) {
     const char *e = getenv("FUSEE_PROBE_DUMP");
-    if (e && e[0]) {
-      enabled_ = true;
-      // Allocate path; tid suffix added at dump time.
-      dump_prefix_ = e;
-    }
+    if (!e || !e[0]) return;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s.%d.%lu", e,
+             (int)getpid(), (unsigned long)pthread_self());
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    if (ftruncate(fd, (off_t)kProbeDumpBytes) != 0) { close(fd); return; }
+    void *p = mmap(nullptr, kProbeDumpBytes, PROT_READ | PROT_WRITE,
+                   MAP_SHARED, fd, 0);
+    close(fd);
+    if (p == MAP_FAILED) return;
+    base_ = (uint8_t *)p;
+    header_ = (ProbeHeader *)base_;
+    header_->magic = 0x424F5250u;  // "PROB"
+    header_->capacity = (uint32_t)kProbeFrameCapacity;
+    header_->count = 0;
+    enabled_ = true;
   }
-  ~ProbeRing() { if (enabled_) dump(); }
+
+  ~ProbeRing() { if (enabled_) flush(); }
 
   inline void emit(const char *tag, uint64_t op_id) {
-    if (!enabled_) return;
+    if (!enabled_ || overflowed_) return;
+    uint64_t idx = header_->count;
+    if (idx >= kProbeFrameCapacity) {
+      overflowed_ = true;
+      // Best-effort sentinel.
+      uint64_t sentinel_idx = kProbeFrameCapacity - 1;
+      uint8_t *frame = base_ + kProbeHeaderBytes + sentinel_idx * kProbeFrameBytes;
+      const char *o = "OVRFLOW";
+      std::memcpy(frame, o, 8);
+      return;
+    }
     timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-    ProbeFrame &f = ring_[head_ % kProbeRingDepth];
-    f.tag = tag;
-    f.ns = ns;
-    f.op_id = op_id;
-    head_++;
+    uint8_t *frame = base_ + kProbeHeaderBytes + idx * kProbeFrameBytes;
+    char tag_buf[8] = {0};
+    if (tag) std::strncpy(tag_buf, tag, 8);
+    std::memcpy(frame, tag_buf, 8);
+    std::memcpy(frame + 8, &ns, 8);
+    std::memcpy(frame + 16, &op_id, 8);
+    header_->count = idx + 1;
   }
 
-  void dump() {
-    if (!enabled_ || head_ == 0) return;
-    char path[512];
-    snprintf(path, sizeof(path), "%s.%d.%lu", dump_prefix_,
-             (int)getpid(), (unsigned long)pthread_self());
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
-    uint32_t n = (head_ >= (uint64_t)kProbeRingDepth)
-                  ? kProbeRingDepth : (uint32_t)head_;
-    uint32_t start = (head_ >= (uint64_t)kProbeRingDepth)
-                      ? (uint32_t)(head_ % kProbeRingDepth) : 0;
-    // Header: magic + frame count.
-    uint32_t hdr[2] = { 0x50524F42u /* "PROB" */, n };
-    fwrite(hdr, sizeof(hdr), 1, f);
-    // Frames: write oldest-first.
-    for (uint32_t i = 0; i < n; i++) {
-      ProbeFrame &fr = ring_[(start + i) % kProbeRingDepth];
-      // tag is a pointer to read-only string; emit as 8-byte pointer
-      // (parser uses pointer->string lookup via /proc/<pid>/maps if
-      // need be, OR — simpler — caller parses the same binary's tag
-      // table). For simplicity, emit tag's first 8 chars padded.
-      char tag_bytes[8] = {0};
-      if (fr.tag) std::strncpy(tag_bytes, fr.tag, 8);
-      fwrite(tag_bytes, 8, 1, f);
-      fwrite(&fr.ns, 8, 1, f);
-      fwrite(&fr.op_id, 8, 1, f);
-    }
-    fclose(f);
+  void flush() {
+    if (base_) msync(base_, kProbeDumpBytes, MS_ASYNC);
   }
 
  private:
-  ProbeFrame ring_[kProbeRingDepth];
-  uint64_t head_;
+  uint8_t *base_;
+  ProbeHeader *header_;
   bool enabled_;
-  const char *dump_prefix_ = nullptr;
+  bool overflowed_;
 };
 
-// One ProbeRing per thread. C++11 thread_local → constructor + dtor
-// auto-fire at thread enter/exit. Zero overhead if FUSEE_PROBE_DUMP
-// env is not set (ring->enabled_ is false → emit short-circuits).
 extern thread_local ProbeRing *g_probe_ring;
 
 inline ProbeRing *probe_ring() {
@@ -110,14 +119,12 @@ inline ProbeRing *probe_ring() {
   return g_probe_ring;
 }
 
-// Explicit dump call for use before _exit() (which skips destructors).
 inline void probe_flush() {
-  if (g_probe_ring) g_probe_ring->dump();
+  if (g_probe_ring) g_probe_ring->flush();
 }
 
 }  // namespace fusee
 
-// Build-time gate. Default: disabled, true zero overhead.
 #ifndef FUSEE_PROBE
 #define FUSEE_PROBE 0
 #endif

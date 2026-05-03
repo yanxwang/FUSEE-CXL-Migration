@@ -1,0 +1,4 @@
+[phase1] 25 runs across 25 cells
+[phase1] 10/25 done (0 fails); elapsed 35s
+[phase1] 20/25 done (1 fails); elapsed 203s
+[phase1] DONE 25 runs, 1 fails, 250s

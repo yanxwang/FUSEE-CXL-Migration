@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""iter-6A Phase 2: probe parser + per-stage histogram."""
+"""iter-7A Phase 2: probe parser for persistent mmap dump format.
+
+Header (16 B): magic ("PROB"=0x424F5250) + capacity (u32) + count (u64)
+Frames (24 B each): tag[8] + ns (u64) + op_id (u64)
+"""
 import os
 import struct
 import sys
@@ -10,21 +14,21 @@ from pathlib import Path
 
 def parse_dump(path):
     frames = []
-    with open(path, "rb") as f:
-        hdr = f.read(8)
-        if len(hdr) < 8: return frames
-        magic, n = struct.unpack("<II", hdr)
-        if magic != 0x50524F42:
-            print(f"bad magic in {path}", file=sys.stderr)
-            return frames
-        for _ in range(n):
-            buf = f.read(24)
-            if len(buf) < 24: break
-            tag_bytes = buf[:8]
-            ns = struct.unpack("<Q", buf[8:16])[0]
-            op_id = struct.unpack("<Q", buf[16:24])[0]
-            tag = tag_bytes.split(b"\x00", 1)[0].decode("ascii", errors="replace")
-            frames.append((tag, ns, op_id))
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(16)
+            if len(hdr) < 16: return frames
+            magic, capacity, count = struct.unpack("<IIQ", hdr)
+            if magic != 0x424F5250:
+                return frames
+            for _ in range(count):
+                buf = f.read(24)
+                if len(buf) < 24: break
+                tag = buf[:8].split(b"\x00", 1)[0].decode("ascii", errors="replace")
+                ns, op_id = struct.unpack("<QQ", buf[8:24])
+                frames.append((tag, ns, op_id))
+    except Exception as e:
+        print(f"parse error {path}: {e}", file=sys.stderr)
     return frames
 
 
