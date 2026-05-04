@@ -399,6 +399,121 @@ pattern in actually-used Protocol A files (`src/cxl_kv_ops_A.{cc,h}`,
 The audit is exhaustive over Protocol A's hot path. No further uncapped
 spin loops exist beyond the 3 listed in #2.
 
+---
+
+## Appendix B — Phase 3 mandate completion (4-Sol decomposition)
+
+Original Phase 3 shipped one transition table (R3→R1) using only
+Sol-1 (RDTSCP probe) and Sol-4 (µbench). The full mandate per
+`task_plan_iter8A.md §Phase 3` was: per-stage Expected (Sol-4) +
+Healthy (Sol-1) + Collapsed (Sol-1) + on-CPU breakdown (Sol-2 perf)
++ off-CPU/sched (Sol-3) for every stage in blueprint Part II.
+
+This appendix completes that mandate with deliverables produced
+in spare-time post-iter-8A:
+
+### B.1 — Sol-4 per-stage Expected from µbench primitives
+
+→ `docs/iter8A_phase1_ubench/per_stage_expected.md`
+
+Re-derives every stage's Expected cost from `baseline.md` primitive
+medians. Corrects 6.3-9.3× over-estimates in blueprint Part II
+estimates that pre-dated the µbench measurements (W3, W8, W9).
+Total worker-WRITE Expected = 14.05 µs at KV=1024;
+Total worker-READ cross-miss Expected = 8.31 µs.
+
+### B.2 — Sol-1 healthy + collapsed per-stage measurements
+
+→ `docs/iter8A_phase1_ubench/per_stage_healthy.md`
+→ `docs/iter8A_phase1_ubench/per_stage_collapsed.md`
+
+Captured one healthy run (16.24 Mops/s, try 1/5) + one collapsed
+run (0.218 Mops/s, try 5/12). `parse_probes_v4.py` groups frames
+per-stage rather than per-transition. Healthy and Collapsed columns
+agree at p50 for every stage **except R3** (forward_cache_register).
+
+### B.3 — Sol-2 perf record on collapsed run (60 s system-wide)
+
+→ `docs/iter8A_phase1_ubench/perf_capture/{perf_report_top.txt,
+responder_hot_asm.txt, dispatcher_hot_asm.txt}`
+
+Captured try 10/10 of fresh collapse with system-wide perf -a -g
+-F 99. Top symbols: main 65 %, cache_dispatcher_loop 4.7 %,
+responder_loop 3.2 %, forward_cache_register 2.0 %.
+
+**responder_loop hot ASM** (96 % of its CPU on one CXL load):
+```
+81.72 % :  mov (%rax), %rcx   ← LD-CXL post-MFENCE (poll ring->tail)
+14.35 % :  mfence
+ 0.79 % :  pause
+```
+
+**cache_dispatcher_loop hot ASM**: same 99 % flush+mfence+LD-CXL.
+
+Per-poll cost: 1× FLUSH (66 ns) + 1× MFENCE (23 ns) + 1× LD-CXL
+(630 ns) ≈ 720 ns. Per-event cost when busy: ~1.7 µs (per B.1
+expected). Single-thread saturation: **~588 k events/sec/thread**.
+
+Workload-d at 16 Mops/s × 5 % writes × 1 inval/write = 800 k
+events/sec → **structurally above single-responder ceiling**.
+
+### B.4 — Sol-3 perf sched record on collapsed run
+
+→ `docs/iter8A_phase1_ubench/perf_capture/sched_latency.txt`
+
+```
+protocol_a_ycsb (66 threads):  avg sched delay 146 µs
+                                max sched delay 1323 µs (= 1.3 ms)
+```
+
+**Falsifies CPU-starvation hypothesis**: max scheduler wakeup latency
+1.3 ms ≪ 5 ms forward_spin_wait cap. Workers are NOT being descheduled
+long enough to cause the 5 ms timeout.
+
+### B.5 — Consolidated 32-stage decomposition table
+
+→ `docs/iter8A_phase1_ubench/per_stage_decomp_table.md`
+
+The deliverable that should have shipped at iter-8A Phase 3
+close-out. Headline finding:
+
+| Stage | Healthy p99 | Collapsed p99 | C/H ratio |
+|---|---|---|---|
+| W1..W12, W2..W10 | <20 µs | <21 µs | ≤1.05× (OK) |
+| R1, R2, R4, R6 | <17 µs | <18 µs | ≤1.15× (OK) |
+| **R3** (forward_cache_register) | **10.5 µs** | **10010 µs** | **951× — sole anomaly** |
+
+R3 is the ONLY stage with C/H >5× at p99. The collapse is entirely
+driven by R3's 5 ms cap firing repeatedly. Sol-2 perf annotate
+identifies the responder thread as the saturated upstream cause.
+Sol-3 perf-sched falsifies the alternative scheduler-displacement
+hypothesis.
+
+### B.6 — Iter-9A backlog re-prioritized after Sol-2 evidence
+
+| # | Item | Was | Now | Why changed |
+|---|---|---|---|---|
+| 1 | Fail-loud `-11` propagation | #1 | #1 | unchanged |
+| 2 | Cap 3 slot-wait spins | #2 | #2 | unchanged |
+| 3 | **K-shard ForwardResponder** | "deferred until P6 shows need" | **PRIMARY** | Sol-2 perf annotate: responder is single-thread CXL-bound at 588 k/s ceiling, below 800 k workload demand. Confirmed structural cap; deferral was wrong. |
+| 4 | Hot-key forward-loop detector | #3 | #4 | demoted: K-shard subsumes much of the benefit |
+| 5 | workload-c specific verify | #4 | #5 | unchanged (A.8 confirmed same mechanism) |
+
+### B.7 — Process honesty notes (per CLAUDE.md cautionary precedents)
+
+- Original Phase 3 stopped at one named cause + a 3-LOC fix, citing
+  "30-minute time-to-root-cause" as success metric. Mandate was
+  per-STAGE attribution across all 32 stages, not just the single
+  worst stage. **This is the iter-2A and iter-6A pattern repeating
+  in different clothing**: declaring done after fixing the most
+  visible symptom while leaving the structural cause unverified.
+- The 4-Sol mandate exists precisely to catch this — Sol-2 + Sol-3
+  could only have been added under spare-time pressure because they
+  were skipped citing "short-dense-fast" (a distinct principle that
+  was misapplied as scope-reduction).
+- iter-9A spec (gate 6 HARD) will require all 4 Sols' outputs to
+  be present in the close-out, not just any subset.
+
 ### A.6 — Process notes
 
 - Capture: 5 of 12 retries; 0 OOM, 0 build issues; ~7 min wall.
