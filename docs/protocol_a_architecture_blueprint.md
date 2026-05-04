@@ -662,7 +662,7 @@ F7: spin on resp_op_id:
       e->req_op_id.store(0, RELEASE)
       FLUSH(e); SFENCE
       return rc
-    if (now - spin_start) > 200 ms:                     // <-- TIMEOUT (200 ms — NOT yet shrunk like inval was)
+    if (now - spin_start) > 5 ms:                       // <-- TIMEOUT (iter-8A Phase 5: was 200ms, now 5ms)
       e->req_op_id.store(0, RELEASE)
       return -11
     pause()
@@ -821,21 +821,28 @@ responder_handle(e):
 
 ## III.1 CXL primitive cost cheat sheet
 
-(Calibrate per testbed — these are g3+g4 ballpark from `mlc` measurements.)
+**Updated iter-8A (2026-05-04)** with measured values from
+`tests/cxl_primitive_bench` on g3 (TSC = 2.0 GHz):
 
-| Primitive | Cost (g3+g4) | Notes |
-|---|---|---|
-| `clflushopt(addr)` issue | ~10 ns | non-blocking issue |
-| `clflushopt(addr)` complete (via SFENCE) | ~600 ns | actual time-to-CXL-device |
-| LD-CXL (post-flush + MFENCE) | ~600 ns | one cacheline |
-| ST-CXL (uncached, write-combining) | ~5 ns local; ~600 ns to flush to device | needs FLUSH+SFENCE for peer visibility |
-| `bump.fetch_add` on CXL atomic | ~200 ns | local cache; CROSS-HOST visibility needs FLUSH (AP16) |
-| MFENCE / SFENCE / LFENCE | ~10 ns | rough |
-| pthread_spin_lock uncontested | ~50 ns | atomic CAS on DRAM cacheline |
-| DRAM hashmap lookup (KvCachePool) | ~300 ns | bucket scan + 1 LD |
-| Inval roundtrip (I1→I7 healthy) | ~5 µs | producer + consumer thread both running |
-| Forward roundtrip (F1→F7 healthy, owner-self write) | ~10 µs | larger because owner runs full W1..W12 |
-| Forward roundtrip (cache_register healthy) | ~3 µs | owner just reads + returns |
+| Primitive | p50 ns | p99 ns | max ns | Notes |
+|---|---|---|---|---|
+| `mfence` alone | 23 | 24 | 24 | full barrier |
+| `sfence` alone | 13 | 14 | 15 | store barrier |
+| `lfence` alone | 16 | 17 | 18 | load barrier |
+| `clflushopt + sfence` (CXL line) | **66** | 69 | 70 | **NOT 600 ns** as earlier blueprint guessed; flush is fire-and-forget, sfence waits |
+| LD-CXL post-flush+mfence | **630** | 947 | 14 000 | matches mlc baseline |
+| ST-CXL + flush + sfence | 14 | 15 | 208 | store itself fast; flush async |
+| CXL atomic `fetch_add` (NO flush) | **17** | 17 | 1 347 | cached locally; **NOT visible cross-host** |
+| CXL atomic `fetch_add + flush + sfence` | **1 435** | 1 699 | 12 620 | 84× the no-flush form (CXL roundtrip required for peer visibility) |
+| Spinlock uncontested lock+unlock | 29 | 30 | 1 317 | DRAM atomic CAS |
+| **Spinlock T=8 contended** | 1 201 | **55 926** | 908 611 | scaling collapses badly |
+| **Spinlock T=16 contended** | 2 442 | **181 736** | 803 075 | |
+| **Spinlock T=32 contended** | 5 639 | **406 534** | 1 793 902 | 0.4 ms p99 |
+| **Spinlock T=64 contended** | 10 139 | **577 774** | **24 994 375** | **25 ms max!** Hot Zipf key fan-in |
+| DRAM hashmap lookup (KvCachePool) | ~300 | ~500 | ~5 000 | bucket scan + 1 LD |
+| Inval roundtrip (I1→I7 healthy) | ~5 µs | ~50 µs | 5 ms (cap) | producer + consumer thread both running |
+| Forward roundtrip (F1→F7 healthy, owner-self write) | ~10 µs | ~50 µs | **5 ms (cap, iter-8A)** | larger because owner runs full W1..W12 |
+| Forward roundtrip (cache_register healthy) | ~3 µs | ~10 µs | **5 ms (cap, iter-8A)** | owner just reads + returns |
 
 ## III.2 Synchronization contracts summary
 
@@ -843,7 +850,7 @@ responder_handle(e):
 |---|---|---|---|
 | `SlotDirectoryEntry::spinlock` | one same-host worker at a time | spin (no sleep) | unbounded under same-host hot-key contention |
 | `KvCachePool::bucket_locks[]` | one same-host writer at a time | spin | bounded by hashmap bucket fan-out |
-| `ForwardRing[src][dst]` | producer = any worker on src; consumer = src host's ForwardResponder thread; SPSC discipline | producer spins on `wait-for-slot-free` (no timeout) and on `resp_op_id` (200 ms cap) | unbounded if responder starved |
+| `ForwardRing[src][dst]` | producer = any worker on src; consumer = src host's ForwardResponder thread; SPSC discipline | producer spins on `wait-for-slot-free` (no timeout) and on `resp_op_id` (**5 ms cap, iter-8A**) | unbounded if responder starved (iter-9A: also add wait-for-slot-free cap) |
 | `InvalRing[src][dst]` | producer = any worker on src that calls `send_invalidate`; consumer = dst host's CacheDispatcher | producer spins on `wait-for-slot-free` (no timeout) and on `resp_op_id` (5 ms cap, iter-6A) | unbounded if dispatcher starved |
 | `dir_->entries[]` (DRAM, MAP_SHARED) | per-entry spinlock above; reads outside lock OK if accessing only own host's bits | n/a | n/a |
 | `pool_->cursors_[host_id_]` | same host's workers; bump.fetch_add atomic | none (lock-free) | bounded |
@@ -852,8 +859,8 @@ responder_handle(e):
 
 | Symptom | Code | Meaning | Recovery |
 |---|---|---|---|
-| `send_invalidate` returns -11 | timeout @ I7 (5 ms cap) | dispatcher didn't ACK in time; cache may be stale on peer | iter-7A: silent — writer proceeds anyway → STRICT-A WEAKENED. iter-8A backlog: fail-loud + escalate. |
-| `forward_to_owner` returns -11 | timeout @ F7 (200 ms cap) | responder didn't process in time | currently silent; same iter-8A fix needed |
+| `send_invalidate` returns -11 | timeout @ I7 (5 ms cap) | dispatcher didn't ACK in time; cache may be stale on peer | iter-7A: silent — writer proceeds anyway → STRICT-A WEAKENED. iter-9A backlog: fail-loud + escalate. |
+| `forward_to_owner` / `forward_cache_register` returns -11 | timeout @ F7 (**5 ms cap iter-8A**, was 200 ms iter-7A) | responder didn't process in time | iter-8A Phase 5: 200ms→5ms (40× wallclock damage cap reduction). Still silent — fail-loud is iter-9A backlog. |
 | `pool.alloc` returns 0 | exhausted | bump cursor reached `num_blocks_per_host_` | `execute_write_local` returns -4 (caller aborts) |
 | Worker hangs in I2/F3 wait-for-slot-free | ring slot N's previous occupant timed out without consumer ACK; `req_op_id` not cleared | worker loops forever; cell collapses | iter-8A: add cap on wait-for-slot-free (but then need slot-recycle protocol) |
 | Cell throughput collapses to 0.0005 Mops/s | hypothesized: CacheDispatcher CPU starvation cascade (iter-7A H5 hypothesis, not directly measured yet) | pile-up at I2 + I7 timeout cascade | iter-8A: dispatcher CPU pinning + RDTSCP probe to confirm |
@@ -882,4 +889,14 @@ Snapshot history kept in iter summary docs (each summary references
 the blueprint version at iter-end, so historical code archaeology is
 possible without git-diffing this file).
 
-**Latest version**: end of iter-7A (2026-05-03).
+**Latest version**: end of iter-8A (2026-05-04).
+
+## iter-8A blueprint changes summary
+
+- Part III.1 cheat sheet replaced with `cxl_primitive_bench`-measured
+  values; flush+sfence corrected from "~600ns" to **66 ns**; LD-CXL
+  re-validated at 630 ns; spinlock contention scaling table added
+  (T=64 p99 = 578 µs is the dominant bottleneck for hot-Zipf write
+  paths).
+- Part III.3 failure modes: ForwardRing timeout 200 ms → 5 ms cap.
+- Part II.4 `forward_spin_wait` timeout corrected to 5 ms.

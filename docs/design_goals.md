@@ -1561,6 +1561,23 @@ User 的 audit checklist 在 §XI (PR review checklist), 但 design proposal
 - **原 E5 (Spec change 走 user)**: **降级为 P3** documentation discipline,
   靠 user 主动 enforce, 不靠 Claude 主动 escalate.
 
+#### P5 — Per-stage attribution before fix (added iter-8A 2026-05-04)
+
+Performance claims require **per-stage attribution data** that names
+the primitive responsible. "Measured X µs" without naming the
+primitive is not an explanation. Attribution table = the new
+artifact.
+
+- A fix proposal (Phase 5 RAP under §XIII) MUST cite which named
+  stage transition Phase 3 attribution showed as the bottleneck,
+  with measured p50/p99/max from a probe-instrumented run.
+- Symptom-level diagnoses ("cells collapse probabilistically") are
+  Phase 1 work; they DO NOT discharge the requirement for Phase 3
+  per-stage data.
+- Discovered iter-8A Phase 1.A: `clflushopt+sfence` ≈ 66 ns (NOT
+  600 ns as iter-1A..iter-7A blueprints assumed); blueprint
+  baseline must be calibrated, not guessed.
+
 #### P4 — Anomaly verification before dismissal (added iter-7A 2026-05-03)
 
 Sweep data is **not "documented" until every outlier is explained**.

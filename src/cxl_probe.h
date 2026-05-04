@@ -90,8 +90,17 @@ class ProbeRing {
       std::memcpy(frame, o, 8);
       return;
     }
-    timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    // iter-8A: RDTSCP + LFENCE for ordered timestamp.
+    // RDTSCP waits for prior instructions to retire before reading TSC
+    // → no OoO reorder around probe entry. LFENCE after blocks
+    // following instructions from being moved before the read.
+    // TSC_AUX → cpu_id (top 2 bytes of frame's "ns" field repurposed).
+    unsigned a, d, c;
+    asm volatile ("rdtscp" : "=a"(a), "=d"(d), "=c"(c));
+    asm volatile ("lfence");
+    uint64_t cycles = ((uint64_t)d << 32) | a;
+    // Pack: low 48 bits = TSC cycles (≈ 39 hours @ 2 GHz), high 16 = cpu_id
+    uint64_t ns = (cycles & 0x0000FFFFFFFFFFFFULL) | ((uint64_t)(c & 0xFFFF) << 48);
     uint8_t *frame = base_ + kProbeHeaderBytes + idx * kProbeFrameBytes;
     char tag_buf[8] = {0};
     if (tag) std::strncpy(tag_buf, tag, 8);

@@ -44,7 +44,12 @@ inline uint8_t key_fingerprint(uint64_t key) {
 // timeout.
 inline int forward_spin_wait(ForwardEntry *e, uint64_t op_id,
                              int *out_status) {
-  const uint64_t kBudgetUs = 200000;  // 200 ms
+  // iter-8A Phase 5 fix [G6][AP16]: 200 ms → 5 ms. Mirrors iter-6A
+  // InvalRing fix; Phase 3 attribution showed 50% of cross-host
+  // CACHE_REGISTER fired this timeout, ballooning workload-d
+  // kv=1024 T=64 trans_wall to 36 sec. 5 ms cap = 500× healthy
+  // p99 (~10 µs) headroom. iter-9A backlog: fail-loud propagation.
+  const uint64_t kBudgetUs = 5000;  // was 200000 (200 ms)
   uint64_t spin_start_ns = 0;
   for (;;) {
     flush_line((void *)e);
