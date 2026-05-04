@@ -1,0 +1,2 @@
+  protocol_a_ycsb:(66)  |  31063.352 ms |      156 | avg:   0.146 ms | max:   1.323 ms | max start: 104947.489418 s | max end: 104947.490741 s
+  TOTAL:                |  34528.612 ms |     8423 |

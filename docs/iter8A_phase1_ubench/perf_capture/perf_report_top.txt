@@ -1,0 +1,40 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+# comm: protocol_a_ycsb
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'cycles:P'
+# Event count (approx.): 100110256856
+#
+# Overhead       Samples  Shared Object        Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+# ........  ............  ...................  .................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    65.15%          2473  protocol_a_ycsb      [.] main
+            |
+            ---main
+               __libc_start_call_main
+
+     4.97%           161  [kernel.kallsyms]    [k] workingset_activation
+            |
+            ---workingset_activation
+               folio_mark_accessed
+               unmap_page_range
+               unmap_single_vma
+               unmap_vmas
+               exit_mmap
+               __mmput
+               mmput
+               do_exit
+               do_group_exit
+               0xffffffff95664c68
+               0xffffffff954c7e2b
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     4.72%           133  protocol_a_ycsb      [.] fusee::CxlKvStoreA::cache_dispatcher_loop()
+            |
+            ---fusee::CxlKvStoreA::cache_dispatcher_loop()
+
+     3.19%           132  protocol_a_ycsb      [.] fusee::CxlKvStoreA::responder_loop()
+            |

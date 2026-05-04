@@ -1,0 +1,10 @@
+   57.77 :   7d89:   mfence
+   41.44 :   7d8c:   mov    (%rax),%rax
+    0.79 :   7d0a:   addq   $0x20100,0x28(%rsp)
+    0.00 :   8356:   jmp    27ac <fusee::CxlKvStoreA::cache_dispatcher_loop() [clone .cold]+0x12>
+    0.00 :   8353:   mov    %rax,%rbp
+    0.00 :   834e:   jmp    279a <fusee::CxlKvStoreA::cache_dispatcher_loop() [clone .cold]>
+    0.00 :   834b:   mov    %rax,%rbx
+    0.00 :   8346:   jmp    279a <fusee::CxlKvStoreA::cache_dispatcher_loop() [clone .cold]>
+    0.00 :   8343:   mov    %rax,%rbx
+    0.00 :   833e:   jmp    27ac <fusee::CxlKvStoreA::cache_dispatcher_loop() [clone .cold]+0x12>

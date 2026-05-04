@@ -1,0 +1,10 @@
+   81.72 :   8880:   mov    (%rax),%rcx
+   14.35 :   887d:   mfence
+    1.58 :   8972:   movzbl 0x50(%r14),%eax
+    0.79 :   8970:   pause
+    0.79 :   8956:   jmp    8820 <fusee::CxlKvStoreA::responder_loop()+0x80>
+    0.77 :   8835:   movslq 0xc(%rbx),%rbp
+    0.00 :   8a23:   jmp    27bc <fusee::CxlKvStoreA::responder_loop() [clone .cold]>
+    0.00 :   8a20:   mov    %rax,%rbp
+    0.00 :   8a1b:   jmp    87d2 <fusee::CxlKvStoreA::responder_loop()+0x32>
+    0.00 :   8a17:   mov    %rbx,%fs:(%rax)
