@@ -326,15 +326,15 @@ dominated) suggests the fix shifted but did not eliminate the underlying
 hot-key starvation pattern. Read-heavy workloads now expose the
 forward-side path more sharply because invalidates are rarer.
 
-### A.6 — iter-9A backlog (re-prioritized after attribution)
+### A.6 — iter-9A backlog (re-prioritized after attribution + audit)
 
 | # | Item | Why escalated |
 |---|---|---|
 | 1 | Fail-loud `-11` propagation in writer path | A.4 named this as the dominant residual mechanism. A.5 confirms across c/d cells. ~50 LOC. |
-| 2 | `wait-for-slot-free` timeout cap (no current cap) | If forward keeps timing out, slot stays held; cascades. ~200 LOC. |
-| 3 | Hot-key forward-loop detector | A.5 + A.3 top-5 max table: ONE worker / ONE key family can drive the entire collapse. Per-worker consec-forward counter → fall back to direct-DRAM slow path on threshold. |
-| 4 | Workload-c specific deep-dive | A.5 promotes c above d as the iter-9A primary verification target (5/10 vs 1/10). |
-| 5 | Cross-channel symmetry audit | InvalRing+ForwardRing both fixed; iter-9A audit `wait_slot_free`, `cache_register` send-side, and any other "spin then -EAGAIN" pattern for missing caps. |
+| 2 | `wait-for-slot-free` timeout cap on **3 sites** | A.9 audit located uncapped `for(;;)` slot-waits at `cxl_kv_ops_A.cc:333` (send_forward), `:375` (send_invalidate), `:519` (send_cache_register). All three are the cascade amplifier — when consumer is stuck, producer spins forever. Add same 5 ms cap with slot-recycle protocol; ~80 LOC across 3 sites. |
+| 3 | Hot-key forward-loop detector | A.5 + A.3 top-5 max table: ONE worker / ONE key family drives the whole collapse. Per-worker consec-forward counter → fall back to direct-DRAM slow path on threshold. |
+| 4 | Workload-c specific verification | A.8 confirmed same mechanism as workload-d, just exposed more (50 % vs 5 %); iter-9A primary verification target. |
+| 5 | Cross-channel symmetry audit | A.9 already swept actually-used Protocol A code; only 3 sites in #2 above. `dram_push` / `dram_wait_ack` are Protocol B only. Batch-ring is Protocol C only. Audit complete; no further sites. |
 
 ### A.7 — Process notes
 
@@ -371,6 +371,33 @@ forward path at higher steady-state rate.
 Therefore iter-9A backlog #1 (fail-loud `-11`) addresses BOTH workloads
 simultaneously; no separate workload-c-specific code path needed beyond
 verification with the same hot-key counter (#3).
+
+### A.9 — Cross-channel symmetry audit (iter-9A backlog #5)
+
+Grep audit of every spin-loop / `-EAGAIN`-return / `for(;;)`/`while(...)`
+pattern in actually-used Protocol A files (`src/cxl_kv_ops_A.{cc,h}`,
+`src/cxl_directory.{cc,h}`):
+
+**Capped already (iter-8A):**
+- `forward_spin_wait` at `cxl_kv_ops_A.cc:45-77` — `kBudgetUs=5000`. ✓
+- `forward_spin_wait` (cache_register variant) at `cxl_kv_ops_A.cc:395-427`
+  — `kBudgetUs=5000`. ✓
+
+**Uncapped — escalated to iter-9A backlog #2:**
+- `wait-for-slot-free` at `cxl_kv_ops_A.cc:333-338` (send_forward) — no cap.
+- `wait-for-slot-free` at `cxl_kv_ops_A.cc:375-380` (send_invalidate) — no cap.
+- `wait-for-slot-free` at `cxl_kv_ops_A.cc:519-524` (send_cache_register) — no cap.
+
+**Out of scope:**
+- `dram_push` / `dram_wait_ack` in `cxl_same_host_queue.h` — Protocol B
+  only; Protocol A's archived iter-3 used it but current Protocol A does not.
+- `cxl_batch_ring.cc` — Protocol C only.
+- Dispatcher/Responder loops at `cxl_kv_ops_A.cc:464,632` exit on
+  `dispatcher_stop_/responder_stop_`; correct.
+- `cxl_a_local_aggregator.cc:48` already capped by `kBudgetNs`. ✓
+
+The audit is exhaustive over Protocol A's hot path. No further uncapped
+spin loops exist beyond the 3 listed in #2.
 
 ### A.6 — Process notes
 
