@@ -347,7 +347,30 @@ forward-side path more sharply because invalidates are rarer.
 - All raw probe files preserved at `g3:/tmp/probe8A_resid/` and
   `g4:/tmp/probe8A_resid/` (17 MB sparse each, 132 files).
 - Attribution markdown: `docs/iter8A_phase1_ubench/residual_attribution.md`.
-- A.5 grid CSV: `/tmp/iter8A_resid_grid.csv` (raw lines preserved).
+- A.5 grid CSV: `docs/iter8A_phase1_ubench/residual_grid.csv`.
+
+### A.8 — Workload-c collapse: same mechanism as workload-d
+
+Captured try 2/8 of `workload-c kv=256 T=64 cache=on` at
+**0.448 Mops/s** (trans_wall_max = 0.447 s). Per-thread time-adjacent
+parse confirms identical mechanism:
+
+| Stage | N | p50 µs | max µs | Note |
+|---|---|---|---|---|
+| **R3→R1** | 89 | **5005** | 5011 | All top-5 from cpu 69, single thread |
+
+Sum: 89 × 5005 µs = 445 ms ≈ observed trans_wall 447 ms (margin = ring-wait
+overhead on the same hot thread).
+
+This validates A.6 #4: workload-c uses the same `forward_spin_wait`-cap
+retry-storm path as workload-d. Workload-c being more affected (50 % vs
+5 % per A.5) is not a different bug; it is the same bug exposed more often
+because YCSB-C is 100 % reads → reads of cross-host-cached lines hit the
+forward path at higher steady-state rate.
+
+Therefore iter-9A backlog #1 (fail-loud `-11`) addresses BOTH workloads
+simultaneously; no separate workload-c-specific code path needed beyond
+verification with the same hot-key counter (#3).
 
 ### A.6 — Process notes
 
