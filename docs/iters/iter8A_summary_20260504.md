@@ -290,14 +290,64 @@ cap stopped masking it:
 This is the iter-7A `QR8` "fail-loud propagation of -11" backlog item,
 now confirmed mechanistic-not-symptomatic.
 
-### A.5 — iter-9A backlog (re-prioritized after attribution)
+### A.5 — Per-cell residual collapse rate (5 wl × 2 KV × 5 reps = 50 runs)
+
+Targeted post-fix grid at the bug-trigger pattern (T=64 cache=on):
+
+| wl | kv | reps (Mops/s) | min | collapsed | inval-timeout-msg |
+|---|---|---|---|---|---|
+| a | 256 | 4.62, 10.06, 6.40, 7.77, **0.083** | 0.08 | 1/5 | 4/5 |
+| a | 1024 | 5.41, **0.083**, 9.59, 7.27, 10.46 | 0.08 | 1/5 | 4/5 |
+| b | 256 | 11.31, 7.12, 11.07, 15.57, 18.23 | 7.12 | 0/5 | 3/5 |
+| b | 1024 | 11.65, 10.86, 18.34, **0.32**, **0.32** | 0.32 | 2/5 | 1/5 |
+| c | 256 | 19.12, **0.38**, **0.29**, **0.44**, 18.98 | 0.29 | **3/5** | 0/5 |
+| c | 1024 | 18.96, **0.34**, 18.92, **0.43**, 18.31 | 0.34 | **2/5** | 0/5 |
+| d | 256 | 16.71, 18.99, 17.77, 18.69, 18.46 | 16.71 | **0/5** | 0/5 |
+| d | 1024 | 17.35, 18.19, 18.43, **0.13**, 19.03 | 0.13 | 1/5 | 0/5 |
+| f | 256 | 6.37, 5.73, 12.85, 14.73, 5.50 | 5.50 | 0/5 | 5/5 |
+| f | 1024 | 5.69, 6.27, 5.84, 6.60, 6.63 | 5.69 | 0/5 | 3/5 |
+
+**Aggregate post-fix residual collapse rate: 10 / 50 = 20%.**
+
+Two distinct residual mechanisms emerge from the inval-timeout column:
+
+1. **Forward-side residual (workloads c, d)** — collapses occur WITHOUT
+   the `[A] inval timeout` log msg. This is the A.3 / A.4 mechanism:
+   `forward_spin_wait` 5 ms cap, retry loop, ~666 ms accumulated tail.
+   Worst at workload-c (5/10 = 50 % of c-cells collapse).
+2. **Invalidate-side residual (workloads a, b, f)** — `send_invalidate`
+   5 ms timeout fires (logged once, then absorbed), but recovery
+   succeeds; throughput merely halved (5–15 Mops/s) rather than
+   collapsed. Worst at workload-f (8/10 cells log inval-timeout, 0/10
+   collapse).
+
+Workload-c being the new worst case (50 % vs iter-7A where workload-d
+dominated) suggests the fix shifted but did not eliminate the underlying
+hot-key starvation pattern. Read-heavy workloads now expose the
+forward-side path more sharply because invalidates are rarer.
+
+### A.6 — iter-9A backlog (re-prioritized after attribution)
 
 | # | Item | Why escalated |
 |---|---|---|
-| 1 | Fail-loud `-11` propagation in writer path | A.4 named this as the residual mechanism. ~50 LOC. |
-| 2 | `wait-for-slot-free` timeout cap (no current cap) | If forward keeps timing out, slot is held; cascades into other workers. ~200 LOC. |
-| 3 | Hot-key forward-loop detector | Per-worker counter of consecutive forwards on same key; on threshold, escalate to slow-path direct-DRAM read. |
-| 4 | Re-verify the 19-cell collapse cluster (5 reps each) | A.2 shows residual collapses still appear in the cluster — needs 5-rep × all 19 cells × workload-d sweep to quantify post-fix rate per cell. |
+| 1 | Fail-loud `-11` propagation in writer path | A.4 named this as the dominant residual mechanism. A.5 confirms across c/d cells. ~50 LOC. |
+| 2 | `wait-for-slot-free` timeout cap (no current cap) | If forward keeps timing out, slot stays held; cascades. ~200 LOC. |
+| 3 | Hot-key forward-loop detector | A.5 + A.3 top-5 max table: ONE worker / ONE key family can drive the entire collapse. Per-worker consec-forward counter → fall back to direct-DRAM slow path on threshold. |
+| 4 | Workload-c specific deep-dive | A.5 promotes c above d as the iter-9A primary verification target (5/10 vs 1/10). |
+| 5 | Cross-channel symmetry audit | InvalRing+ForwardRing both fixed; iter-9A audit `wait_slot_free`, `cache_register` send-side, and any other "spin then -EAGAIN" pattern for missing caps. |
+
+### A.7 — Process notes
+
+- Capture: 5 of 12 retries; 0 OOM, 0 build issues; ~7 min wall.
+- Parse: 1.35 M frames in <5 s; per-thread time-adjacent grouping
+  (NOT op_id grouping — workload-d reuses keys).
+- TSC calibration: 2.000 GHz on g3 (kernel `tsc: Detected
+  2000.000 MHz`, calibrator confirmed 2.0002 GHz).
+- A.5 grid: 50 runs × ~25 s = 21 min wall; "短-密-快" budget honored.
+- All raw probe files preserved at `g3:/tmp/probe8A_resid/` and
+  `g4:/tmp/probe8A_resid/` (17 MB sparse each, 132 files).
+- Attribution markdown: `docs/iter8A_phase1_ubench/residual_attribution.md`.
+- A.5 grid CSV: `/tmp/iter8A_resid_grid.csv` (raw lines preserved).
 
 ### A.6 — Process notes
 
