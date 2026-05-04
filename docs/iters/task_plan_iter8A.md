@@ -16,6 +16,41 @@
 
 ---
 
+## Top-level principle: short-dense-fast (added 2026-05-03 per user)
+
+**Never run a long sweep when a targeted experiment gives the same
+signal in a fraction of the time.** Every Phase below follows
+"smallest-cells × smallest-reps that answer the current question →
+inspect feedback → decide next experiment". Specifically:
+
+- **Phase 1 setup**: smoke each tool on 1 cell; verify; advance.
+  No "validate at scale" before advancing.
+- **Phase 2 force-collapse**: target ONE cell + capture on first
+  collapse; do NOT run all 10 candidate cells × 5 retries
+  prophylactically.
+- **Phase 3 attribution**: synthesize from existing capture; do NOT
+  request another full capture unless data is genuinely
+  insufficient.
+- **Phase 5 fix verification**: 1 cell × 5 reps on the named-cause
+  cell + targeted regression check on the **2-3 cells most likely
+  to be affected by the fix**. Do NOT re-run iter-7A's 210-cell
+  sweep "just to confirm".
+- **Phase 6 carve-out discharge**: target the **subset of 55 cells
+  most likely to still collapse based on Phase 3 root cause** (not
+  all 55); run those ×5 reps; rest discharged via reasoning if
+  Phase 5 fix is structurally sufficient.
+- **No standard 210-cell sweep at iter-end** unless the fix
+  semantics demand it. Rationale: iter-7A already ran one; spec
+  §13 iter-completion gate references the most-recent valid sweep,
+  which iter-7A's 210-cell satisfies. iter-8A's value is the fix +
+  attribution; revalidating untouched cells is waste.
+
+**Rule of thumb**: if an experiment takes > 30 min wallclock, ask
+"can a smaller experiment answer the same question?" before
+launching. If yes, take the smaller one.
+
+---
+
 ## TL;DR — exactly one task type
 
 **iter-8A's only goal**: replace the symptom-level diagnosis iter-7A
@@ -387,55 +422,78 @@ G6 still passes.
 
 ---
 
-## Phase 6: Verification — 55 anomaly cells (gate 5 carve-out) + full sweep
+## Phase 6: Verification — targeted, NOT full sweep (per top-level principle)
 
-**Goal**: discharge iter-7A's gate 5 carve-out (which mandated 5-rep
-re-verification of the 55 anomaly cells) AND run the standard 210-cell
-sweep with the Phase 5 fix.
+**Goal**: confirm the Phase 5 fix actually fixes the named root cause,
+discharge iter-7A's gate 5 carve-out for the cells most likely affected,
+and detect regressions on the cells most likely affected by the
+fix's code path. **No 210-cell standard sweep this iter.**
 
-**Spec coverage**: §13 gate 5 (anomaly verification), §IX G1-G6,
-§13 iter-completion gate.
+**Spec coverage**: §13 gate 5 (anomaly verification, scoped subset),
+§IX G6.
 
-**Code changes**:
-- NEW `scripts/iter8A_55cells_5rep.sh`: re-runs the 55 anomaly cells
-  from `docs/g34_scaling_ycsb_20260503_060910/gap_to_target.md`
-  with REPS=5 each. Per-cell verdict computed: deterministic /
-  probabilistic / non-reproducible / OK.
-- MODIFIED `scripts/run_iter6A_sweep.sh` → `run_iter8A_sweep.sh`:
-  no parameter change vs iter-7A's; just produces the standard 210
-  cells × 1 rep (default) for the iter-completion gate.
+**Rationale for not running full 210-cell sweep**:
+- spec §13 iter-completion gate references most-recent valid sweep
+  → iter-7A's `g34_scaling_ycsb_20260503_060910/` already satisfies
+- the cells we have NOT touched semantically (workload-c read-only,
+  workload-d at non-collapse Ts, etc) cannot regress from a
+  Phase 5 fix targeting CacheDispatcher / wait-for-slot-free / similar
+- a 3-4h re-sweep would mostly re-confirm what iter-7A already showed
+- per user 2026-05-03: short-dense-fast experiments preferred
 
-**Validation experiment**:
-1. **55 anomaly cells × 5 reps** (sub-Phase 6.A — discharges gate
-   5 carve-out from iter-7A). Per-cell classification:
-   - **Deterministic-collapse remaining**: ≥ 4 of 5 reps still <
-     0.5 Mops/s — the fix did NOT cure this cell. Phase 5 RAP
-     revisited.
-   - **Probabilistic-but-improved**: 1-3 of 5 reps low — fix
-     mitigated but not eliminated. Document; carry to iter-9A
-     unless dominant.
-   - **OK**: 0 of 5 reps low — fix worked.
-   - Output: `docs/iter8A_phase6a_55cells.md`.
-   Per QR3 below: pragmatic — only cells STILL collapsing in
-   sub-phase 6.A's 5-rep need attention; cells now OK can be
-   marked discharged.
+### Sub-phase 6.A — Targeted carve-out discharge
 
-2. **Full 210-cell sweep × 1 rep** (sub-Phase 6.B — standard iter-completion):
-   - All anomalies in `gap_to_target.md` § gate 5 must be either
-     in the iter-7A 55-cell set (already 5-rep verified above) OR
-     5-rep re-verified inline. New anomalies trigger sub-phase
-     6.A's process for them.
+**Code changes**: NEW `scripts/iter8A_targeted_verify.sh` — runs a
+SCOPED list of cells × 5 reps each (NOT all 55).
 
-3. **G6 rw race test**: violations=0 verified once.
+**Cell selection (SCOPED, not all 55)**:
+- The 1 force-collapsed cell from Phase 2 (the gold-standard test
+  case) — 5 reps; must show ≥ 4 of 5 OK post-fix.
+- The cells iter-7A Phase 1 retry classified as the "deterministic"
+  bucket (the 3 d-kv1024 T=32/64 cells, all of which on iter-7A
+  Phase 3 retry then turned probabilistic) — 5 reps each; expect
+  ≥ 4 of 5 OK.
+- 3-5 cells from iter-7A's 55 anomaly set whose root cause Phase 3
+  attributed to the SAME mechanism we just fixed — 5 reps each.
 
-4. **Doubling-ratio** across all 5 workloads (per spec §13 update from iter-7A):
-   each workload's pre-saturation T-doubling ≥ 1.5×.
+**Total**: ~5-9 cells × 5 reps = 25-45 runs. Wallclock estimate
+≤ 30 min. Per top-level principle: short.
 
-**Phase 6 success criterion**: 55 anomaly cells discharged (each
-either OK on 5-rep, or named as iter-9A backlog item); 210-cell
-sweep new anomaly count < iter-7A's 55 (i.e., fix actually reduces
-anomaly count, not just shifts cells); G6 passes; doubling-ratio
-passes for all 5 workloads.
+**Validation**:
+- Force-collapsed cell (Phase 2) must show ≥ 4/5 OK.
+- Each "structurally-related-to-fix" cell improves: anomaly rate
+  drops vs iter-7A's per-cell history.
+- Cells that DON'T improve are documented as "fix didn't address
+  this cluster" → iter-9A backlog item, not Phase 5 RAP revisit
+  unless they're the dominant Phase 3-attributed cluster.
+
+### Sub-phase 6.B — Targeted regression check
+
+**Cell selection (the "did fix break anything" set)**:
+- 1 cell per workload at peak-T (e.g., workload-c KV=1024 T=64,
+  the iter-6A 18.95 Mops/s peak) — 1 rep each.
+- 1 cell per workload at low-T (T=4) where the fix is most likely
+  to NOT help but should not hurt — 1 rep each.
+
+**Total**: 5 wl × 2 T = 10 cells × 1 rep = 10 runs. Wallclock
+estimate ≤ 10 min.
+
+**Validation**: each cell within 50% of iter-7A's measured value
+(generous noise band; we're looking for catastrophic regression,
+not micro-perf changes).
+
+### Sub-phase 6.C — G6 rw race test (single run)
+
+`tests/protocol_a_rw_race_test 1000` — must report violations=0.
+
+### Phase 6 success criterion (combined ≤ 1 hour wallclock)
+- Phase 2 force-collapsed cell post-fix: ≥ 4/5 OK
+- Carve-out subset improved post-fix
+- 10-cell regression check: no catastrophic delta
+- G6: violations=0
+
+If any sub-phase fails, Phase 5 RAP revisited; do NOT push partial
+fix to summary.
 
 ---
 
@@ -534,7 +592,7 @@ in-scope.
 | Phase 3 finds 2+ comparable root causes | Med | Per QR4 of iter-7A: ship ONLY largest; others to iter-9A |
 | Phase 3 finds NO single dominant cause (latency uniformly distributed across stages) | Low-Med | Re-instrument with finer probes within suspect stages (e.g., split W7 into W7.1-W7.3); rerun Phase 2 |
 | Phase 5 fix passes per-stage 5× reduction BUT 55-cell verification still shows persistent collapses | Med | Phase 6 reveals fix is incomplete; Phase 5 RAP revisited; possibly need second fix in iter-9A |
-| Phase 6 sweep wallclock > 5h (55-cell × 5 + 210-cell × 1 = 485 runs at ~50 s each = 6.7h) | High | Run sub-phases 6.A and 6.B in parallel if possible; if exceeds deadline, escalate user with concrete extrapolation; do NOT silently shrink scope (per CLAUDE.md cautionary precedent #2) |
+| Phase 6 wallclock > 1h (now ≤ 30 min carve-out + ≤ 10 min regression + G6) | Low | Phase 6 reshaped per user 2026-05-03 to short-dense-fast; full sweep dropped (iter-7A's already satisfies §13 gate). If somehow > 1h, escalate user. |
 | Phase 5 fix accidentally breaks G6 strict-A | Low | Phase 5 success criterion includes G6 check; revert if violation |
 | User requests K-shard / peak optimization mid-iter | Low | Politely deflect to iter-9A — iter-8A's success requires the focus |
 
@@ -546,12 +604,12 @@ in-scope.
 |---|----------|-------------------|
 | QR1 | **Phase 2 force-collapse strategy**: try (A) workload-d KV=1024 T=64 cache=on (iter-7A's most-collapsed cell); fall back to (B) deliberate stress-ng CPU starvation as control? | **(A) first**, up to 10 retries; if fails, fall back to (C) stress-ng + lower probe density (drop cputime_ns from every-stage to every-4th-stage). Rationale: real-world reproduce > artificial reproduce; but artificial is a valid backstop. |
 | QR2 | **Probe overhead acceptance threshold** | **10% on `protocol_a_local_test`**. Above 10% → Phase 1.B fallback (drop cputime_ns / sample mode). Rationale: 10% leaves enough headroom that Phase 2 cell-level wallclock pattern remains observable. |
-| QR3 | **55-cell × 5-rep verification mode** — strict (every cell × 5 reps no matter what) or pragmatic (only cells STILL collapsing in iter-8A first sweep need 5-rep)? | **Pragmatic**. Rationale: iter-7A Phase 1 already showed 22/25 self-resolved on retry; 5-rep on cells that look healthy is wasteful. If a cell is OK on iter-8A's first 1-rep, it's discharged. Strict mode would consume ~3-4 h extra wall-clock. |
+| QR3 | **55-cell × 5-rep verification mode** — strict (every cell × 5 reps no matter what) or pragmatic (only cells STILL collapsing in iter-8A first sweep need 5-rep)? | **Pragmatic + scoped further per user 2026-05-03**: only ~5-9 cells most-likely-affected by the Phase 5 fix get 5-rep; remainder discharged via reasoning. Total ≤ 45 runs ≤ 30 min. iter-7A Phase 1 already showed 22/25 self-resolved on retry. |
 | QR4 | **Phase 4 fix candidates C-A through C-F** — should I pre-implement the smallest one (C-F sched_yield) so we can ablate "yield vs no-yield" as a control during Phase 2 capture? | **No** — keeps Phase 1-3 strictly diagnostic. Pre-implementing biases the data. Wait until Phase 4 RAP names what to ship. |
 | QR5 | **CPU pinning candidate (C-A) fix scope** — if Phase 3 names CPU starvation, should iter-8A pin BOTH ForwardResponder and CacheDispatcher, or just CacheDispatcher? | **Just CacheDispatcher** for iter-8A. Rationale: only one root cause per iter (per QR4 of iter-7A); ForwardResponder pinning is iter-9A. |
 | QR6 | **Wait-for-slot-free timeout cap (C-B)** — currently no timeout = cascade amplifier. If Phase 3 names this as root cause, ship which workaround? Options: (a) reduce timeout to 1ms with no slot-recycle (workers fail-loud on timeout); (b) add slot-recycle protocol (≥ 200 LOC, would push iter-9A) | **(a) workaround in iter-8A; (b) iter-9A architectural**. Rationale: per QR8 of iter-7A, ≤ 200 LOC fix in iter-8A; (a) is ~10 LOC. |
 | QR7 | **Phase 7 spec gate 6 (per-stage attribution)** — make it HARD FAIL like gate 5, or SOFT WARN? | **Soft warn first iter; HARD FAIL after iter-9A** demonstrates Sol-4 attribution can be auto-generated reliably. Rationale: hard-fail on a measurement requirement before the tooling is mature creates false barriers. |
-| QR8 | **Phase 6 wallclock risk** — if 6.A + 6.B exceeds 5-6 h budget, drop which first? | **Drop nothing; escalate user before scope-cut**. Per CLAUDE.md cautionary precedent #2 (iter-6A): silent descope is a process failure. If the scoped sweep set genuinely doesn't fit, ask. |
+| QR8 | **Phase 6 wallclock risk** — if 6.A + 6.B exceeds budget, drop which first? | **Phase 6 reshaped per user 2026-05-03 to ≤ 1h total** (≤30 min carve-out targeted + ≤10 min regression + G6). Full 210-cell sweep dropped this iter; iter-7A's already satisfies spec §13. If even reshaped Phase 6 exceeds budget, escalate user. |
 
 ---
 
