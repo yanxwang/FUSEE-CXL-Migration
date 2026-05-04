@@ -214,8 +214,98 @@ This iter strictly followed:
 ```
 [iter8A-plan][G6] DRAFT: 7-phase plan (eb1129c)
 [iter8A-fix][G6][AP16] Phase 5 ForwardRing 200ms→5ms + Phases 1-7
+[iter8A-summary][G6] iter-8A complete: ForwardRing 200ms→5ms; 30-min diagnostic loop
+[iter8A-resid][G6][AP16] residual-collapse attribution + iter-9A backlog
 ```
 
-All changes in 2 commits (plan + fix-and-codify). Per
-`scripts/git-hooks/pre-commit` H4 hook regex check, both
-reference G6/AP16 invariants.
+All changes reference G6/AP16 invariants per
+`scripts/git-hooks/pre-commit` H4 hook regex check.
+
+---
+
+## Appendix A — spare-time verification (post-deadline-margin)
+
+Per CLAUDE.md spare-time rule (more verification > docs polish), the
+post-fix system was characterized further:
+
+### A.1 — 20-rep characterization, bug-trigger cell
+
+`workload-d kv=1024 T=64 cache=on` × 20 reps:
+- 17 / 20 healthy: 17.7 – 19.5 Mops/s (median 18.7)
+- 3 / 20 collapsed: rep 7, 12, 19 at **0.20 – 0.22 Mops/s**
+- Residual collapse rate: **15 %** — the 200 → 5 ms cap bounds the
+  damage but does NOT eliminate the underlying retry storm.
+
+### A.2 — Cross-workload verification under fix (T=64 cache=on)
+
+| Workload | KV=256 Mops/s | KV=1024 Mops/s |
+|---|---|---|
+| a | 8.51 | 5.88 |
+| b | 19.03 | 10.29 |
+| c | 18.73 | **0.448** (collapsed) |
+| d | **0.297** (collapsed) | 18.97 |
+| f | 11.99 | 13.53 |
+
+The fix helps broadly; residual collapses migrate to different cells
+across reps but always at ~0.20 – 0.45 Mops/s magnitude (not the
+pre-fix 0.005 Mops/s). The `iter-7A` 19-cell collapse cluster has
+been transformed from "200 ms-bounded balloons" into "5 ms-bounded
+mini-balloons" — 40× tail reduction, but unverified that any cell is
+fully eliminated.
+
+### A.3 — Probe-attributed mechanism of residual collapse
+
+Captured try 5 / 12 of `workload-d kv=1024 T=64 cache=on` at
+**0.218 Mops/s** (trans_wall_max = 0.918 s). Per-thread time-adjacent
+parse of 1.35 M frames across 132 probe files:
+
+| Stage transition | N | p50 µs | p99 µs | max µs | Note |
+|---|---|---|---|---|---|
+| **R3→R1** | 133 | **5005** | 10012 | 10012 | forward_spin_wait at the **5ms cap, ~100% hit rate on this thread** |
+| W12→R1 | 4 882 | 0.47 | 1.86 | 16876 | top tail = 3× consecutive 5ms timeouts |
+| R6→R1 | 123 605 | 0.46 | 2.86 | 15015 | top tail = 3× consecutive 5ms timeouts |
+| R6→W1 | 3 289 | 0.48 | 3.00 | 5011 | top tail = single 5ms timeout |
+| W1→W2 | 105 026 | 0.74 | 11.93 | 1225 | spinlock contention max (1.2 ms — matches µbench T=64) |
+| W10→W12 | 105 026 | 3.33 | 20.65 | 974 | invalidate batch wait |
+
+Top-5 max samples for `R3→R1`: ALL 5 entries from **cpu 77, single
+file `probe.193066.140081233917824`** — meaning **one specific worker
+thread** accumulated ~133 × 5005 µs = **666 ms of cumulative timeouts**.
+
+Sum 0.666 s ≈ observed trans_wall_max 0.918 s (the remainder is
+spinlock + ring waits piled on the same hot thread).
+
+### A.4 — Named cause of residual collapse
+
+The fix succeeded at its stated goal (200 ms → 5 ms = 40× tail cap).
+The **residual** collapse mechanism is now visible only because the
+cap stopped masking it:
+
+> **One worker, persistent forward-miss on a small key set, accumulates
+> ~100 timeouts at the cap.** Each timeout returns -EAGAIN (-11) and
+> the worker retries the same op. The retry hits the same forward-miss
+> condition. Bounded by 5 ms per attempt, the worker still spends
+> ~0.7 s on a single op-burst that should take ~5 µs.
+
+This is the iter-7A `QR8` "fail-loud propagation of -11" backlog item,
+now confirmed mechanistic-not-symptomatic.
+
+### A.5 — iter-9A backlog (re-prioritized after attribution)
+
+| # | Item | Why escalated |
+|---|---|---|
+| 1 | Fail-loud `-11` propagation in writer path | A.4 named this as the residual mechanism. ~50 LOC. |
+| 2 | `wait-for-slot-free` timeout cap (no current cap) | If forward keeps timing out, slot is held; cascades into other workers. ~200 LOC. |
+| 3 | Hot-key forward-loop detector | Per-worker counter of consecutive forwards on same key; on threshold, escalate to slow-path direct-DRAM read. |
+| 4 | Re-verify the 19-cell collapse cluster (5 reps each) | A.2 shows residual collapses still appear in the cluster — needs 5-rep × all 19 cells × workload-d sweep to quantify post-fix rate per cell. |
+
+### A.6 — Process notes
+
+- Capture: 5 of 12 retries; 0 OOM, 0 build issues; ~7 min wall.
+- Parse: 1.35 M frames in <5 s; per-thread time-adjacent grouping
+  (NOT op_id grouping — workload-d reuses keys).
+- TSC calibration: 2.000 GHz on g3 (kernel `tsc: Detected
+  2000.000 MHz`, calibrator confirmed 2.0002 GHz).
+- All raw probe files preserved at `g3:/tmp/probe8A_resid/` and
+  `g4:/tmp/probe8A_resid/` (17 MB sparse each, 132 files).
+- Attribution markdown: `/tmp/iter8A_resid_attribution.md` (local).
