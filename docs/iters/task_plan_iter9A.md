@@ -2,9 +2,10 @@
 
 **Author**: Claude (per user instruction 2026-05-04)
 **Date drafted**: 2026-05-04
+**Deadline**: **2026-05-10 18:00 CDT** (5+ day window — 时间无比充足，完全不需要为时间妥协任何实现选择)
 **Branch**: `feat/cxl-migration`
 **Predecessor**: `docs/iters/iter8A_summary_20260504.md`
-**Spec refs**: `docs/design_goals.md §I-XIII` (esp. §I11 N:1:1:N, §VI MESSAGE PAYLOAD POLICY), `docs/path_decomp_spec.md`, `docs/scaling_ycsb_spec.md`
+**Spec refs**: `docs/design_goals.md §I-XIII` (esp. §I11 N:1:1:N, §VI MESSAGE PAYLOAD POLICY), `docs/path_decomp_spec.md`, `docs/scaling_ycsb_spec.md`, `docs/protocol_a_architecture_blueprint.md`
 
 ---
 
@@ -20,7 +21,7 @@ iter-9A 用 4 个相互依赖的阶段一次性把这三个解掉：
 3. **path_decomp on workload-A**——验证新架构没引入新瓶颈
 4. **Full ycsb scaling sweep at all KV sizes**——iter-9A 的 official perf snapshot
 
-**核心约束**：value bytes **永远**不进 message ring；3 个 ring 各有独立命名的 sender + receiver 线程；T 网格 ≤ 64，64+ 留给 system threads + CPU pinning。
+**核心约束**：value bytes **永远**不进 message ring；3 个 ring 各有独立命名的 sender + receiver 线程；**所有线程都 CPU pinned** —— worker 在 cpu 0 至 (T-1)，6 个 system threads 从 cpu 64 起；blueprint + spec 文档**实时**随每 phase 更新（不是 Phase 5 一次性补）。
 
 ---
 
@@ -53,10 +54,39 @@ iter-9A 用 4 个相互依赖的阶段一次性把这三个解掉：
 |---|---|
 | **C1** Test KV=N 必须真的跨 host 传 N bytes（N ∈ {256,512,1024}）| Phase 1 加一个 cross-host BW microbench：单 cell N writes × N bytes 应等于 N×byte 实测 BW within 10% |
 | **C2** Message ring entries 内含 value bytes = 编译期 reject | `static_assert(sizeof(WriteEntry::payload) == 0)` 或 `payload` 字段不存在 |
-| **C3** 6 个 system threads 全部 CPU pinned，cpu 64+ 区间 | startup-time `pthread_setaffinity_np` + log 出实际 pin 后 cpu_id；运行中 perf sched 验证 sched delay <100 µs |
+| **C3** **所有线程 CPU pinned**: T 个 worker pinned to cpu 0..(T-1); 6 个 system threads pinned to cpu 64..69 | startup-time `pthread_setaffinity_np` + log 出实际 pin 后 cpu_id；运行中 perf sched 验证 sched delay <100 µs；no overlap between worker 区 (0..T-1) 和 system 区 (64..69) |
 | **C4** N:1:1:N 不再是 runtime no-op (iter-3A Finding-1) | startup-time assert: `phys_hosts_pr_ ≥ 2` if num_hosts_ ≥ 2，不满足直接 abort + log |
 | **C5** G1 hash-diff 在 Phase 1 + Phase 2 后各跑一次，必须 PASS | per `scaling_ycsb_spec §13 gate 1` |
 | **C6** path_decomp 在 Phase 3 必须按 `path_decomp_spec` 5 phase 全跑完 | `<dir>/per_stage_decomp.md` 32 stage 全覆盖 |
+| **C7** **Living docs 实时更新**: 每完成一个 sub-phase 就同步更新对应章节，不留到 Phase 5 一次性补。受影响文档清单见下方 §"Living docs to update" | 每个 commit 必须同时包含代码改动 + 对应 doc 改动；`git diff --stat` 每次 review 一次 |
+
+---
+
+## Living docs to update (per C7)
+
+每个 phase 完成时**同步**更新这些文档对应章节，不准囤到 Phase 5：
+
+| 文档 | iter-9A 中要改的章节 | 触发 phase |
+|---|---|---|
+| `docs/protocol_a_architecture_blueprint.md` | Part II §II.3 (Send invalidate I1..I8) → 拆成新 InvalRing sub-stage 描述 | Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part II §II.4 (Forward to owner) → 拆成 WriteRing + ReadRing 两个独立 sub-section + 重写 F1..F7 | Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part II §II.5 (CacheDispatcher loop D1..D5) → 改为 InvalReceiver loop | Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part II §II.6 (ForwardResponder loop) → 拆成 WriteReceiver + ReadReceiver 两个 loop sub-section | Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part III.1 cheat sheet → 加 N:1:1:N + staging arena 物理布局更新 | Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part II read path R3 + write path W1..W12 → 修正每个 stage 的 source code line number 引用（因为 ring 改了 + 新 sender thread）| Phase 2 wire 完 |
+| `docs/protocol_a_architecture_blueprint.md` | Part II value bytes 流向部分 → 明确 op 4 reader 直接 LD-CXL pool, op 1/2 走 staging copy（区分清楚两种 data plane） | Phase 1 + Phase 2 各一次 |
+| `docs/protocol_a_architecture_blueprint.md` | Snapshot version line | 每完一个 phase 一次 |
+| `docs/design_goals.md` | §I9 / §I11 → 加 "message ring entry MUST NOT contain value bytes" 不变式（C2 的 spec 形式）| Phase 2 wire 完 |
+| `docs/design_goals.md` | §X → 加 P6 "system thread CPU pinning is HARD requirement" + worker thread pinning convention | Phase 2 wire 完 |
+| `docs/design_goals.md` | §II 物理布局 → ForwardStaging[H] 实施细节落地 | Phase 2.B 完 |
+| `docs/design_goals.md` | §VI MESSAGE PAYLOAD POLICY 与 op 4 register-only / reader-direct read 明确对齐 | Phase 2 完 |
+| `docs/scaling_ycsb_spec.md` | §3 Parameters 表 → KV grid 加注脚 "now enforced by C1: byte pattern verify" | Phase 1 完 |
+| `docs/scaling_ycsb_spec.md` | §13 gate 6 → SOFT WARN → HARD FAIL（path_decomp 必须 ship） | Phase 5 |
+| `docs/path_decomp_spec.md` | §11 reference instances → 加 iter-9A path_decomp 输出作第二个 sample | Phase 3 完 |
+| `CLAUDE.md` | 加新 cautionary precedent (if iter-9A 暴露 anything novel) | Phase 5 |
+| `docs/fusee_cxl_progress.md` | iter-9A 进度行（每 phase 各一次累加更新） | 每 phase 完 |
+
+**强制规则**：每个 commit 的 staged file 列表里必须**至少**包含上面表格中**触发 phase 匹配**的 doc 改动，否则 commit 不应 merge。Phase 5 只做 `iter9A_summary_*.md` 撰写 + 上面 living doc 的最终一致性 review，**不补遗**。
 
 ---
 
@@ -129,6 +159,7 @@ inline int insert_u64(uint64_t key, uint64_t v) { return insert(key, &v, 8); }
 - [ ] G1 hash-diff PASS at KV ∈ {8, 256, 512, 1024} × workload {a, b, c, d, f}
 - [ ] cross-host BW microbench: N writes × N bytes ≈ N²×byte/sec ± 10%
 - [ ] smoke run workload-d kv=1024 T=4 cache=on healthy
+- [ ] **C7 living doc**: blueprint Part II value bytes 流向段 + scaling_ycsb_spec §3 注脚 同 commit 落地
 
 **预期 LOC**: ~400-600 (API 改动 + blockpool wire + cache_pool variant + test runner)
 
@@ -139,9 +170,15 @@ inline int insert_u64(uint64_t key, uint64_t v) { return insert(key, &v, 8); }
 ### 2.A — Three rings on CXL
 
 新建：
-- `src/cxl_write_ring.h`：carries op 1/2/3, no value (只 key + size + staging_offset + len)
-- `src/cxl_read_ring.h`：carries op 4 register-only request; response carries slot_pointer (不是 value bytes)
-- `src/cxl_inval_ring.h` 不变（已有，op 5 不携带 value）
+- `src/cxl_write_ring.h`：carries op 1/2/3 (Forward UPDATE/INSERT/DELETE)
+  - Request: `(key, op_kind, staging_host, staging_off, len)` — **no value bytes inline**
+  - Response: `(status,)` — owner copy 完成 + W7-W12 完成后 ACK
+  - Data plane: forwarder 写 value 到 `ForwardStaging[forwarder]` CXL 区；owner 从 staging 读 + 复制到自己 KvBlockpool（**iter-9A 保留 staging copy 模式；forwarder-pool-direct 推 iter-10A**）
+- `src/cxl_read_ring.h`：carries op 4 (CacheRegister)
+  - Request: `(key,)` — pure register-only, no value request
+  - Response: `(status, slot_pointer)` where `slot_pointer = (host_id_of_owner, blk_off, len, generation?)` — **only the pointer, not the value bytes**
+  - Data plane: reader 拿到 slot_pointer 后**自己**直接 LD-CXL `KvBlockpool[owner].block_at(blk_off)`，不经过 ring。owner 端 `ReadReceiver` 完全不读 value bytes，只更新 sharer_bitmap + 回 pointer
+- `src/cxl_inval_ring.h`：carries op 5 (Invalidate) — 沿用现有结构（已经 control-only，无 value）
 
 **编译期 assert**（C2）:
 ```cpp
@@ -203,11 +240,16 @@ Per-host 一共 3 个 sender (one per ring type)。
 
 线程 `pthread_setname_np()` 用上面的名字（`top -H` / `htop` 直接看到）。
 
-### 2.F — CPU pinning
+### 2.F — CPU pinning（**所有线程**）
 
-g3/g4 是 86 core/host. T 网格 max=64 → 22 cores 给 system thread.
+g3/g4 是 86 core/host. T_max=64 → 22 cores 给 system thread + spare.
 
-Pin 顺序：
+**Worker pinning**：T 个 worker 各自 pinned to cpu 0..(T-1).
+- T=1: worker[0] → cpu 0
+- T=64: worker[0..63] → cpu 0..63
+- 一对一，不留多线程争同核
+
+**System thread pinning**（不论 T）：
 - cpu 64: WriteSender
 - cpu 65: WriteReceiver
 - cpu 66: ReadSender
@@ -216,7 +258,15 @@ Pin 顺序：
 - cpu 69: InvalReceiver
 - cpu 70-85: spare（K-shard 扩展用 / future K-handler）
 
-Worker thread 仍 unpinned（OS 自由调度在 cpu 0-63），跟 iter-8A 一致。
+**实现**：
+- worker spawn 时 `pthread_setaffinity_np(t, CPU_SET={t-th-cpu})`
+- system thread 在 ring init 时同样 `pthread_setaffinity_np`
+- 启动 log 必须打印每个线程的 `pthread_self() → name → cpu_id` 一览表，方便 `top -H` 验证
+
+**反例 / 防错**：
+- 不允许任何 worker pin 到 cpu 64-69 区（启动 log 出 cpu_id 后人工/script verify）
+- 不允许 system thread overflow 到 worker 区
+- 反例只 abort 一次，不 retry — 启动失败比中途 sched conflict 好诊断
 
 ### 2.G — Startup-time invariant assertion (C4)
 
@@ -234,11 +284,13 @@ int CxlKvStoreA::attach(...) {
 
 ### Phase 2 Exit Criteria
 - [ ] 3 rings + 6 system threads spawned + named + pinned (verified via `top -H` + log line)
+- [ ] T 个 worker thread also pinned to cpu 0..(T-1); startup log dumps full pinning table; no overlap with system threads
 - [ ] G1 hash-diff PASS (variable KV from Phase 1) at all KV sizes × workloads
 - [ ] WriteEntry / ReadEntry / InvalEntry 编译期 assert no value bytes
 - [ ] Startup assert C4 verified by deliberately running with phys_hosts_pr=1 → must abort
+- [ ] **C7 living doc**: blueprint Part II §II.3-II.6 全部重写完毕 + design_goals.md §I9/§I11/§II/§VI/§X 同步更新，与 wire 改动同 commit
 
-**预期 LOC**: ~800-1200 (3 ring impl + sender/receiver threads + aggregator wire + staging arena + naming/pinning)
+**预期 LOC**: ~800-1200 (3 ring impl + sender/receiver threads + aggregator wire + staging arena + naming/pinning) + ~300-500 doc
 
 ---
 
@@ -295,6 +347,7 @@ path_decomp Phase 2 输出: 32-stage 表
 - [ ] `path_decomp_iter9A_<ts>/per_stage_decomp.md` 32-stage 全覆盖
 - [ ] 0 unjustified `✱ no data` row
 - [ ] 任何 flagged stage 有 Phase 3.1 fix 或明确 iter-10A backlog 条目
+- [ ] **C7 living doc**: `docs/path_decomp_spec.md §11 reference instances` 加 iter-9A 输出条目；blueprint Part III.3 加任何新发现的 failure mode
 
 ---
 
@@ -336,31 +389,44 @@ per `CLAUDE.md` 2026-05-03 update: 5 个 workload **每个**都要 T-doubling pr
 - [ ] Doubling-ratio gate PASS for all 5 workloads × 3 KV sizes
 - [ ] 0 regression vs iter-8A
 - [ ] iter-9A summary 写完
+- [ ] **C7 living doc**: `docs/fusee_cxl_progress.md` iter-9A 数字行就位；blueprint snapshot version 推到 "end of iter-9A"
 
 ---
 
-## Phase 5 — Codify + summary
+## Phase 5 — Final consistency review + summary
 
-### 5.A — Update `protocol_a_architecture_blueprint.md` (Living doc)
-- Part II: 新加 ReadRing / WriteRing / InvalRing 各自 sub-section (替换原先的 ForwardRing 单 section)
-- Part II: F1..F7 sub-stages 重新写（因为 F4-F6 现在被 split 到 ReadReceiver / WriteReceiver）
-- Part III.3: 新 failure modes（如果 Phase 3 揭露的）
-- Snapshot version → "end of iter-9A (<date>)"
+**注意：**§"Living docs to update" 表格中的所有更新**应该已在 Phase 1-4 各自完成时同步落地**（per C7）。Phase 5 的工作**不是补遗**，是：
 
-### 5.B — Update `design_goals.md`
-- §I9 / §I11 update：明确 message ring zero value bytes invariant
-- §X 加 P6 (?): "system thread CPU pinning 是 hard requirement"
+### 5.A — Cross-doc consistency review
+- `git log --since="iter9A start"` 列出所有 commit
+- 每个 living doc 看一眼：所有该改的章节都改过了？术语一致？code line number 引用正确？
+- 任何 inconsistency: 修复 + 加一个 `[iter9A-summary]` commit
 
-### 5.C — Update `scaling_ycsb_spec.md`
-- §13 gate 6 转 HARD（path_decomp 必须 ship）
-- KV grid 从 "256/512/1024" 改注脚为"with real value-byte transfer enforced by C1"
+### 5.B — `scaling_ycsb_spec.md` §13 gate 6 转 HARD
+- 之前 SOFT WARN，iter-9A 完成后转 HARD FAIL（per iter-8A spec codify）
+- 这是 iter-9A 末才能做的（前提是 path_decomp 已经被 iter-9A 用了一次）
 
-### 5.D — Update `path_decomp_spec.md` (if needed)
-- §11 加 iter-9A path_decomp 输出作第二个 reference instance
+### 5.C — Write `iter9A_summary_<date>.md`
 
-### 5.E — Write `iter9A_summary_<date>.md`
+按 `iter8A_summary_20260504.md` 模板：
+- TL;DR
+- Phase deliverables 表
+- Headline measurements vs iter-8A
+- Per-stage attribution table (from Phase 3 path_decomp)
+- iter-10A backlog（包括 forwarder-pool-direct memo + 任何 Phase 3 暴露但 in-iter 没 fix 的项）
+- Process retrospective
 
-按 `iter8A_summary_20260504.md` 模板。
+### 5.D — Memo iter-10A items
+新建 `docs/iters/iter10A_backlog_memo.md`，包含至少：
+- forwarder-pool-direct + cross-host pool generation + free-back ring（押后 idea）
+- Phase 3 暴露但超 200 LOC 的 fix 项（如果有）
+- 任何 iter-9A 中发现但与本 iter scope 不符的优化机会
+
+### Phase 5 Exit Criteria
+- [ ] All living docs 的 git diff 自洽（无章节引用旧 ring 名等等）
+- [ ] `iter9A_summary_<date>.md` written
+- [ ] `iter10A_backlog_memo.md` written
+- [ ] `scaling_ycsb_spec.md §13 gate 6` 标记 HARD
 
 ---
 
@@ -389,17 +455,22 @@ T=64 worker 全部在 DRAM enqueue，是 same-host MPSC pattern。µbench (iter-
 
 ---
 
-## Open questions for user
+## Open questions for user — RESOLVED 2026-05-04
 
-| QR | 问题 | 我的默认建议 |
+| QR | 问题 | 决议 |
 |---|---|---|
-| QR1 | iter-9A deadline | 待你定（基于上面 Phase 估算 ~2-3 天 wall）|
-| QR2 | "register ring" 语义确认：你说 op 5 走 register ring。op 5 是 invalidate 不是 register。是想要叫 InvalRing？还是有别的设计意图我没 catch？| **默认按 InvalRing 实施**（命名上跟操作语义对得上）。如果你想叫 RegisterRing 我可以改名但操作 = invalidate 不变 |
-| QR3 | T 网格上限 | **64**（保持 iter-8A 一致，给 22 cores 给 6 system thread + 16 spare）|
-| QR4 | reps in Phase 4 sweep | **1**（per scaling_ycsb_spec §3 standard；anomaly cell 5-rep verify 走 §13 gate 5）|
-| QR5 | Phase 3 path_decomp 只跑 workload-A 还是也跑其他 workload？| **iter-9A 只 A**（A 是历史最难 cell；其他 workload 通过 Phase 4 sweep 验证）|
-| QR6 | Phase 3.1 in-iter fix LOC budget | **200 LOC**（conservative；超过就推 iter-10A）|
-| QR7 | iter-10A backlog 文档现在起草 vs deferred 到 iter-9A 完成后？| **deferred**——iter-9A 跑完结果会大幅影响 iter-10A 优先级 |
+| ~~QR1~~ | iter-9A deadline | **CONFIRMED 2026-05-10 18:00 CDT**. 5+ 天窗口；用户明确 "时间无比充足，完全不用考虑任何实现的时间 constraint" → **不允许**用 deadline 压力作为 in-iter descope 的理由，路径选择以正确性 + spec 对齐为优先 |
+| ~~QR2~~ | op 5 ring 名 | **CONFIRMED InvalRing**（用户：typo，原意就是 InvalRing）|
+| ~~QR2 (suppl.)~~ | op 4 ReadRing 数据流 | **CONFIRMED**: op 4 走 ReadRing 但 message 只 register directory bitmap, 不携带 value bytes; reader 自己从 CXL `KvBlockpool[owner]` LD-CXL value bytes（per Phase 2.A 描述） |
+| ~~QR3~~ | T 网格上限 | **64**（保持 iter-8A 一致；workers cpu 0..(T-1), system threads cpu 64..69 不重叠）|
+| ~~QR4~~ | reps in Phase 4 sweep | **1**（per scaling_ycsb_spec §3 standard；anomaly cell 5-rep verify 走 §13 gate 5）|
+| ~~QR5~~ | Phase 3 path_decomp 只跑 workload-A 还是也跑其他 workload？| **iter-9A 只 A**（A 是历史最难 cell；其他 workload 通过 Phase 4 sweep 验证）|
+| ~~QR6~~ | Phase 3.1 in-iter fix LOC budget | **200 LOC**（conservative；超过就推 iter-10A）|
+| ~~QR7~~ | iter-10A backlog 文档现在起草 vs deferred 到 iter-9A 完成后？| **deferred**——iter-9A 跑完结果会大幅影响 iter-10A 优先级 |
+
+**额外 user 指令 2026-05-04**:
+- **所有线程都 CPU pinned**（worker + system thread 都要 pin；不只 system thread）—— 已落进 C3 + Phase 2.F
+- **Living docs 实时更新**（不是 Phase 5 一次性补）—— 已加入 C7 + 上面 §"Living docs to update" 详细映射表
 
 ---
 
