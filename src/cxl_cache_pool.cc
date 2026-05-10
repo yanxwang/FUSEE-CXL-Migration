@@ -27,6 +27,7 @@ int cache_pool_init(KvCachePool *pool, void *backing_mem,
     if (pthread_spin_init(&bk->spinlock, PTHREAD_PROCESS_SHARED) != 0) {
       return -2;
     }
+    bk->epoch.store(0, std::memory_order_relaxed);
     for (int i = 0; i < kCacheEntriesPerBucket; i++) {
       auto *e = &bk->entries[i];
       e->key.store(kCacheKeyEmpty, std::memory_order_relaxed);
@@ -105,6 +106,9 @@ int cache_pool_insert(KvCachePool *pool, uint64_t key,
   // Publish: clear stale before key (release ordering).
   target->stale.store(0, std::memory_order_release);
   target->key.store(key, std::memory_order_release);
+  // iter-10A Phase 1.B: bump bucket epoch so any TLS reader observing
+  // an older epoch detects stale and re-fetches.
+  bk->epoch.fetch_add(1, std::memory_order_release);
   pthread_spin_unlock(&bk->spinlock);
   return 0;
 }
@@ -116,6 +120,9 @@ void cache_pool_set_stale(KvCachePool *pool, uint64_t key) {
     auto *e = &bk->entries[i];
     if (e->key.load(std::memory_order_acquire) == key) {
       e->stale.store(1, std::memory_order_release);
+      // iter-10A Phase 1.B: bump bucket epoch so per-worker TLS
+      // caches detect stale on next lookup of any key in this bucket.
+      bk->epoch.fetch_add(1, std::memory_order_release);
       return;
     }
   }
@@ -131,6 +138,8 @@ void cache_pool_evict(KvCachePool *pool, uint64_t key) {
       e->key.store(kCacheKeyTomb, std::memory_order_release);
       e->stale.store(0, std::memory_order_relaxed);
       e->value_size = 0;
+      // iter-10A Phase 1.B: bump bucket epoch.
+      bk->epoch.fetch_add(1, std::memory_order_release);
       break;
     }
   }

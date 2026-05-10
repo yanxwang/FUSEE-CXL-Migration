@@ -49,6 +49,7 @@ set(source_fusee_cxl
     cxl_cache_pool.cc
     cxl_kv_blockpool_freelist.cc
     cxl_probe.cc
+    cxl_tls_cache.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ticket_lock_fusee_patched.c)
 

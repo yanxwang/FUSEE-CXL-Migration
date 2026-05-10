@@ -29,6 +29,7 @@
 #include "cxl_inval_ring.h"
 #include "cxl_op_aggregator.h"
 #include "cxl_read_ring.h"
+#include "cxl_tls_cache.h"
 #include "cxl_write_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
@@ -429,6 +430,33 @@ int main(int argc, char **argv) {
     CxlKvStoreA::set_worker_id(client_id);
   }
 
+  // iter-10A Phase 1.C: per-worker TlsCache init + attach. Sized via
+  // FUSEE_TLS_SIZE env (default 1024 — Zipf top-1024 covers ~30-40% of
+  // workload-A op). Set to 0 to disable TLS layer entirely and fall
+  // back to shared cache_pool only (iter-9A redo behavior).
+  TlsCache local_tls{};
+  uint32_t tls_size = 1024;
+  if (const char *e = getenv("FUSEE_TLS_SIZE"); e && e[0]) {
+    long v = atol(e);
+    if (v >= 0 && v <= (1L << 20)) tls_size = (uint32_t)v;
+  }
+  if (tls_size > 0) {
+    // round to next power of 2 if not already
+    uint32_t p2 = 64;
+    while (p2 < tls_size) p2 <<= 1;
+    tls_size = p2;
+    if (tls_cache_init(&local_tls, tls_size) == 0) {
+      CxlKvStoreA::set_thread_tls_cache(&local_tls);
+      fprintf(stderr,
+              "[A:tls] worker host=%d client=%d entries=%u (~%lu KiB)\n",
+              host_id, client_id, tls_size,
+              (unsigned long)tls_size * sizeof(TlsCacheEntry) / 1024);
+    } else {
+      fprintf(stderr, "[A:tls] WARN tls_cache_init failed for client=%d\n",
+              client_id);
+    }
+  }
+
   // Cross-host primary barrier: both hosts inited.
   // (Skipped entirely when num_hosts == 1 — no peer to wait for.)
   if (is_host_primary_client && num_hosts > 1) {
@@ -569,8 +597,14 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&me->done, 1ULL);
   flush_line(me); store_fence();
 
+  // iter-10A Phase 1.E: dump TLS cache stats if FUSEE_TLS_DIAG=1.
+  // Done before _exit so child processes also flush their own stats.
+  if (const char *e = getenv("FUSEE_TLS_DIAG"); e && e[0] == '1') {
+    if (local_tls.entries) tls_cache_dump(&local_tls, client_id);
+  }
   if (client_id != 0) {
     probe_flush();
+    if (local_tls.entries) tls_cache_destroy(&local_tls);
     _exit(0);
   }
   probe_flush();

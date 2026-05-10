@@ -28,6 +28,7 @@
 #include "cxl_op_aggregator.h"
 #include "cxl_read_ring.h"
 #include "cxl_sharding.h"
+#include "cxl_tls_cache.h"
 #include "cxl_write_ring.h"
 
 #include <atomic>
@@ -93,6 +94,12 @@ class CxlKvStoreA {
   // Workers without this set fall back to the DIRECT cross-host path,
   // i.e. the worker itself does fetch_add on the CXL ring.
   static void set_worker_id(int wid);
+
+  // iter-10A Phase 1.C: per-worker TlsCache attach. Worker calls this
+  // post-fork (after tls_cache_init). search() / execute_write_local
+  // route through TLS L1 if set; otherwise skip and go straight to
+  // shared cache_pool L2.
+  static void set_thread_tls_cache(TlsCache *tls);
 
   void stop_write_sender();
   void stop_read_sender();

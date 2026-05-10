@@ -17,6 +17,16 @@ extern "C" {
 
 namespace fusee {
 
+// iter-9A Phase 2.C — per-worker thread-local aggregator-routing id.
+// iter-10A Phase 1.C — per-worker thread-local TlsCache pointer.
+// Both declared at file scope (TU-level) so execute_write_local() and
+// search() can read them; setters set_worker_id / set_thread_tls_cache
+// live further down. -1 / nullptr means "feature off for this thread".
+namespace {
+thread_local int       g_aggr_worker_id = -1;
+thread_local TlsCache *g_thread_tls     = nullptr;
+}  // namespace
+
 namespace {
 
 // CoW slot publish: write value bytes to a freshly allocated CXL block
@@ -308,10 +318,23 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // Step 7: own cache.
   if (op_kind == kOpKindDelete) {
     cache_pool_evict(cache_, key);
+    // iter-10A Phase 1.C: also evict from TLS so subsequent reads
+    // don't see the deleted entry. (cache_pool_evict already bumped
+    // bucket_epoch so any TLS reader without our explicit evict would
+    // also detect stale on next access — this is belt + suspenders.)
+    if (g_thread_tls) tls_evict(g_thread_tls, key);
   } else {
     cache_pool_insert(cache_, key,
                       reinterpret_cast<const uint8_t *>(value),
                       value_len);
+    // iter-10A Phase 1.C: populate TLS L1 with the just-written value
+    // and the post-bump epoch so this thread's next read hits TLS.
+    if (g_thread_tls) {
+      uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
+      tls_insert(g_thread_tls, key,
+                 reinterpret_cast<const uint8_t *>(value),
+                 value_len, cur_epoch);
+    }
   }
   PROBE_OP("W12", key);
   return 0;
@@ -411,14 +434,12 @@ void CxlKvStoreA::stop_read_receiver() {
   read_receiver_.join();
 }
 
-// iter-9A Phase 2.C — per-worker thread-local id. Set by each forked
-// worker process post-fork (before any forward_*/send_invalidate
-// call). -1 means "no aggregator routing; use direct".
-namespace {
-thread_local int g_aggr_worker_id = -1;
-}  // namespace
-
+// iter-9A Phase 2.C: per-worker aggregator routing id setter.
+// iter-10A Phase 1.C: per-worker TLS cache attach setter.
+// Backing thread_locals declared at file top (so execute_write_local
+// can read them).
 void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
+void CxlKvStoreA::set_thread_tls_cache(TlsCache *tls) { g_thread_tls = tls; }
 
 // ---- Aggregator-routed worker dispatchers ----
 //
@@ -1110,11 +1131,36 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   if (key == kEmptyKey) return -1;
   PROBE_OP("R1", key);
 
-  // Fast path: local cache lookup with stale check.
+  // iter-10A Phase 1.C: TLS L1 lookup (per-worker private DRAM, 0
+  // cross-core MESI traffic on hit). Only enabled if worker called
+  // set_thread_tls_cache(). bucket_epoch is a single 8-B atomic load
+  // — small cross-core cost vs the 16-cacheline value_bytes memcpy
+  // that shared cache_pool_lookup does on hot Zipf keys.
+  if (g_thread_tls) {
+    uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
+    uint8_t tls_buf[kForwardStagingSlotBytes];
+    uint32_t tls_sz = 0;
+    if (tls_lookup(g_thread_tls, key, cur_epoch, tls_buf,
+                   sizeof(tls_buf), &tls_sz)) {
+      PROBE_OP("R0_tls_hit", key);
+      if (out_len) *out_len = tls_sz;
+      uint32_t copy_len = tls_sz < buf_len ? tls_sz : buf_len;
+      if (out_buf && copy_len > 0) std::memcpy(out_buf, tls_buf, copy_len);
+      PROBE_OP("R6", key);
+      return 0;
+    }
+  }
+
+  // Fast path L2: shared cache_pool lookup with stale check.
   uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
     PROBE_OP("R2hit", key);
+    // populate TLS L1 with the freshly-fetched value + current epoch
+    if (g_thread_tls) {
+      uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
+      tls_insert(g_thread_tls, key, buf, sz, cur_epoch);
+    }
     if (out_len) *out_len = sz;
     uint32_t copy_len = sz < buf_len ? sz : buf_len;
     if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
@@ -1136,6 +1182,12 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     // §AP15: populate cache ONLY after register ACK (we got it here).
     if (vlen > 0) {
       cache_pool_insert(cache_, key, v, vlen);
+      // Also populate TLS L1 with new epoch (cache_pool_insert just
+      // bumped it).
+      if (g_thread_tls) {
+        uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
+        tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
+      }
     }
     if (out_len) *out_len = vlen;
     uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
@@ -1176,6 +1228,11 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
       uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
       if (out_buf && copy_len > 0) std::memcpy(out_buf, v, copy_len);
       cache_pool_insert(cache_, key, v, vlen);
+      // Populate TLS L1 with new epoch.
+      if (g_thread_tls) {
+        uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
+        tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
+      }
       PROBE_OP("R6", key);
       return 0;
     }

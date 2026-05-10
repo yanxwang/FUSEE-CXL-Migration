@@ -48,7 +48,15 @@ constexpr int kCacheEntriesPerBucket = 4;
 struct alignas(64) KvCacheBucket {
   host_local_spinlock_t spinlock;       // 4 B
   uint32_t _pad_a;                      // 4 B  -> 8 total
-  uint8_t  _pad_b[56];                  // pad spinlock to its own cacheline
+  // iter-10A Phase 1.B: per-bucket epoch counter for TlsCache
+  // invalidation. Bumped on insert / evict / set_stale. TlsCache
+  // reader compares its observed_epoch against this; mismatch =
+  // stale entry, fall through to shared cache_pool_lookup (and
+  // refresh TLS with new epoch). Single 8-B atomic on its own
+  // cacheline — false-shared with spinlock by design (both header
+  // metadata; spinlock is not in TLS path).
+  std::atomic<uint64_t> epoch;          // 8 B  -> 16 total
+  uint8_t  _pad_b[48];                  // pad to 64
   KvCacheEntry entries[kCacheEntriesPerBucket];
 };
 
@@ -91,9 +99,26 @@ int cache_pool_insert(KvCachePool *pool, uint64_t key, const uint8_t *value,
 // Set stale flag (release-store). Idempotent. No-op if key not present.
 void cache_pool_set_stale(KvCachePool *pool, uint64_t key);
 
+// iter-10A Phase 1.B: get current bucket epoch for `key`. Used by TLS
+// cache callers to verify they have a fresh observation.
+inline uint64_t cache_pool_bucket_epoch(const KvCachePool *pool, uint64_t key);
+
 // Evict by key (physical delete; tombstones the slot). Used by LRU
 // background sweeper or explicit clear. Idempotent.
 void cache_pool_evict(KvCachePool *pool, uint64_t key);
+
+// Inline epoch accessor — needs sharding_hash_u64 visible.
+}  // namespace fusee
+
+#include "cxl_sharding.h"
+
+namespace fusee {
+
+inline uint64_t cache_pool_bucket_epoch(const KvCachePool *pool,
+                                        uint64_t key) {
+  uint32_t b = (uint32_t)(sharding_hash_u64(key) & pool->mask);
+  return pool->buckets[b].epoch.load(std::memory_order_acquire);
+}
 
 }  // namespace fusee
 
