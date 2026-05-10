@@ -83,7 +83,7 @@ int main() {
     uint64_t k = rng() | 1ULL;  // avoid 0
     uint64_t v = rng();
     keys.push_back(k); vals.push_back(v);
-    int rc = store.insert(k, v);
+    int rc = store.insert_u64(k, v);
     if (rc != 0) {
       // Bucket may be full -> retry with another key
       if (rc == -3 || rc == -2) { i--; keys.pop_back(); vals.pop_back(); continue; }
@@ -94,7 +94,7 @@ int main() {
   // Search all
   for (uint32_t i = 0; i < keys.size(); i++) {
     uint64_t got;
-    if (store.search(keys[i], &got) != 0 || got != vals[i]) {
+    if (store.search_u64(keys[i], &got) != 0 || got != vals[i]) {
       fprintf(stderr, "FAIL: search(%lu) miss/mismatch\n", keys[i]);
       return 1;
     }
@@ -103,7 +103,7 @@ int main() {
   // Update half
   for (uint32_t i = 0; i < keys.size(); i += 2) {
     vals[i] = ~vals[i];
-    if (store.update(keys[i], vals[i]) != 0) {
+    if (store.update_u64(keys[i], vals[i]) != 0) {
       fprintf(stderr, "FAIL: update(%lu)\n", keys[i]); return 1;
     }
   }
@@ -111,7 +111,7 @@ int main() {
   // Search again
   for (uint32_t i = 0; i < keys.size(); i++) {
     uint64_t got;
-    if (store.search(keys[i], &got) != 0 || got != vals[i]) {
+    if (store.search_u64(keys[i], &got) != 0 || got != vals[i]) {
       fprintf(stderr, "FAIL: post-update search(%lu) got=%lx exp=%lx\n",
               keys[i], got, vals[i]);
       return 1;
@@ -126,7 +126,7 @@ int main() {
   }
   for (uint32_t i = 1; i < keys.size(); i += 2) {
     uint64_t got;
-    if (store.search(keys[i], &got) == 0) {
+    if (store.search_u64(keys[i], &got) == 0) {
       fprintf(stderr, "FAIL: removed key %lu still found\n", keys[i]);
       return 1;
     }
@@ -134,7 +134,7 @@ int main() {
   // Even-index keys still present
   for (uint32_t i = 0; i < keys.size(); i += 2) {
     uint64_t got;
-    if (store.search(keys[i], &got) != 0 || got != vals[i]) {
+    if (store.search_u64(keys[i], &got) != 0 || got != vals[i]) {
       fprintf(stderr, "FAIL: post-remove search(%lu)\n", keys[i]);
       return 1;
     }

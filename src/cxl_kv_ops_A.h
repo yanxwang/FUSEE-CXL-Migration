@@ -66,15 +66,40 @@ class CxlKvStoreA {
   void stop_responder();
   void stop_dispatcher();
 
-  // Public KV API. The value parameter is u64 for source-compat with
-  // existing tests / runner. Internally each value occupies a full
-  // pool->block_size() block (the u64 is written at offset 0 of the
-  // block; remaining bytes are unused/uninitialized). Search returns
-  // the first 8 bytes of the block.
-  int insert(uint64_t key, uint64_t value);
-  int update(uint64_t key, uint64_t value);
+  // Public KV API (iter-9A Phase 1: variable-length value).
+  //
+  // value_len is bytes; must be ≤ pool->block_size(). The blockpool
+  // is sized at attach time with one block_size class. Variable
+  // length within that ceiling is supported.
+  //
+  // search() copies up to buf_len bytes into out_buf and writes the
+  // actual value length to *out_len. If out_len is NULL the actual
+  // length is dropped. If buf_len < value_len, only buf_len bytes
+  // copied (truncating read; out_len reports the full length).
+  int insert(uint64_t key, const void *value, uint32_t value_len);
+  int update(uint64_t key, const void *value, uint32_t value_len);
   int remove(uint64_t key);
-  int search(uint64_t key, uint64_t *out);
+  int search(uint64_t key, void *out_buf, uint32_t buf_len,
+             uint32_t *out_len);
+
+  // Source-compat helpers for legacy 8-byte u64 callers
+  // (protocol_a_local_test, protocol_a_rw_race_test,
+  // protocol_a_invariant_check). New code SHOULD use the variable-
+  // length API above; these helpers exist solely to keep iter-8A
+  // tests passing without churn.
+  int insert_u64(uint64_t key, uint64_t v) {
+    return insert(key, &v, sizeof(v));
+  }
+  int update_u64(uint64_t key, uint64_t v) {
+    return update(key, &v, sizeof(v));
+  }
+  int search_u64(uint64_t key, uint64_t *out) {
+    if (!out) return -1;
+    uint32_t got = 0;
+    int rc = search(key, out, sizeof(uint64_t), &got);
+    if (rc == 0 && got != sizeof(uint64_t)) return -1;
+    return rc;
+  }
 
   uint32_t num_buckets() const { return num_buckets_; }
   int host_id() const { return host_id_; }
@@ -87,11 +112,15 @@ class CxlKvStoreA {
   // and by the responder (on behalf of a peer-host forwarder). Acquires
   // directory spinlock, broadcasts OP_INVALIDATE to non-self sharers,
   // CoW publish to CXL, updates directory, updates own cache.
-  int execute_write_local(uint64_t key, uint64_t new_value, int op_kind);
+  // value=nullptr + value_len=0 is the DELETE convention.
+  int execute_write_local(uint64_t key, const void *value,
+                          uint32_t value_len, int op_kind);
 
   // Cross-host helpers (Phase 7 + 8). All use ForwardRingMatrix slots.
-  int forward_to_owner(uint32_t owner, uint64_t key, uint64_t value, int op_kind);
-  int forward_cache_register(uint32_t owner, uint64_t key, uint64_t *out_value);
+  int forward_to_owner(uint32_t owner, uint64_t key,
+                       const void *value, uint32_t value_len, int op_kind);
+  int forward_cache_register(uint32_t owner, uint64_t key,
+                             void *out_buf, uint32_t buf_len, uint32_t *out_len);
 
   // iter-5A: invalidate goes on its own channel (InvalRing) rather
   // than ForwardRing, to break the responder-context circular wait.

@@ -160,11 +160,11 @@ int main(int argc, char **argv) {
 
   if (host_id == 0) {
     // Writer: insert K=1, then UPDATE K to 2, 3, ... up to kIters.
-    if (store.insert(K, 1) != 0) {
+    if (store.insert_u64(K, 1) != 0) {
       fprintf(stderr, "insert failed\n"); return 1;
     }
     for (uint64_t i = 2; i <= kIters; i++) {
-      int rc = store.update(K, i);
+      int rc = store.update_u64(K, i);
       if (rc != 0) {
         fprintf(stderr, "update failed at i=%lu rc=%d\n", i, rc);
         return 1;
@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
     // First wait for writer to insert K (so first read succeeds).
     while (now_ns() < deadline_ns) {
       uint64_t v = 0;
-      if (store.search(K, &v) == 0) { prev = v; reads++; break; }
+      if (store.search_u64(K, &v) == 0) { prev = v; reads++; break; }
       __builtin_ia32_pause();
     }
     if (reads == 0) {
@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
     }
     while (now_ns() < deadline_ns) {
       uint64_t v = 0;
-      int rc = store.search(K, &v);
+      int rc = store.search_u64(K, &v);
       if (rc != 0) { misses++; continue; }
       reads++;
       if (v < prev) violations++;

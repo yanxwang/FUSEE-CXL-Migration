@@ -129,9 +129,17 @@ int CxlKvStoreA::attach(void *bucket_base, uint32_t num_buckets,
 
 // Owner-self write. Called by local insert/update/remove and by
 // responder on behalf of a remote forwarder. Steps follow spec §V.
-int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
-                                     int op_kind) {
+//
+// iter-9A Phase 1: variable-length value bytes. value/value_len
+// is the user payload. value=nullptr+value_len=0 is the DELETE
+// convention. value_len > pool_->block_size() is rejected.
+int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
+                                     uint32_t value_len, int op_kind) {
   if (key == kEmptyKey) return -1;
+  if (op_kind != kOpKindDelete) {
+    if (!value || value_len == 0) return -1;
+    if (pool_ && value_len + 4 > pool_->block_size()) return -5;
+  }
   PROBE_OP("W1", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
@@ -203,11 +211,14 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
     retire_slot(slot);
     PROBE_OP("W9", key);
   } else if (pool_ == nullptr) {
-    // Inline u64 fallback (Protocol A degenerate mode).
-    publish_slot_cow(slot, key, new_value);
+    // Inline u64 fallback (legacy / Protocol A degenerate mode).
+    // Only valid when caller passes 8 bytes; truncated otherwise.
+    uint64_t inline_v = 0;
+    std::memcpy(&inline_v, value, value_len < 8 ? value_len : 8);
+    publish_slot_cow(slot, key, inline_v);
     PROBE_OP("W9", key);
   } else {
-    // Full blockpool CoW path.
+    // Full blockpool CoW path with real value_len bytes.
     uint64_t blk_off = pool_->alloc();
     PROBE_OP("W7", key);
     static thread_local int trace = -1;
@@ -223,15 +234,38 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
       slot_directory_unlock(de);
       return -4;
     }
-    pool_->write(blk_off, &new_value, sizeof(new_value));
+    // iter-9A: store 4B length header, then value bytes. search()
+    // reads the 4B header to know how much to copy back.
+    uint8_t buf[4096];  // local stack scratch (max block 4 KB)
+    uint32_t total = 4 + value_len;
+    if (total > sizeof(buf)) {
+      slot_directory_unlock(de);
+      return -5;
+    }
+    std::memcpy(buf, &value_len, 4);
+    std::memcpy(buf + 4, value, value_len);
+    pool_->write(blk_off, buf, total);
     PROBE_OP("W8", key);
     uint8_t fp = key_fingerprint(key);
     uint8_t sc = kSizeClassBlock256;
+    // iter-9A: encode value_len in slot.value high bits via separate
+    // field. For now keep slot encoding compatible (size_class hardcoded
+    // to 256); reader uses pool->block_size() OR a separate value_len
+    // field. We pack value_len into low bits of fp temporarily — TODO
+    // expand slot to 24B in iter-10A. For Phase 1 we keep 16B slot and
+    // store value_len alongside in directory entry (de->version repurposed
+    // is bad; simpler: store value_len in cache_pool entry only and
+    // owner reads it via slot.encoded high bits).
+    //
+    // Concrete iter-9A Phase 1 encoding: keep 16B slot; reader fetches
+    // pool block at blk_off + reads "stored value_len" from a small
+    // header at the start of each block (4B header + value bytes).
+    // pool_->write writes header+value; pool_->read returns header.
     uint64_t encoded = cxl_slot_pack(blk_off, sc, fp);
     if (trace) {
       fprintf(stderr,
-              "[A:trace h%d] write key=%lx op=%d blk_off=%lx encoded=%lx\n",
-              host_id_, key, op_kind, blk_off, encoded);
+              "[A:trace h%d] write key=%lx op=%d blk_off=%lx len=%u\n",
+              host_id_, key, op_kind, blk_off, value_len);
     }
     publish_slot_cow(slot, key, encoded);
     PROBE_OP("W9", key);
@@ -255,38 +289,38 @@ int CxlKvStoreA::execute_write_local(uint64_t key, uint64_t new_value,
     cache_pool_evict(cache_, key);
   } else {
     cache_pool_insert(cache_, key,
-                      reinterpret_cast<const uint8_t *>(&new_value),
-                      sizeof(new_value));
+                      reinterpret_cast<const uint8_t *>(value),
+                      value_len);
   }
   PROBE_OP("W12", key);
   return 0;
 }
 
-int CxlKvStoreA::insert(uint64_t key, uint64_t value) {
+int CxlKvStoreA::insert(uint64_t key, const void *value, uint32_t value_len) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, value, kOpKindInsert);
+    return forward_to_owner(owner, key, value, value_len, kOpKindInsert);
   }
-  return execute_write_local(key, value, kOpKindInsert);
+  return execute_write_local(key, value, value_len, kOpKindInsert);
 }
 
-int CxlKvStoreA::update(uint64_t key, uint64_t value) {
+int CxlKvStoreA::update(uint64_t key, const void *value, uint32_t value_len) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, value, kOpKindUpdate);
+    return forward_to_owner(owner, key, value, value_len, kOpKindUpdate);
   }
-  return execute_write_local(key, value, kOpKindUpdate);
+  return execute_write_local(key, value, value_len, kOpKindUpdate);
 }
 
 int CxlKvStoreA::remove(uint64_t key) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, 0, kOpKindDelete);
+    return forward_to_owner(owner, key, nullptr, 0, kOpKindDelete);
   }
-  return execute_write_local(key, 0, kOpKindDelete);
+  return execute_write_local(key, nullptr, 0, kOpKindDelete);
 }
 
 // ---- Cross-host forwarding via ForwardRingMatrix ----
@@ -315,8 +349,10 @@ void CxlKvStoreA::stop_responder() {
 
 // Generic ForwardEntry enqueue + spin. Used by all 5 op_kind values.
 int CxlKvStoreA::forward_to_owner(uint32_t owner, uint64_t key,
-                                  uint64_t value, int op_kind) {
+                                  const void *value, uint32_t value_len,
+                                  int op_kind) {
   if (!fr_) return -10;
+  if (value_len > kForwardEntryPayloadBytes) return -5;
   ForwardRing *ring = &fr_->rings[host_id_][owner];
   uint64_t my_op = req_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
@@ -338,8 +374,15 @@ int CxlKvStoreA::forward_to_owner(uint32_t owner, uint64_t key,
   }
 
   e->key = key;
-  e->value = value;
+  e->value_len = value_len;
   e->op_kind = (uint8_t)op_kind;
+  if (value && value_len > 0) {
+    std::memcpy(e->payload, value, value_len);
+    // Flush payload cachelines.
+    for (uint32_t off = 0; off < value_len; off += 64) {
+      flush_line((void *)(e->payload + off));
+    }
+  }
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
@@ -503,7 +546,8 @@ void CxlKvStoreA::cache_dispatcher_loop() {
 }
 
 int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
-                                        uint64_t *out_value) {
+                                        void *out_buf, uint32_t buf_len,
+                                        uint32_t *out_len) {
   if (!fr_) return -10;
   ForwardRing *ring = &fr_->rings[host_id_][owner];
   uint64_t my_op = req_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -524,7 +568,7 @@ int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
   }
 
   e->key = key;
-  e->value = 0;
+  e->value_len = 0;
   e->op_kind = kOpKindCacheRegister;
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
@@ -537,15 +581,22 @@ int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
   int rc = forward_spin_wait(e, op_id, &status);
   if (rc != 0) return rc;
   if (status == 0) {
-    // Read e->value AFTER we've spun and confirmed resp_op_id matches
-    // and BEFORE the slot is freed. forward_spin_wait already cleared
-    // req_op_id; we must read value before that, but since we got
-    // status from forward_spin_wait, it has already read. Re-read e:
-    // actually the spin_wait reads e but does not return value. We
-    // need the value field from the responder's response. Re-fetch:
+    // Re-fetch entry to read response payload (resp_value_len_ + payload).
     flush_line((void *)e);
     full_fence();
-    *out_value = e->value;
+    uint32_t resp_len = (uint32_t)e->resp_value_len_;
+    if (resp_len > 0 && resp_len <= kForwardEntryPayloadBytes) {
+      // Flush payload cachelines to refetch from CXL.
+      for (uint32_t off = 0; off < resp_len; off += 64) {
+        flush_line((void *)(e->payload + off));
+      }
+      full_fence();
+      uint32_t copy_len = resp_len < buf_len ? resp_len : buf_len;
+      if (out_buf && copy_len > 0) std::memcpy(out_buf, e->payload, copy_len);
+      if (out_len) *out_len = resp_len;
+    } else {
+      if (out_len) *out_len = 0;
+    }
   }
   return status;
 }
@@ -557,9 +608,16 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
     case kOpKindDelete: {
       int rc;
       if (e->op_kind == kOpKindDelete) {
-        rc = execute_write_local(e->key, 0, kOpKindDelete);
+        rc = execute_write_local(e->key, nullptr, 0, kOpKindDelete);
       } else {
-        rc = execute_write_local(e->key, e->value, (int)e->op_kind);
+        // iter-9A: read varlen payload from inline ForwardEntry.
+        // Flush payload to ensure we see CXL-fresh bytes.
+        for (uint32_t off = 0; off < e->value_len; off += 64) {
+          flush_line((void *)(e->payload + off));
+        }
+        full_fence();
+        rc = execute_write_local(e->key, e->payload, e->value_len,
+                                 (int)e->op_kind);
       }
       e->status = rc;
       break;
@@ -581,16 +639,13 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
       }
       if (found < 0) {
         e->status = -1;
-        e->value = 0;
+        e->resp_value_len_ = 0;
         break;
       }
 
       SlotDirectoryEntry *de =
           slot_directory_entry(dir_, b, (uint32_t)found);
       slot_directory_lock(de);
-
-      // Identify requesting host from op_id high byte (encoded in
-      // forward_cache_register as ((host_id_ + 1) << 56)).
       uint64_t op_id = e->req_op_id.load(std::memory_order_relaxed);
       int requester = (int)((op_id >> 56) & 0xFF) - 1;
       if (requester >= 0 && requester < num_hosts_ &&
@@ -601,21 +656,38 @@ void CxlKvStoreA::responder_handle(ForwardEntry *e) {
       uint64_t encoded = bucket->slots[found].value;
       slot_directory_unlock(de);
 
-      // Decode block ptr (size_class > 0) OR fall back to inline u64
-      // (size_class == 0, legacy/test mode with pool_ == nullptr).
+      // iter-9A: read varlen value from blockpool. Header layout:
+      //   pool block @ blk_off: [4B value_len][value bytes]
       uint8_t sc = cxl_slot_size_class(encoded);
       if (sc == kSizeClassInline || pool_ == nullptr) {
-        e->value = encoded;
+        // Legacy inline u64: copy 8 bytes into payload.
+        std::memcpy(e->payload, &encoded, 8);
+        e->resp_value_len_ = 8;
+        // Flush payload cacheline so requester sees fresh bytes.
+        flush_line((void *)e->payload);
         e->status = 0;
       } else {
         uint64_t blk_off = cxl_slot_blk_off(encoded);
         if (blk_off != 0) {
-          uint64_t v = 0;
-          pool_->read(blk_off, &v, sizeof(v));
-          e->value = v;
+          uint8_t hdr_buf[4];
+          pool_->read(blk_off, hdr_buf, 4);
+          uint32_t vlen = 0;
+          std::memcpy(&vlen, hdr_buf, 4);
+          if (vlen == 0 || vlen > kForwardEntryPayloadBytes) {
+            e->status = -1;
+            e->resp_value_len_ = 0;
+            break;
+          }
+          uint8_t valbuf[kForwardEntryPayloadBytes];
+          pool_->read(blk_off + 4, valbuf, vlen);
+          std::memcpy(e->payload, valbuf, vlen);
+          for (uint32_t off = 0; off < vlen; off += 64) {
+            flush_line((void *)(e->payload + off));
+          }
+          e->resp_value_len_ = vlen;
           e->status = 0;
         } else {
-          e->value = 0;
+          e->resp_value_len_ = 0;
           e->status = -1;
         }
       }
@@ -662,17 +734,19 @@ void CxlKvStoreA::responder_loop() {
   probe_flush();
 }
 
-int CxlKvStoreA::search(uint64_t key, uint64_t *out) {
+int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
+                        uint32_t *out_len) {
   if (key == kEmptyKey) return -1;
   PROBE_OP("R1", key);
 
   // Fast path: local cache lookup with stale check.
-  uint8_t buf[8];
-  uint32_t sz;
+  uint8_t buf[kForwardEntryPayloadBytes];
+  uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
     PROBE_OP("R2hit", key);
-    if (sz != sizeof(uint64_t)) return -1;
-    std::memcpy(out, buf, sizeof(uint64_t));
+    if (out_len) *out_len = sz;
+    uint32_t copy_len = sz < buf_len ? sz : buf_len;
+    if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
     PROBE_OP("R6", key);
     return 0;
   }
@@ -683,15 +757,18 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) {
   // Cross-host miss: §I9 register-then-fill via OP_CACHE_REGISTER.
   if (owner != (uint32_t)host_id_ && fr_) {
     PROBE_OP("R3", key);
-    uint64_t v = 0;
-    int rc = forward_cache_register(owner, key, &v);
+    uint8_t v[kForwardEntryPayloadBytes];
+    uint32_t vlen = 0;
+    int rc = forward_cache_register(owner, key, v, sizeof(v), &vlen);
     if (rc != 0) return rc;
     PROBE_OP("R4", key);
     // §AP15: populate cache ONLY after register ACK (we got it here).
-    cache_pool_insert(cache_, key,
-                      reinterpret_cast<const uint8_t *>(&v),
-                      sizeof(v));
-    *out = v;
+    if (vlen > 0) {
+      cache_pool_insert(cache_, key, v, vlen);
+    }
+    if (out_len) *out_len = vlen;
+    uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+    if (out_buf && copy_len > 0) std::memcpy(out_buf, v, copy_len);
     PROBE_OP("R6", key);
     return 0;
   }
@@ -706,18 +783,29 @@ int CxlKvStoreA::search(uint64_t key, uint64_t *out) {
     if (bucket->slots[s].key == key) {
       uint64_t encoded = bucket->slots[s].value;
       uint8_t sc = cxl_slot_size_class(encoded);
-      uint64_t v;
+      uint8_t v[kForwardEntryPayloadBytes];
+      uint32_t vlen = 0;
       if (sc == kSizeClassInline || pool_ == nullptr) {
-        v = encoded;
+        std::memcpy(v, &encoded, 8);
+        vlen = 8;
       } else {
         uint64_t blk_off = cxl_slot_blk_off(encoded);
-        v = 0;
-        if (blk_off != 0) pool_->read(blk_off, &v, sizeof(v));
+        if (blk_off != 0) {
+          uint8_t hdr_buf[4];
+          pool_->read(blk_off, hdr_buf, 4);
+          std::memcpy(&vlen, hdr_buf, 4);
+          if (vlen > 0 && vlen <= kForwardEntryPayloadBytes) {
+            pool_->read(blk_off + 4, v, vlen);
+          } else {
+            return -1;
+          }
+        }
       }
-      *out = v;
-      cache_pool_insert(cache_, key,
-                        reinterpret_cast<const uint8_t *>(&v),
-                        sizeof(v));
+      if (out_len) *out_len = vlen;
+      uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+      if (out_buf && copy_len > 0) std::memcpy(out_buf, v, copy_len);
+      cache_pool_insert(cache_, key, v, vlen);
+      PROBE_OP("R6", key);
       return 0;
     }
   }

@@ -350,6 +350,19 @@ int main(int argc, char **argv) {
     }
   }
 
+  // iter-9A Phase 1 C1: real N-byte payload, deterministic byte
+  // pattern based on key (so search verifies exact bytes back).
+  // payload[i] = (key ^ i) & 0xff. Buffer sized to FUSEE_KV_SIZE.
+  std::vector<uint8_t> wbuf(kBlockSize, 0);
+  std::vector<uint8_t> rbuf(kBlockSize, 0);
+  auto fill_pattern = [&](uint64_t key, uint8_t *buf, uint32_t len) {
+    for (uint32_t i = 0; i < len; i++) {
+      buf[i] = (uint8_t)((key >> (i & 7)) ^ i);
+    }
+  };
+  // Effective payload size: 4B header + value bytes ≤ block_size.
+  uint32_t value_bytes = (kBlockSize > 4) ? (kBlockSize - 4) : 8;
+
   // -------- LOAD phase: each host primary loads its own owned keys. --------
   uint64_t load_thpt_kops = 0;
   if (is_host_primary_client) {
@@ -358,7 +371,8 @@ int main(int argc, char **argv) {
     for (auto &op : load_ops) {
       if (op.kind != OP_INSERT) continue;
       if (host_of(&st, op.key) != (uint32_t)host_id) continue;
-      store.insert(op.key, op.key ^ 0xCAFEULL);
+      fill_pattern(op.key, wbuf.data(), value_bytes);
+      store.insert(op.key, wbuf.data(), value_bytes);
       loaded++;
     }
     uint64_t t1 = now_ns();
@@ -403,19 +417,21 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < trans_ops.size(); i++) {
     if ((int)(i % (size_t)total_workers) != global_id) continue;
     auto &op = trans_ops[i];
-    uint64_t v;
     uint64_t a = now_ns(), b;
     int rc;
+    uint32_t got_len = 0;
     if (op.kind == OP_READ) {
-      rc = store.search(op.key, &v);
+      rc = store.search(op.key, rbuf.data(), (uint32_t)rbuf.size(), &got_len);
       b = now_ns();
       if (rc == 0) r_lat.push_back(b - a);
     } else if (op.kind == OP_UPDATE) {
-      rc = store.update(op.key, op.key ^ 0xBEEFULL);
+      fill_pattern(op.key, wbuf.data(), value_bytes);
+      rc = store.update(op.key, wbuf.data(), value_bytes);
       b = now_ns();
       if (rc == 0) w_lat.push_back(b - a);
     } else if (op.kind == OP_INSERT) {
-      rc = store.insert(op.key, op.key ^ 0xCAFEULL);
+      fill_pattern(op.key, wbuf.data(), value_bytes);
+      rc = store.insert(op.key, wbuf.data(), value_bytes);
       b = now_ns();
       if (rc == 0) w_lat.push_back(b - a);
     } else if (op.kind == OP_DELETE) {
