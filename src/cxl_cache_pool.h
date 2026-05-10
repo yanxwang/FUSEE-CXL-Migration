@@ -38,8 +38,15 @@ struct alignas(64) KvCacheEntry {
   uint8_t  _pad_a[3];
   uint32_t value_size;                // 4 B
   std::atomic<uint64_t> lru_epoch;    // 8 B; relaxed RMW on hit
+  // iter-10A Phase 2: per-entry seqlock — even = stable / readable,
+  // odd = mid-update / inserter exclusively owns. CAS even→odd to
+  // claim, store back even+1 to publish. Replaces per-bucket spinlock
+  // (cxl_cache_pool 1.B legacy). Readers loop "load seq → load fields
+  // → re-load seq" and treat seq mismatch as miss-retry.
+  std::atomic<uint32_t> seq;          // 4 B
+  uint32_t _pad_seq;                  // 4 B
   uint8_t  value_bytes[kCacheValueMaxBytes];  // 1024 B inline
-  // total = 8 + 4 + 4 + 8 + 1024 = 1048 B; pad implicit by alignas(64)
+  // total = 8 + 4 + 4 + 8 + 4 + 4 + 1024 = 1056 B; alignas pads to 1088
 };
 
 // Bucket = chain of N entries; collision resolved by linear scan.
