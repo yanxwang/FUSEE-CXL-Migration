@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
@@ -520,6 +521,35 @@ int main(int argc, char **argv) {
       flush_line(&hdr->init_done); full_fence();
       if ((CACHELINE_LOAD(&hdr->init_done) & peer_bit) != 0) break;
       __builtin_ia32_pause();
+    }
+  }
+
+  // iter-9A C5 hash-diff (Phase 1+2 verification): optional bucket-array
+  // dump for cross-host byte comparison. Only after cross-host barrier 3
+  // synced both hosts so all writes are CXL-visible. Slot values encode
+  // owner-host blk_off; under §I9 strict-A linearizability, both hosts'
+  // CXL view of the bucket array MUST be byte-identical after barrier 3.
+  if (is_host_primary_client) {
+    const char *dump_path = getenv("FUSEE_FINAL_STATE_DUMP");
+    if (dump_path && dump_path[0]) {
+      for (uint32_t b = 0; b < num_buckets; b++) {
+        flush_line(&buckets[b]);
+        flush_line(reinterpret_cast<char *>(&buckets[b]) + 64);
+      }
+      full_fence();
+      FILE *fp = fopen(dump_path, "wb");
+      if (fp) {
+        size_t bytes = sizeof(CxlKvBucket) * (size_t)num_buckets;
+        fwrite(buckets, 1, bytes, fp);
+        fclose(fp);
+        fprintf(stderr,
+                "[h%d] FUSEE_FINAL_STATE_DUMP wrote %zu bytes to %s\n",
+                host_id, bytes, dump_path);
+      } else {
+        fprintf(stderr,
+                "[h%d] FUSEE_FINAL_STATE_DUMP fopen %s failed: %s\n",
+                host_id, dump_path, strerror(errno));
+      }
     }
   }
 
