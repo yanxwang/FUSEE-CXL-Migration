@@ -25,6 +25,7 @@
 #include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
+#include "cxl_op_aggregator.h"
 #include "cxl_read_ring.h"
 #include "cxl_sharding.h"
 #include "cxl_write_ring.h"
@@ -78,6 +79,25 @@ class CxlKvStoreA {
   int enable_invalidate(InvalRingMatrix *ir, bool init_region,
                         bool spawn_dispatcher);
 
+  // iter-9A Phase 2.C — wire the per-worker DRAM aggregator + 3 named
+  // CPU-pinned sender threads. `ar` lives in DRAM (MAP_SHARED|
+  // MAP_ANONYMOUS pre-fork); senders are spawned on the primary
+  // client only. After this returns, workers should call
+  // set_worker_id(client_id) on each forked process so they hash to
+  // their slot[*][worker_id]. WriteSender pinned cpu 64, ReadSender
+  // 66, InvalSender 68.
+  int enable_senders(AggregatorRegion *ar, int num_workers,
+                     bool spawn_senders);
+
+  // Per-worker thread-local register (post-fork in each child).
+  // Workers without this set fall back to the DIRECT cross-host path,
+  // i.e. the worker itself does fetch_add on the CXL ring.
+  static void set_worker_id(int wid);
+
+  void stop_write_sender();
+  void stop_read_sender();
+  void stop_inval_sender();
+
   // iter-9A Phase 2.G — C4 startup assert (replaces the obsolete
   // phys_hosts_pr_ ≥ 2 check). In multi-host mode (num_hosts_ ≥ 2)
   // ALL of {wr_, rr_, fs_, ir_} must be non-null before any
@@ -92,7 +112,11 @@ class CxlKvStoreA {
   void stop_read_receiver();
   void stop_inval_receiver();
   // Convenience: same shape as B/C — stop all spawned threads.
+  // Senders BEFORE receivers so any in-flight forwards complete.
   void stop() {
+    stop_write_sender();
+    stop_read_sender();
+    stop_inval_sender();
     stop_write_receiver();
     stop_read_receiver();
     stop_inval_receiver();
@@ -155,17 +179,25 @@ class CxlKvStoreA {
                           uint32_t value_len, int op_kind);
 
   // Cross-host helpers — iter-9A Phase 2.A 3-ring split.
-  // Op 1/2/3 go via WriteRing + ForwardStaging.
+  // Public dispatchers: route through aggregator if enabled, else
+  // call the direct CXL forward path.
   int forward_write(uint32_t owner, uint64_t key,
                     const void *value, uint32_t value_len, int op_kind);
-  // Op 4 goes via ReadRing; reader pulls value bytes from owner's
-  // CxlKvBlockPool via pool_->read (no value bytes on the message ring).
   int forward_read(uint32_t owner, uint64_t key,
                    void *out_buf, uint32_t buf_len, uint32_t *out_len);
-
-  // iter-5A: invalidate goes on its own channel (InvalRing) — one of
-  // the three iter-9A rings.
   int send_invalidate(uint32_t target_host, uint64_t key);
+
+  // Direct CXL paths — used by senders and (when aggregator is
+  // disabled) by workers themselves. Receivers calling
+  // execute_write_local also call send_invalidate_direct (NEVER the
+  // aggregator path, since receivers are not workers).
+  int forward_write_direct(uint32_t owner, uint64_t key,
+                           const void *value, uint32_t value_len,
+                           int op_kind);
+  int forward_read_direct(uint32_t owner, uint64_t key,
+                          void *out_buf, uint32_t buf_len,
+                          uint32_t *out_len);
+  int send_invalidate_direct(uint32_t target_host, uint64_t key);
 
   // Receiver dispatch — one handler per ring (iter-9A Phase 2.D).
   // src is the originating host id (decoded from req_op_id high bits).
@@ -189,8 +221,17 @@ class CxlKvStoreA {
   ForwardStagingMatrix  *fs_ = nullptr;
   InvalRingMatrix       *ir_ = nullptr;
 
-  // iter-9A Phase 2.D-E: 3 named system threads per host (the senders
-  // are added in Phase 2.C as a follow-on commit).
+  // iter-9A Phase 2.C: aggregator + 3 sender threads.
+  AggregatorRegion *aggr_ = nullptr;
+  int               num_aggr_workers_ = 0;
+  std::thread       write_sender_;
+  std::thread       read_sender_;
+  std::thread       inval_sender_;
+  std::atomic<bool> write_sender_stop_{false};
+  std::atomic<bool> read_sender_stop_{false};
+  std::atomic<bool> inval_sender_stop_{false};
+
+  // iter-9A Phase 2.D-E: 3 named system threads per host.
   std::thread write_receiver_;
   std::thread read_receiver_;
   std::thread inval_receiver_;
@@ -205,6 +246,10 @@ class CxlKvStoreA {
   void write_receiver_loop();
   void read_receiver_loop();
   void inval_receiver_loop();
+
+  void write_sender_loop();
+  void read_sender_loop();
+  void inval_sender_loop();
 };
 
 // op_kind values for write-path messages (WriteEntry::op_kind):

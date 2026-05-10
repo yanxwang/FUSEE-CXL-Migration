@@ -27,6 +27,7 @@
 #include "cxl_forward_staging.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
+#include "cxl_op_aggregator.h"
 #include "cxl_read_ring.h"
 #include "cxl_write_ring.h"
 #include "cxl_kv_blockpool.h"
@@ -270,6 +271,21 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // iter-9A Phase 2.C: per-host aggregator region, mmap'd PRE-FORK
+  // (MAP_SHARED|MAP_ANONYMOUS) so all workers + the 3 sender threads
+  // see the same DRAM. Zeroed once by the host primary.
+  void *aggr_mem = mmap(nullptr, aggregator_region_bytes(),
+                        PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (aggr_mem == MAP_FAILED) {
+    fprintf(stderr, "mmap aggregator failed\n");
+    return 1;
+  }
+  AggregatorRegion *aggr = reinterpret_cast<AggregatorRegion *>(aggr_mem);
+  if (host_id == 0) {
+    std::memset(aggr, 0, aggregator_region_bytes());
+  }
+
   // Fork num_threads-1 children. Parent has client_id=0.
   std::vector<pid_t> children;
   int client_id = 0;
@@ -332,6 +348,9 @@ int main(int argc, char **argv) {
     if (store.enable_invalidate(ir, /*init=*/true, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_invalidate failed\n"); return 1;
     }
+    if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {
+      fprintf(stderr, "primary enable_senders failed\n"); return 1;
+    }
     if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
@@ -353,6 +372,16 @@ int main(int argc, char **argv) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       return 1;
     }
+    // Every non-primary child attaches the aggregator (no spawn) so
+    // worker threads route through it. Primary child calls
+    // enable_senders(spawn=true) below.
+    if (!(host_id == 1 && client_id == 0)) {
+      if (store.enable_senders(aggr, num_threads, /*spawn=*/false) != 0) {
+        fprintf(stderr, "[h%d c%d] enable_senders(noSpawn) failed\n",
+                host_id, client_id);
+        return 1;
+      }
+    }
     if (host_id == 1 && client_id == 0) {
       // host 1 primary: attach (no init) the 3-ring + staging mesh and
       // spawn its three named receivers.
@@ -370,6 +399,9 @@ int main(int argc, char **argv) {
       if (store.enable_invalidate(ir, /*init=*/false, /*spawn=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_invalidate failed\n"); return 1;
       }
+      if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {
+        fprintf(stderr, "[h1 primary] enable_senders failed\n"); return 1;
+      }
       if (store.assert_n_to_n_active() != 0) return 1;
       uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
       CACHELINE_STORE(&hdr->init_done, cur | 0x2ULL);
@@ -385,6 +417,13 @@ int main(int argc, char **argv) {
   }
   (void)cache_on;  // Protocol A's cache is always-on; FUSEE_CACHE no-op
                    // here, retained only for SUMMARY.log compat.
+
+  // iter-9A Phase 2.C: register this worker thread's id into the
+  // aggregator. Worker forward_*/send_invalidate calls now route
+  // through aggregator->slots[*][client_id]. Receiver/sender threads
+  // never call set_worker_id, so they fall back to the direct CXL
+  // path (preserving deadlock-freedom for receiver-context invalidates).
+  CxlKvStoreA::set_worker_id(client_id);
 
   // Cross-host primary barrier: both hosts inited.
   // (Skipped entirely when num_hosts == 1 — no peer to wait for.)

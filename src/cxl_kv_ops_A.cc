@@ -411,6 +411,225 @@ void CxlKvStoreA::stop_read_receiver() {
   read_receiver_.join();
 }
 
+// iter-9A Phase 2.C — per-worker thread-local id. Set by each forked
+// worker process post-fork (before any forward_*/send_invalidate
+// call). -1 means "no aggregator routing; use direct".
+namespace {
+thread_local int g_aggr_worker_id = -1;
+}  // namespace
+
+void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
+
+// ---- Aggregator-routed worker dispatchers ----
+//
+// Each routes through aggregator_->slots[k][g_aggr_worker_id] when
+// the aggregator is wired AND the calling thread has set its worker
+// id. Otherwise falls back to the direct CXL path. Receivers (which
+// never call set_worker_id) automatically take the direct path —
+// important so receivers calling send_invalidate cannot starve on
+// the aggregator's single-sender bottleneck.
+int CxlKvStoreA::forward_write(uint32_t owner, uint64_t key,
+                               const void *value, uint32_t value_len,
+                               int op_kind) {
+  if (!aggr_ || g_aggr_worker_id < 0 ||
+      g_aggr_worker_id >= num_aggr_workers_) {
+    return forward_write_direct(owner, key, value, value_len, op_kind);
+  }
+  int wid = g_aggr_worker_id;
+  AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, wid);
+  // Wait for slot empty (initial state == 0 = empty after region zero).
+  while (s->state.load(std::memory_order_acquire) != kAggrEmpty) {
+    __builtin_ia32_pause();
+  }
+  if (value && value_len > 0) {
+    std::memcpy(aggregator_value_buf(aggr_, kAggrRingKindWrite, wid),
+                value, value_len);
+  }
+  s->key = key;
+  s->op_kind = (uint8_t)op_kind;
+  s->value_len = value_len;
+  s->dst_host = owner;
+  s->state.store(kAggrPending, std::memory_order_release);
+  while (s->state.load(std::memory_order_acquire) != kAggrDone) {
+    __builtin_ia32_pause();
+  }
+  int rc = s->result_status;
+  s->state.store(kAggrEmpty, std::memory_order_release);
+  return rc;
+}
+
+int CxlKvStoreA::forward_read(uint32_t owner, uint64_t key,
+                              void *out_buf, uint32_t buf_len,
+                              uint32_t *out_len) {
+  if (!aggr_ || g_aggr_worker_id < 0 ||
+      g_aggr_worker_id >= num_aggr_workers_) {
+    return forward_read_direct(owner, key, out_buf, buf_len, out_len);
+  }
+  int wid = g_aggr_worker_id;
+  AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, wid);
+  while (s->state.load(std::memory_order_acquire) != kAggrEmpty) {
+    __builtin_ia32_pause();
+  }
+  s->key = key;
+  s->op_kind = (uint8_t)kOpKindCacheRegister;
+  s->value_len = 0;
+  s->dst_host = owner;
+  s->state.store(kAggrPending, std::memory_order_release);
+  while (s->state.load(std::memory_order_acquire) != kAggrDone) {
+    __builtin_ia32_pause();
+  }
+  int rc = s->result_status;
+  // For aggregator-routed reads, the sender writes the response value
+  // bytes into value_bufs[Read][wid]; copy out to caller and reset.
+  if (rc == 0) {
+    uint32_t vlen = s->value_len;
+    uint8_t *src = aggregator_value_buf(aggr_, kAggrRingKindRead, wid);
+    if (out_len) *out_len = vlen;
+    uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+    if (out_buf && copy_len > 0) std::memcpy(out_buf, src, copy_len);
+  } else {
+    if (out_len) *out_len = 0;
+  }
+  s->state.store(kAggrEmpty, std::memory_order_release);
+  return rc;
+}
+
+int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
+  if (!aggr_ || g_aggr_worker_id < 0 ||
+      g_aggr_worker_id >= num_aggr_workers_) {
+    return send_invalidate_direct(target_host, key);
+  }
+  int wid = g_aggr_worker_id;
+  AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, wid);
+  while (s->state.load(std::memory_order_acquire) != kAggrEmpty) {
+    __builtin_ia32_pause();
+  }
+  s->key = key;
+  s->dst_host = target_host;
+  s->state.store(kAggrPending, std::memory_order_release);
+  while (s->state.load(std::memory_order_acquire) != kAggrDone) {
+    __builtin_ia32_pause();
+  }
+  int rc = s->result_status;
+  s->state.store(kAggrEmpty, std::memory_order_release);
+  return rc;
+}
+
+// ---- Sender threads — single producer per CXL ring ----
+//
+// Each sender owns the fetch_add on its CXL ring's tail; workers no
+// longer contend on it. Polls all worker slots round-robin.
+void CxlKvStoreA::write_sender_loop() {
+  while (!write_sender_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int w = 0; w < num_aggr_workers_; w++) {
+      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, w);
+      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
+      uint8_t *value = aggregator_value_buf(aggr_, kAggrRingKindWrite, w);
+      int rc = forward_write_direct(s->dst_host, s->key,
+                                    value, s->value_len,
+                                    (int)s->op_kind);
+      s->result_status = rc;
+      s->state.store(kAggrDone, std::memory_order_release);
+      did_work = true;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
+}
+
+void CxlKvStoreA::read_sender_loop() {
+  while (!read_sender_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int w = 0; w < num_aggr_workers_; w++) {
+      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, w);
+      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
+      uint8_t *vbuf = aggregator_value_buf(aggr_, kAggrRingKindRead, w);
+      uint32_t got_len = 0;
+      int rc = forward_read_direct(s->dst_host, s->key, vbuf,
+                                   kAggrSlotValueBytes, &got_len);
+      s->result_status = rc;
+      s->value_len = got_len;
+      s->state.store(kAggrDone, std::memory_order_release);
+      did_work = true;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
+}
+
+void CxlKvStoreA::inval_sender_loop() {
+  while (!inval_sender_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int w = 0; w < num_aggr_workers_; w++) {
+      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, w);
+      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
+      int rc = send_invalidate_direct(s->dst_host, s->key);
+      s->result_status = rc;
+      s->state.store(kAggrDone, std::memory_order_release);
+      did_work = true;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
+}
+
+int CxlKvStoreA::enable_senders(AggregatorRegion *ar, int num_workers,
+                                bool spawn_senders) {
+  if (!ar) return -1;
+  if (num_workers <= 0 || num_workers > kMaxAggrWorkers) return -2;
+  aggr_ = ar;
+  num_aggr_workers_ = num_workers;
+  if (spawn_senders) {
+    write_sender_stop_.store(false, std::memory_order_relaxed);
+    read_sender_stop_.store(false, std::memory_order_relaxed);
+    inval_sender_stop_.store(false, std::memory_order_relaxed);
+    write_sender_ = std::thread([this]() {
+      pthread_setname_np(pthread_self(), "WriteSender");
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(64, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] WriteSender pid=%d tid=%lu pinned cpu=64 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->write_sender_loop();
+    });
+    read_sender_ = std::thread([this]() {
+      pthread_setname_np(pthread_self(), "ReadSender");
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(66, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] ReadSender pid=%d tid=%lu pinned cpu=66 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->read_sender_loop();
+    });
+    inval_sender_ = std::thread([this]() {
+      pthread_setname_np(pthread_self(), "InvalSender");
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(68, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] InvalSender pid=%d tid=%lu pinned cpu=68 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->inval_sender_loop();
+    });
+  }
+  return 0;
+}
+
+void CxlKvStoreA::stop_write_sender() {
+  if (!write_sender_.joinable()) return;
+  write_sender_stop_.store(true, std::memory_order_release);
+  write_sender_.join();
+}
+
+void CxlKvStoreA::stop_read_sender() {
+  if (!read_sender_.joinable()) return;
+  read_sender_stop_.store(true, std::memory_order_release);
+  read_sender_.join();
+}
+
+void CxlKvStoreA::stop_inval_sender() {
+  if (!inval_sender_.joinable()) return;
+  inval_sender_stop_.store(true, std::memory_order_release);
+  inval_sender_.join();
+}
+
 int CxlKvStoreA::assert_n_to_n_active() {
   // iter-9A Phase 2.G — C4 startup assert (replaces obsolete
   // phys_hosts_pr_ check). In multi-host mode the entire 3-ring +
@@ -432,11 +651,11 @@ int CxlKvStoreA::assert_n_to_n_active() {
   return 0;
 }
 
-// iter-9A Phase 2.A — write-path forward. Splits value bytes off the
-// message ring into ForwardStaging arena (C2 compliance).
-int CxlKvStoreA::forward_write(uint32_t owner, uint64_t key,
-                               const void *value, uint32_t value_len,
-                               int op_kind) {
+// iter-9A Phase 2.A direct path — write-path forward. Splits value
+// bytes off the message ring into ForwardStaging arena (C2 compliance).
+int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
+                                      const void *value, uint32_t value_len,
+                                      int op_kind) {
   if (!wr_ || !fs_) return -10;
   if (value_len > kForwardStagingSlotBytes) return -5;
   WriteRing *ring = &wr_->rings[host_id_][owner];
@@ -493,7 +712,12 @@ int CxlKvStoreA::forward_write(uint32_t owner, uint64_t key,
 // Producer reserves a slot via fetch_add(tail) + flush, writes the
 // key, and spins on resp_op_id (which the dispatcher_loop on the
 // target host will set). No interaction with the WriteRing or ReadRing.
-int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
+//
+// iter-9A Phase 2.C: this is the DIRECT path. Workers call the
+// public send_invalidate which routes through the aggregator if
+// enabled. Receivers (write_handler → execute_write_local)
+// ALWAYS call this direct version (they are not workers).
+int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   if (!ir_) return -10;  // invalidate channel not enabled
   InvalRing *ring = &ir_->rings[host_id_][target_host];
   uint64_t my_op = inval_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -647,13 +871,13 @@ void CxlKvStoreA::inval_receiver_loop() {
   probe_flush();
 }
 
-// iter-9A Phase 2.A — read-path register-then-fill via ReadRing.
-// Producer enqueues control-only req; ReadReceiver responds with
-// (status, owner_blk_off, value_len). Reader pulls value bytes
+// iter-9A Phase 2.A direct path — read-path register-then-fill via
+// ReadRing. Producer enqueues control-only req; ReadReceiver responds
+// with (status, owner_blk_off, value_len). Reader pulls value bytes
 // directly via pool_->read — no value bytes on the message ring.
-int CxlKvStoreA::forward_read(uint32_t owner, uint64_t key,
-                              void *out_buf, uint32_t buf_len,
-                              uint32_t *out_len) {
+int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
+                                     void *out_buf, uint32_t buf_len,
+                                     uint32_t *out_len) {
   if (!rr_) return -10;
   ReadRing *ring = &rr_->rings[host_id_][owner];
   uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
