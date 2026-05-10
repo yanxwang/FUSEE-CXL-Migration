@@ -88,19 +88,28 @@ exclusion is thereby eliminated by construction}: no two hosts ever
 contend for the same slot, so the per-slot commit reduces to a
 single-host atomic operation that C1 already permits.
 
-\textbf{(P3) Inter-host messages flow through a fixed
-$N{:}1{:}1{:}N$ aggregation} (addresses C1, scaling). Workers within
-a host first feed messages into a per-host \emph{sender} thread
-(an $N{:}1$ DRAM MPSC); the sender is the sole producer on a
-per-pair SPSC ring in CXL; the destination's \emph{receiver} thread
-is the sole consumer and fans the message out to local workers
-($1{:}N$ DRAM). This serves three purposes: it avoids the
-$O(H^2 \cdot N^2)$ wiring of all-to-all worker-to-worker channels;
-it gives invalidations a single arrival point per host so that one
-acknowledgement covers all same-host sharers; and it provides the
-natural serialization point at which a writer awaits invalidation
-completion before committing (the strict-linearizability barrier of
-\S{}3.4.4).
+\textbf{(P3) Cross-host messages flow through a two-channel
+$N{:}1{:}1{:}N$ aggregation pipeline} (addresses C1, scaling).
+Workers do not produce on the CXL rings directly. Each request
+travels through three stages: \emph{(i)}~the worker enqueues into
+a per-host DRAM aggregator buffer ($N{:}1$, hardware-coherent);
+\emph{(ii)}~a dedicated \emph{sender} thread drains the buffer and
+is the sole producer on the host's outbound CXL SPSC ring;
+\emph{(iii)}~on the destination, a \emph{receiver} thread is the
+sole consumer and dispatches each message to its local effect on
+directory or cache state ($1{:}N$ within the host). We split the
+channel by message function: a \emph{WriteForwardRing} carries
+cross-shard write traffic (data path), and a
+\emph{SlotDirRequestRing} carries every message that touches a
+sharer directory entry---cache registration, eviction, and
+invalidation (coherence path). Each channel has its own dedicated
+thread pair per host so data and coherence traffic cannot block
+one another. This pipeline (a)~shields workers from CXL
+atomic-RMW contention on ring counters (only the sender thread
+touches the ring; each ring is therefore true SPSC),
+(b)~avoids the $O(H^2 \cdot N^2)$ all-to-all worker wiring, and
+(c)~provides the natural serialisation point for the writer's
+invalidation barrier (\S{}3.4.4).
 
 Figure~\ref{fig:arch} shows the resulting layered system.
 \S{}3.3 details the on-CXL and on-DRAM data layout; \S{}3.4 walks
@@ -122,14 +131,17 @@ coordination metadata.
 \toprule
 \textbf{Region} & \textbf{Tier} & \textbf{Approx.\ size} \\
 \midrule
-Hashtable          & CXL  & $B \cdot S \cdot 24$\,B \\
-KV blockpool       & CXL  & workload-dependent \\
-Forward staging    & CXL  & $\sim$1\,MB per forwarder \\
-SPSC rings + acks  & CXL  & $\propto H^2$ \\
+Hashtable                          & CXL  & $B \cdot S \cdot 24$\,B \\
+KV blockpool                       & CXL  & workload-dependent \\
+Forward staging                    & CXL  & $\sim$1\,MB per host \\
+WriteForwardRing $[H{\times}H]$    & CXL  & $\propto H^2$ \\
+SlotDirRequestRing $[H{\times}H]$  & CXL  & $\propto H^2$ \\
 \midrule
-Sharding table     & DRAM & $H$ entries, read-only \\
-Slot directory     & DRAM & $B \cdot S \cdot 16$\,B \\
-Local KV cache     & DRAM & LRU-bounded \\
+Sharding table                     & DRAM & $H$ entries, read-only \\
+Slot directory                     & DRAM & $B \cdot S \cdot 16$\,B \\
+Local KV cache                     & DRAM & LRU-bounded \\
+Write-forward aggregator           & DRAM & per-host MPSC \\
+Directory-request aggregator       & DRAM & per-host MPSC \\
 \bottomrule
 \end{tabular}
 \caption{Physical memory layout. CXL = single region shared by all
@@ -156,20 +168,26 @@ worker processes.}
   serialise on a DRAM-resident free-list spinlock. Cross-host
   blockpool contention is therefore zero by construction.
 \item \textbf{Forward staging}: per-host buffer holding the value
-  bytes for cross-shard \emph{write} operations whose owner is
-  remote. The host's sender thread (\S{}3.2 P3), acting as
-  \emph{forwarder} in this role, writes the bytes here before
-  enqueueing the forward message; the message itself carries only
-  \emph{(op, key, pointer, size)} and never inline value bytes
-  (\S{}3.4.1). The staging slot is freed on the forward
-  acknowledgement. Reads do not stage---their cross-host message
-  is a cache-registration request carrying no value bytes.
-\item \textbf{SPSC rings + acks}: one SPSC message ring per ordered
-  host pair (no per-worker dimension), paired with a separate
-  acknowledgement counter that the receiver advances after
-  processing each message; ring head/tail manage slot reuse, while
-  the ack counter signals protocol-level completion to the sender.
-  Together they carry all $N{:}1{:}1{:}N$ traffic (\S{}3.5).
+  bytes of cross-shard \emph{write} operations whose owner is
+  remote. A worker NT-streams the value bytes here before
+  enqueueing a write-forward request into the local aggregator
+  (\S{}3.4.1); the WriteForwardRing entry that eventually carries
+  the request holds only \emph{(op, key, staging pointer, size)}
+  and never inline value bytes. Reads do not stage---their
+  cross-host message is a cache-registration request carrying no
+  value bytes.
+\item \textbf{WriteForwardRing} [$H \times H$]: SPSC channel
+  carrying cross-shard write requests. Sole producer is this
+  host's write-forward sender thread; sole consumer is the
+  destination host's write-forward receiver thread (\S{}3.5).
+  Ring entries carry only \emph{(op, key, staging pointer,
+  size)}; the value bytes themselves live in Forward staging.
+\item \textbf{SlotDirRequestRing} [$H \times H$]: SPSC channel
+  carrying every coherence-related message that mutates a sharer
+  entry---cache registration, eviction, and invalidation. Each
+  ring slot doubles as the request-response pair (the consumer
+  fills a response field after applying the message), so no
+  separate ack channel is required.
 \end{itemize}
 
 \paragraph{Per-host DRAM regions.}
@@ -182,6 +200,15 @@ worker processes.}
 \item \textbf{Local KV cache}: hashmap (key $\to$ local value
   buffer) with a co-located 1-byte stale flag; serves cache-hit
   reads at DRAM latency.
+\item \textbf{Write-forward aggregator}: per-host DRAM MPSC into
+  which workers enqueue cross-shard write requests; the
+  write-forward sender thread drains it onto the WriteForwardRing
+  (the $N{:}1$ stage of the $N{:}1{:}1{:}N$ pipeline,
+  \S{}3.2 P3).
+\item \textbf{Directory-request aggregator}: per-host DRAM MPSC
+  for coherence requests bound to a remote owner (registration,
+  eviction, invalidation); the directory-channel sender thread
+  drains it onto the SlotDirRequestRing.
 \end{itemize}
 
 \paragraph{Slot directory: a software snoop filter with back
