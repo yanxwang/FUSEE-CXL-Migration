@@ -27,7 +27,7 @@ static int test_single_thread() {
   LocalAggregatorRegion region;
   std::memset(&region, 0, sizeof(region));
   aggr_region_init(&region);
-  LocalAggregatorQueue *q = &region.queue;
+  LocalAggregatorQueue *q = &region.queues[0];
 
   const int N = 1000;
   for (int i = 0; i < N; i++) {
@@ -82,7 +82,7 @@ static int test_mpsc_concurrent() {
   LocalAggregatorRegion region;
   std::memset(&region, 0, sizeof(region));
   aggr_region_init(&region);
-  LocalAggregatorQueue *q = &region.queue;
+  LocalAggregatorQueue *q = &region.queues[0];
 
   const int kThreads = 4;
   const int kPerThread = 250;
@@ -144,7 +144,7 @@ static int test_backpressure() {
   LocalAggregatorRegion region;
   std::memset(&region, 0, sizeof(region));
   aggr_region_init(&region);
-  LocalAggregatorQueue *q = &region.queue;
+  LocalAggregatorQueue *q = &region.queues[0];
 
   // Fill queue to depth without draining; first kAggrQueueDepth must
   // succeed; the (depth+1)th enqueue must block + 5ms timeout.

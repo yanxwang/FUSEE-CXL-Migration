@@ -65,6 +65,8 @@ class CxlKvStoreA {
   // CXL region).
   void stop_responder();
   void stop_dispatcher();
+  // Convenience: same shape as B/C — stop all spawned threads.
+  void stop() { stop_responder(); stop_dispatcher(); }
 
   // Public KV API (iter-9A Phase 1: variable-length value).
   //

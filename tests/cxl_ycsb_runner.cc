@@ -34,6 +34,7 @@
 #include "cxl_hashtable.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_same_host_queue.h"
+#include "cxl_bucket_lock.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -575,6 +576,17 @@ int main(int argc, char **argv) {
       // Inline u64 fast path (iter-3 behaviour byte-for-byte).
       uint64_t v = o.key ^ 0xCAFEBABEULL;
       uint64_t out = 0;
+#if CONSENSUS_OPT == FUSEE_OPT_A
+      // iter-9A varlen: A's public surface takes (void*, len). Use the
+      // _u64 source-compat helpers preserved by Phase 1.
+      switch (o.kind) {
+        case OP_INSERT: rc = store.insert_u64(o.key, v); break;
+        case OP_UPDATE: rc = store.update_u64(o.key, v); break;
+        case OP_DELETE: rc = store.remove(o.key); break;
+        case OP_READ:   rc = store.search_u64(o.key, &out); break;
+        default: break;
+      }
+#else
       switch (o.kind) {
         case OP_INSERT: rc = store.insert(o.key, v); break;
         case OP_UPDATE: rc = store.update(o.key, v); break;
@@ -582,6 +594,8 @@ int main(int argc, char **argv) {
         case OP_READ:   rc = store.search(o.key, &out); break;
         default: break;
       }
+#endif
+      (void)out;
     } else {
 #if CONSENSUS_OPT == FUSEE_OPT_C
       // Variable-length pool path. Generate deterministic bytes from key.
@@ -602,8 +616,28 @@ int main(int argc, char **argv) {
         default: break;
       }
       (void)got;
+#elif CONSENSUS_OPT == FUSEE_OPT_A
+      // iter-9A: A supports variable-length values via the new
+      // (void*, len) API. Generate the same byte pattern as C.
+      uint64_t seed = o.key ^ 0xCAFEBABEULL;
+      for (uint32_t i = 0; i < kValueSize; i++) {
+        v_buf[i] = (uint8_t)((seed >> (8 * (i & 7))) ^ (i * 31u));
+      }
+      uint32_t got = 0;
+      switch (o.kind) {
+        case OP_INSERT:
+          rc = store.insert(o.key, v_buf.data(), kValueSize); break;
+        case OP_UPDATE:
+          rc = store.update(o.key, v_buf.data(), kValueSize); break;
+        case OP_DELETE:
+          rc = store.remove(o.key); break;
+        case OP_READ:
+          rc = store.search(o.key, r_buf.data(), kValueSize, &got); break;
+        default: break;
+      }
+      (void)got;
 #else
-      // A/B do not support variable KV in this iteration; force-fall to
+      // B does not support variable KV in this iteration; force-fall to
       // inline path even if FUSEE_VALUE_SIZE > 8 was requested.
       uint64_t v = o.key ^ 0xCAFEBABEULL;
       uint64_t out = 0;

@@ -48,22 +48,26 @@ target_link_libraries(cxl_latency_decomp_C fusee_cxl_decomp)
 target_compile_options(cxl_latency_decomp_C
     PRIVATE -mclflushopt -O2 -DCONSENSUS_OPT=3)
 
-# iter-1A: per-stage A write-path latency decomposition runner. Same
-# harness shape as cxl_latency_decomp_C, built against CxlKvStoreA via
-# CONSENSUS_OPT=1. The DECOMP_REC calls live in src/cxl_kv_ops_A.cc
-# (added in iter-1A); the kDecompStage* enum slots are re-used with
-# A-specific semantics documented in
-# docs/iters/latency_decomp_A_iter1_20260426.md.
-add_executable(cxl_latency_decomp_A cxl_latency_decomp_A.cc)
-target_link_libraries(cxl_latency_decomp_A fusee_cxl_decomp)
-target_compile_options(cxl_latency_decomp_A
-    PRIVATE -mclflushopt -O2 -DCONSENSUS_OPT=1)
+# iter-9A note: cxl_latency_decomp_A (iter-1A's per-stage A write-path
+# decomposition runner) was superseded by `protocol_a_ycsb` +
+# `src/cxl_probe.h` instrumentation when A switched to v2 in iter-4A.
+# The original source still uses iter-2A LRC APIs (enable_dram_cache,
+# enable_per_host_ring) that are gone. iter-9A path_decomp Phase 3 runs
+# against protocol_a_ycsb directly, so this build target is dropped.
 
 # Unified micro-bench + YCSB runner: one binary per (protocol × variant).
-foreach(opt A B C)
-    if(${opt} STREQUAL "A")
-        set(opt_num 1)
-    elseif(${opt} STREQUAL "B")
+#
+# iter-9A note: the A variants of cxl_{kv_bench,kv_bench_mp,ycsb_runner}
+# call iter-2A LRC APIs (enable_dram_cache, enable_same_host_bypass,
+# enable_per_host_ring, replicated_ops, ack_timeouts_to) that were
+# removed when Protocol A switched to the v2 directory architecture in
+# iter-4A. These legacy A variants have been silently broken in the
+# build since then. The canonical Protocol A test runner is
+# `protocol_a_ycsb` (iter-4A onward); A's micro-bench is
+# `cxl_a_aggr_test`. iter-9A keeps B/C variants of the legacy templates
+# (still wired against current B/C surface) and skips A.
+foreach(opt B C)
+    if(${opt} STREQUAL "B")
         set(opt_num 2)
     else()
         set(opt_num 3)

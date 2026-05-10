@@ -240,7 +240,11 @@ int main(int argc, char **argv) {
   my_keys.reserve(ops_per_host);
   for (uint64_t i = 0; i < ops_per_host; i++) {
     uint64_t k = make_key(host_id, i);
+#if CONSENSUS_OPT == FUSEE_OPT_A
+    if (store.insert_u64(k, k ^ 0x1234ULL) == 0) my_keys.push_back(k);
+#else
     if (store.insert(k, k ^ 0x1234ULL) == 0) my_keys.push_back(k);
+#endif
   }
 
   // Signal ready, wait for primary's go.
@@ -271,25 +275,28 @@ int main(int argc, char **argv) {
     uint64_t k = my_keys[pick(rng)];
     uint64_t ts = now_ns();
     if ((double)rng() / (double)rng.max() < wratio) {
+#if CONSENSUS_OPT == FUSEE_OPT_A
+      (void)store.update_u64(k, k ^ (uint64_t)i);
+#else
       (void)store.update(k, k ^ (uint64_t)i);
+#endif
       wlat.push_back(now_ns() - ts);
     } else {
       uint64_t out = 0;
+#if CONSENSUS_OPT == FUSEE_OPT_A
+      (void)store.search_u64(k, &out);
+#else
       (void)store.search(k, &out);
+#endif
       rlat.push_back(now_ns() - ts);
     }
   }
   uint64_t t1 = now_ns();
 
-  // Dump Option A per-dst ACK-timeout counters. Stderr so stdout grep stays clean.
-#if CONSENSUS_OPT == FUSEE_OPT_A
-  fprintf(stderr, "[host %d] A ack_timeouts: ", host_id);
-  for (int d = 0; d < num_hosts; d++) {
-    if (d == host_id) continue;
-    fprintf(stderr, "to%d=%lu ", d, store.ack_timeouts_to(d));
-  }
-  fprintf(stderr, " replicated_ops=%lu\n", store.replicated_ops());
-#endif
+  // iter-2A LRC counters (ack_timeouts_to / replicated_ops) were
+  // removed when Protocol A switched to v2 directory-based architecture
+  // (iter-4A). Diagnostic counters specific to A v2 live on the
+  // protocol_a_ycsb path.
 
   // Record per-host stats.
   CACHELINE_STORE(&stats->hosts[host_id].wall_ns, t1 - t0);
