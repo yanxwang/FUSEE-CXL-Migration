@@ -59,18 +59,31 @@ This doc has two layers and one cross-cutting reference:
 
 H ≤ 8 (hard cap from sharer_bitmap = 8 bits). Currently H = 2 on g3+g4.
 
-## I.2 The four roles (per host)
+## I.2 The roles (per host) — iter-9A redo
 
-Two are processes, two are threads inside the host's primary client process.
+Workers are processes; the 6 named system threads live in the host's primary client process.
 
-| # | Role | Count per host | What it owns | Spawn site |
-|---|---|---|---|---|
-| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
-| 2 | **ForwardResponder** | 1 | Drains incoming `ForwardRing[*][me]`. Handles `OP_WRITE_FORWARD` + `OP_CACHE_REGISTER` from peer host workers. | `std::thread` spawned in `enable_forward(spawn=true)` on each host's primary client. |
-| 3 | **CacheDispatcher** | 1 | Drains incoming `InvalRing[*][me]`. Handles `OP_INVALIDATE` from peer host writers; sets local cache stale flag; ACKs. | `std::thread` spawned in `enable_invalidate(spawn=true)` on each host's primary client. |
-| 4 | (Implicit) primary client process | 1 | Sets up CXL region + DRAM regions pre-fork; owns the 2 background threads above; itself runs as worker. | The first process started per host (`FUSEE_HOST_ID=0/1`, `FUSEE_NUM_THREADS=T` → forks `T-1` children). |
+| # | Role | Count per host | What it owns | CPU | Spawn site |
+|---|---|---|---|---|---|
+| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`) | cpu 0..(T-1) (pinned) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
+| 2 | **WriteSender** | 1 | Drains aggregator slots[Write][*]; sole producer on `WriteRing[me][*]`. (Default OFF — workers go direct to the CXL ring; opt in via `FUSEE_USE_AGGREGATOR=1`.) | cpu 64 (pinned) | spawned in `enable_senders(spawn=true)` |
+| 3 | **WriteReceiver** | 1 | Drains incoming `WriteRing[*][me]`. Handles op 1/2/3 (UPDATE/INSERT/DELETE) from peer host workers. Reads value bytes from `ForwardStaging[src][me]`. | cpu 65 (pinned) | spawned in `enable_write_ring(spawn=true)` |
+| 4 | **ReadSender** | 1 | Drains aggregator slots[Read][*]; sole producer on `ReadRing[me][*]`. (Default OFF, see WriteSender.) | cpu 66 (pinned) | `enable_senders(spawn=true)` |
+| 5 | **ReadReceiver** | 1 | Drains incoming `ReadRing[*][me]`. Handles op 4 (CACHE_REGISTER): under directory lock sets sharer bit + responds with owner_blk_off + value_len. Reader (caller) pulls value bytes via `pool_->read` directly. | cpu 67 (pinned) | `enable_read_ring(spawn=true)` |
+| 6 | **InvalSender** | 1 | Drains aggregator slots[Inval][*]; sole producer on `InvalRing[me][*]` for worker-originated invalidates. (Default OFF.) | cpu 68 (pinned) | `enable_senders(spawn=true)` |
+| 7 | **InvalReceiver** | 1 | Drains incoming `InvalRing[*][me]`. Handles op 5 (INVALIDATE) from peer writers; sets local cache stale flag; ACKs. CRUCIALLY does NOT call `execute_write_local` and holds NO directory lock — breaks the iter-4A-redo deadlock cycle. | cpu 69 (pinned) | `enable_invalidate(spawn=true)` |
+| 8 | (Implicit) primary client process | 1 | Sets up CXL region + DRAM regions pre-fork; owns the 6 background threads above; itself runs as worker. | (its main thread is pinned per row 1) | The first process started per host (`FUSEE_HOST_ID=0/1`, `FUSEE_NUM_THREADS=T` → forks `T-1` children). |
 
-At T=64: each host has **64 worker processes + 2 background threads on primary's process** = 66 schedulable entities competing for 86 cores. (CPU pinning of the 2 background threads is an iter-8A backlog item — currently they share the general scheduler pool with workers.)
+At T=64: each host has **64 worker processes + 6 background threads on primary's process** = 70 schedulable entities. Workers pinned to cpu 0..63, system threads pinned to cpu 64..69, spare cpu 70..85. **All threads CPU-pinned per iter-9A C3** (verified by the `[A:thread]` startup log — see `tests/protocol_a_ycsb.cc`).
+
+**Aggregator routing (Phase 2.C, opt-in)**: when `FUSEE_USE_AGGREGATOR=1`,
+workers enqueue ops into per-(ring_kind, worker) DRAM slots and spin on a
+local ack — the 3 senders are the sole CXL-ring producers, eliminating
+the T-way `fetch_add(tail)` contention. **Default off** because the
+single-sender-per-ring design without batching becomes a new bottleneck
+at high T (workload-A KV=1024 T=64 cache=on dropped from 9.8 Mops/s
+direct → 0.5 Mops/s aggregator). iter-10A backlog adds slot batching
+to senders so the aggregator path becomes net-positive at high T.
 
 ## I.3 Data layout cheat sheet
 
@@ -78,8 +91,11 @@ At T=64: each host has **64 worker processes + 2 background threads on primary's
 |---|---|---|---|---|
 | **Hashtable** | CXL | one copy | Authoritative key→slot map. B buckets × S=7 slots × 16 B/slot. | `B × S × 16 B` (8 MB at B=65536) |
 | **KV blockpool** | CXL | partitioned: H segments, each owned by one host | Value bytes (size class 256 / 512 / 1024 B). Within a host's segment only that host's workers allocate. | workload-dependent (~512 MB/host at MAX_OPS=200k KV=1024) |
-| **ForwardRingMatrix** | CXL | per ordered pair: SPSC | Carries `OP_WRITE_FORWARD`, `OP_CACHE_REGISTER`, `OP_RESPONSE` between hosts. `[H][H]` rings, depth 256 each, 64-B entry. | `~H² × 256 × 64 B` |
-| **InvalRingMatrix** | CXL | per ordered pair: SPSC | Carries `OP_INVALIDATE` only (separate from ForwardRing — see I.7 deadlock argument). `[H][H]` rings, depth 256 each, **128-B entry** (2-cacheline split for producer-consumer). | `~H² × 256 × 128 B` |
+| **WriteRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 1/2/3 (UPDATE/INSERT/DELETE) only. `[H][H]` rings, depth 256 each, **128-B entry** (req on cl 1, resp on cl 2; tail and head on SEPARATE cachelines per iter-9A redo Phase 2 fix). C2-compliant: NO value bytes inline, just `(key, op_kind, value_len, staging_off, staging_gen)`. | `~H² × 256 × 128 B` |
+| **ReadRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 4 (CACHE_REGISTER) only. Same 128-B 2-cacheline layout as WriteRing. Req `(key)`, resp `(status, owner_blk_off, value_len)` — reader pulls value bytes directly via `pool_->read`. | `~H² × 256 × 128 B` |
+| **ForwardStagingMatrix** | CXL | per (src_host, dst_host, slot_idx) | iter-9A redo Phase 2.B — value-bytes arena for op 1/2 (writes). Slot 1:1 with WriteRing slots (same `slot_idx`); each slot holds up to `kForwardStagingSlotBytes` (1024 B) value bytes. Lifetime tracked by ring slot reuse — no separate allocator. | `~H² × 256 × 1024 B` (~4 MiB) |
+| **InvalRingMatrix** | CXL | per ordered pair: SPSC | Carries `OP_INVALIDATE` only (separate from Write/Read rings — see I.7 deadlock argument). `[H][H]` rings, depth 256 each, **128-B entry** (2-cacheline split, head/tail on separate cachelines per iter-9A redo Phase 2 fix). | `~H² × 256 × 128 B` |
+| **AggregatorRegion** | DRAM | `MAP_SHARED` across same-host workers | iter-9A redo Phase 2.C — per-(ring_kind, worker) DRAM slots + value buffers. Used only when `FUSEE_USE_AGGREGATOR=1`. | ~204 KiB (DRAM) |
 | **SlotDirectory** | DRAM | `MAP_SHARED` across same-host workers | Per-(bucket, slot) coherence state: `sharer_bitmap`, MESI state, host-local `pthread_spinlock`, version. | `B × S × 16 B` |
 | **KvCachePool** | DRAM | `MAP_SHARED` across same-host workers | Per-host hashmap (key → cached value bytes) + 1-byte stale flag per entry. | LRU-bounded, ~8 MB |
 | **ShardingTable** | DRAM | read-only after init | Static `σ: K → H` mapping (`hash(K) >> 31) & (H-1)` currently). | trivial |
@@ -188,6 +204,33 @@ sequenceDiagram
 ---
 
 # Part II — Per-Stage Pseudo-Code Dictionary
+
+### iter-9A redo terminology mapping (Part II §II.3-II.6 readers)
+
+The stage tags (W*, R*, I*, F*, D*) below are the same as iter-5A. The
+**ring/thread names** mentioned in narrative text changed in iter-9A
+redo Phase 2; treat the following s/replace as canonical when reading
+older sections of this document:
+
+| Pre-iter-9A name           | iter-9A redo name (this document going forward)         |
+|----------------------------|---------------------------------------------------------|
+| `ForwardRing` / `ForwardRingMatrix` | `WriteRing`/`WriteRingMatrix` (op 1/2/3) AND `ReadRing`/`ReadRingMatrix` (op 4) — see I.3 |
+| `ForwardResponder` (thread) | `WriteReceiver` (cpu 65) AND `ReadReceiver` (cpu 67)     |
+| `CacheDispatcher` (thread)  | `InvalReceiver` (cpu 69)                                 |
+| (none)                       | `WriteSender` (cpu 64), `ReadSender` (cpu 66), `InvalSender` (cpu 68) — opt-in via `FUSEE_USE_AGGREGATOR=1` |
+| `ForwardEntry::payload[1024]` (inline) | `ForwardStaging[src][dst][slot_idx].bytes[1024]` (separate CXL arena, C2-compliant) |
+| `enable_forward(fr)`         | `enable_write_ring(wr, fs) + enable_read_ring(rr)`       |
+| `enable_invalidate(ir)`      | `enable_invalidate(ir)` (unchanged) + `enable_senders(ar)` |
+| `forward_to_owner()`         | `forward_write_direct()` (called from worker dispatcher `forward_write()`) |
+| `forward_cache_register()`   | `forward_read_direct()` (called from worker dispatcher `forward_read()`) |
+| `responder_loop()`           | `write_receiver_loop()` + `read_receiver_loop()`        |
+| `cache_dispatcher_loop()`    | `inval_receiver_loop()`                                  |
+
+The §II.3-II.6 narrative text below was written pre-iter-9A and still
+uses the pre-rename names in places. Apply the table above mentally —
+the per-stage Expected/Healthy timings remain valid (path_decomp on the
+post-Phase-2 architecture confirms 0.3–1.6× H/E ratios on every stage
+except W10 which has been carried at 4× since iter-9A original).
 
 ## II.0 Notation
 

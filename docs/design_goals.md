@@ -323,24 +323,26 @@ forwarding 避免 cross-host LFM contention。
 | I11 | **Cross-host write forwarding via N:1:1:N message (SPSC ring + sender/receiver thread)**, not via cross-host LFM lock. Forward message carries (op_type, key, **CXL pointer to value bytes in forward staging buffer**, value_size); forwarder pre-writes value bytes into its host-owned forward staging buffer on CXL; owner reads via clflushopt+load. Response messages carry only (status, optional slot.pointer for cache_register), **never inline value bytes**. | 偏差例: 用 cross-host LFM lock 互斥 writer → 见 I2. 偏差例: response 携带 inline value → 增加一套 code path 但 KV ≥ 256 B fits 不下, 不值. |
 | I12 | **No OpLog write/read in iter-4A.** Crash recovery uses broadcast `everyone_invalidate` + 全 client cache 清空 + on-demand re-fill from CXL. OpLog 框架代码保留, 等 future replication 设计时启用. | 偏差例: iter-4A 写 OpLog 但 reader 不读 → 浪费 CXL 流量 + 误以为有 fault tolerance. |
 
-### II — CXL 物理布局（authoritative state）
+### II — CXL 物理布局（authoritative state, iter-9A redo Phase 2）
 
 CXL `/dev/dax0.0` mmap'd region 包含:
 
 ```
 [0]              GlobalHeader (4 KB)
-[4 KB]           BucketLockTable[num_buckets]    ← LFM mutex per bucket; iter-4A unused (sharding); reserved for protocol C
 [align 64]       CxlKvBucket[num_buckets]        ← (fp, len, owner_node_id, pointer) per slot, NO inline value bytes
-[align 64]       PerHostSpscRing[H][H][K]        ← N:1:1:N 通讯介质 (invalidate + forward + register/evict + ACK)
-[align 64]       AckChannel[H][H][K]
 [align 64]       KvBlockpool[H]                  ← variable-length KV blocks, size-classed; partitioned per owner host
-[align 64]       ForwardStaging[H]               ← per-forwarder-host staging area for OP_WRITE_FORWARD payloads (value bytes ≥ 256 B); short-lived, freed on forward ACK
-[align 64]       (OpLog area — reserved, not written by iter-4A)
+[align 64]       WriteRingMatrix[H][H]           ← op 1/2/3 (UPDATE/INSERT/DELETE) control-only ring; tail/head on separate cachelines
+[align 64]       ReadRingMatrix[H][H]            ← op 4 (CACHE_REGISTER) control-only ring; resp carries owner_blk_off + value_len
+[align 64]       InvalRingMatrix[H][H]           ← op 5 (INVALIDATE) control-only ring (iter-5A separate channel for deadlock-freedom)
+[align 64]       ForwardStagingMatrix[H][H][slot_idx] ← per-(src,dst,slot) value-bytes arena for op 1/2 writes
+[align 64]       (stats / control)
 ```
 
-**CXL 上不再有 inline u64 KV 路径**。所有 value bytes 在 KvBlockpool 里, slot 仅含 pointer.
+**CXL 上不再有 inline value 路径** — message rings carry only control fields; value bytes live in `KvBlockpool` (for stored value) or `ForwardStagingMatrix` (for in-flight cross-host writes). C2 (no value bytes inline on message ring) is enforced at compile time via `static_assert` on each Entry's cacheline-1 byte budget.
 
-**ForwardStaging[H]** 物理布局: 每个 forwarder host 独占一段 (e.g. 1 MB / host), 用作 OP_WRITE_FORWARD value 的 cross-host transfer buffer. forwarder host 写 staging slot, owner host 读. 生命周期 = 1 forward roundtrip (forwarder 收到 forward-response ACK 后 free staging slot). 跟 KvBlockpool 隔离 (KvBlockpool 是 owner-host owned; ForwardStaging 是 forwarder-host owned).
+**ForwardStagingMatrix[H][H][slot_idx]** 物理布局 (iter-9A redo Phase 2.B): per-(src_host, dst_host, slot_idx) fixed slot, each holding up to `kForwardStagingSlotBytes` (1024 B) of value bytes. Slot is 1:1 with `WriteRingMatrix.entries[slot_idx]` — same `slot_idx` indexes both. Lifetime is automatic via ring slot reuse (no separate alloc/free path). Forwarder writes `slots[me][dst][slot_idx]` + flushes; owner LD-CXL reads `slots[forwarder][me][slot_idx]` + memcpys into its own pool block. Total size with default `kWriteMaxHosts=4` × `kWriteRingDepth=256` × 1024 B = ~4 MiB CXL.
+
+iter-9A redo Phase 2.A also fixes a latent layout bug: pre-iter-9A `ForwardRing` and `InvalRing` had `tail` (producer cursor) and `head` (consumer cursor) on the SAME 64 B header cacheline. On non-coherent CXL Type 3 this causes false sharing — last-writer-wins between producer and consumer can clobber tail or head. iter-9A redo's WriteRing/ReadRing/InvalRing put them on SEPARATE cachelines (matching the original `cxl_forward_ring.h` layout that was correctly written but accidentally regressed in iter-5A's InvalRing).
 
 ### III — DRAM 物理布局 (per host, MAP_SHARED across same-host workers)
 
@@ -731,27 +733,37 @@ iter-4A 只用 clflushopt. 不用 clflush (太慢), 不用 clwb (留 stale 副�
 反而让对端 host clflushopt+load 跑不必要的 backing-store read).
 
 ═══════════════════════════════════════════════════════════════
-  MESSAGE PAYLOAD POLICY (N:1:1:N)
+  MESSAGE PAYLOAD POLICY (N:1:1:N) — iter-9A redo
 ═══════════════════════════════════════════════════════════════
 
-iter-4A 测试 KV size 在 {256, 512, 1024} B 范围. **No inline payload
-anywhere** in messages. 单一 out-of-band path:
+KV size 范围 {256, 512, 1024} B. **No inline value bytes anywhere** in
+message ring entries (C2 hard constraint, enforced by static_assert
+on each Entry's cacheline-1 byte budget — see cxl_write_ring.h /
+cxl_read_ring.h).
 
-  OP_INVALIDATE / OP_CACHE_REGISTER / OP_CACHE_EVICT:
-      message 内 only carry 索引 (bucket_idx, slot_idx, key, version,
-      etc.) ≤ 32 B; entry 64 B 充足.
-  
-  OP_RESPONSE (cache_register reply):
-      carries (status, slot.pointer, value_size).
-      NO value bytes inline — reader self-fetches via clflushopt+load.
-  
-  OP_WRITE_FORWARD:
-      forwarder 先 NT-store value 到自己的 ForwardStaging[self] 区域 (CXL),
-      message carries (key, staging_ptr, value_size, inner_op_type).
-      Owner clflushopt+load from staging, executes write, ACK.
-      Forwarder frees staging slot upon ACK.
+  OP_INVALIDATE  → InvalRing (op_kind 5):
+      message 内 only carry (key) — 16 B useful, 128 B entry
+      (req on cl 1 of slot, resp on cl 2; tail/head on separate
+      cachelines per iter-9A redo Phase 2 fix).
 
-PerHostMessage entry 维持 64 B (单 cacheline, 防 false sharing 历史教训).
+  OP_CACHE_REGISTER → ReadRing (op_kind 4):
+      Req: only (key) on cl 1.
+      Resp: (status, owner_blk_off, value_len) on cl 2.
+      Reader (caller) pulls value bytes directly via
+      pool_->read(owner_blk_off + 4, ...) — message ring NEVER
+      carries value bytes.
+
+  OP_WRITE_FORWARD (op_kind 0/1/2 = UPDATE/INSERT/DELETE) → WriteRing:
+      Forwarder 先 memcpy value bytes 到 ForwardStaging[me][dst][slot_idx]
+      (CXL) + flush; message control on cl 1 carries (key, op_kind,
+      value_len, staging_off, staging_gen). Owner WriteReceiver clflushopt
+      + load from staging[forwarder][me][slot_idx], copies bytes into
+      its own pool block, executes write, ACK on cl 2. Forwarder's
+      staging slot is implicitly freed by ring slot reuse (1:1 mapping).
+
+WriteEntry / ReadEntry / InvalEntry 都是 128 B (2-cacheline), 防
+producer-consumer cacheline ping-pong (iter-6A pattern). 64-B 单线
+设计在 iter-5A InvalRing 用过, iter-9A redo 全部升 128 B.
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -1517,12 +1529,35 @@ iter-4A 之后所有 sweep 的 `SUMMARY.log` 必须有 5 行 gate result. **gate
 **H4 — Pre-commit grep hook**
 
 `.git/hooks/pre-commit` 检查: 改 `src/cxl_kv_ops_A*.{h,cc}` /
-`src/cxl_directory*` / `src/cxl_sharding*` / `src/cxl_cache_pool*` 文件
+`src/cxl_directory*` / `src/cxl_sharding*` / `src/cxl_cache_pool*` /
+`src/cxl_write_ring.h` / `src/cxl_read_ring.h` / `src/cxl_inval_ring.h` /
+`src/cxl_forward_staging.h` / `src/cxl_probe.{h,cc}` 文件
 的 commit message 必须 grep 到 `\b[Ii][1-9][0-2]?\b` 或 `\bAP[0-9]+\b`
 (invariant 编号或 AP 编号), 否则 reject commit.
 
 强制 commit author 显式说"这次改动跟 I3/I8/AP13 有关", 不能写"random
 fix" 蒙混.
+
+**H5 — System thread CPU pinning** (added iter-9A redo Phase 2.F):
+
+iter-9A redo C3: 所有线程必须 CPU-pinned。Worker process pin 到 cpu
+`client_id` (0..(T-1))；6 个 system thread pin 到 cpu 64..69:
+
+| cpu | thread name | spawn site |
+|-----|-------------|------------|
+| 64  | WriteSender   | `enable_senders(spawn=true)` |
+| 65  | WriteReceiver | `enable_write_ring(spawn=true)` |
+| 66  | ReadSender    | `enable_senders(spawn=true)` |
+| 67  | ReadReceiver  | `enable_read_ring(spawn=true)` |
+| 68  | InvalSender   | `enable_senders(spawn=true)` |
+| 69  | InvalReceiver | `enable_invalidate(spawn=true)` |
+
+Hard enforcement: 每个 thread 在 startup 用 `pthread_setname_np` +
+`pthread_setaffinity_np` pin 自己; 失败 fprintf 但不 abort (best-effort).
+Worker 在 cpu_id ≥ 64 时 `_exit(1)` 拒绝启动 (boundary check)。
+启动 log 必须包含 6 行 `[A:thread] <Name> pid=... pinned cpu=N`，
+`top -H -p $pid` 可验证。iter-9A redo Phase 0 smoke + Phase 4 sweep
+都依赖此布局。
 
 #### Process discipline (依赖人/Claude follow, 但有反馈)
 
