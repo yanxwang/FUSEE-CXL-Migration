@@ -82,6 +82,11 @@ endif()
 if(DEFINED FUSEE_RING_ENTRIES)
     target_compile_definitions(fusee_cxl PUBLIC FUSEE_RING_ENTRIES=${FUSEE_RING_ENTRIES})
 endif()
+# iter-9A path_decomp Phase 1 capture: -DFUSEE_PROBE=1 enables the
+# RDTSCP probe ring (per-thread mmap'd file). Default OFF (zero cost).
+if(DEFINED FUSEE_PROBE)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_PROBE=${FUSEE_PROBE})
+endif()
 target_link_libraries(fusee_cxl PUBLIC pthread)
 
 # Decomp-instrumented sibling of fusee_cxl for cxl_latency_decomp_C. Same
