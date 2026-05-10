@@ -1,3 +1,8 @@
+#define _GNU_SOURCE
+#include <sched.h>
+#include <pthread.h>
+#include <unistd.h>
+
 #include "cxl_kv_ops_A.h"
 #include "cxl_probe.h"
 
@@ -336,7 +341,19 @@ int CxlKvStoreA::enable_forward(ForwardRingMatrix *fr, bool init_region,
   }
   if (spawn_responder) {
     responder_stop_.store(false, std::memory_order_relaxed);
-    responder_ = std::thread([this]() { this->responder_loop(); });
+    responder_ = std::thread([this]() {
+      // iter-9A C3: name + pin to cpu 65 (WriteReceiver slot per
+      // task plan §2.F). Plan reserves cpu 64-69 for system threads.
+      pthread_setname_np(pthread_self(), "WriteReceiver");
+      cpu_set_t cs;
+      CPU_ZERO(&cs);
+      CPU_SET(65, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] WriteReceiver pid=%d tid=%lu pinned cpu=65 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->responder_loop();
+    });
   }
   return 0;
 }
@@ -485,7 +502,19 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
   }
   if (spawn_dispatcher) {
     dispatcher_stop_.store(false, std::memory_order_relaxed);
-    cache_dispatcher_ = std::thread([this]() { this->cache_dispatcher_loop(); });
+    cache_dispatcher_ = std::thread([this]() {
+      // iter-9A C3: name + pin to cpu 69 (InvalReceiver slot per
+      // task plan §2.F).
+      pthread_setname_np(pthread_self(), "InvalReceiver");
+      cpu_set_t cs;
+      CPU_ZERO(&cs);
+      CPU_SET(69, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] InvalReceiver pid=%d tid=%lu pinned cpu=69 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->cache_dispatcher_loop();
+    });
   }
   return 0;
 }

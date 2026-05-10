@@ -18,6 +18,10 @@
 //        FUSEE_WORKLOAD_NAME=<wl>
 //        ./protocol_a_ycsb <dev> <load_file> <trans_file> <num_buckets> <max_ops>
 
+#define _GNU_SOURCE
+#include <sched.h>
+#include <pthread.h>
+
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
 #include "cxl_forward_ring.h"
@@ -268,6 +272,34 @@ int main(int argc, char **argv) {
 
   bool is_primary_client = (host_id == 0) && (client_id == 0);
   bool is_host_primary_client = (client_id == 0);
+
+  // iter-9A C3: pin worker process to cpu = client_id (T=64 →
+  // workers cpu 0..63; system threads cpu 64..69 inside the
+  // protocol library; spare cpu 70..85). Each worker is a separate
+  // forked process with one main thread; pinning the process pins
+  // that thread.
+  {
+    cpu_set_t cs;
+    CPU_ZERO(&cs);
+    int target_cpu = client_id;  // 0..(T-1)
+    if (target_cpu >= 64) {
+      // System-thread region; refuse.
+      fprintf(stderr,
+        "[A:thread] FATAL worker client_id=%d would land on cpu>=64 (system area)\n",
+        client_id);
+      _exit(1);
+    }
+    CPU_SET(target_cpu, &cs);
+    int rc = pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+    if (rc != 0) {
+      fprintf(stderr,
+        "[A:thread] worker pin FAILED rc=%d host=%d client=%d cpu=%d\n",
+        rc, host_id, client_id, target_cpu);
+    }
+    fprintf(stderr,
+      "[A:thread] Worker pinned host=%d client=%d -> cpu=%d (pid=%d)\n",
+      host_id, client_id, target_cpu, getpid());
+  }
 
   CxlKvStoreA store;
   if (is_primary_client) {
