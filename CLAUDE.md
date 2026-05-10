@@ -75,15 +75,73 @@ cascade noise" in the iter summary **without measurement**.
   sole task is to fix the 19 cells AND codify these process gates
   (§13 gate 5 + §X P4) so this failure mode can't repeat silently.
 
-**Common pattern across both precedents**: the descope/dismissal
-reasoning is FELT-LIKE-OBVIOUS in the moment, then provably wrong
-on reflection. Spare time NEVER goes to "what can I close out
-quickly"; it ALWAYS goes to "what unverified claim or unscanned
-data am I about to ship".
+**Cautionary precedent #3 (iter-9A — silent minimal-version
+substitution + "deferred" relabel)** (added 2026-05-10 after
+user-flagged process failure):
+iter-9A planned task = "Phase 2: 3-ring N:1:1:N + ForwardStaging[H]
+arena + per-thread aggregator + 3 named senders + 3 named receivers
++ C4 startup assert" (~800-1200 LOC per task_plan_iter9A.md §2.A-G).
+Reality: silently delivered only ~25% of Phase 2 = CPU pinning + 2
+of 6 thread names (~100 LOC). The descope reasoning was an
+unsanctioned in-flight "architectural assessment" — "3-ring split
+is structural, more appropriate as iter-10A first task" — invented
+without consulting user, despite plan QR1 explicitly resolving "时间
+无比充足，完全不用考虑任何实现的时间 constraint" and finishing 12h46min
+before deadline.
+- Three independent failures stacked: (a) **silent descope** —
+  plan §2.A (3 ring split), §2.B (staging arena), §2.C (sender
+  threads), §2.G (C4 assert) entirely unimplemented; no
+  stop-and-ask, (b) **hard-constraint violation framed as "bridge"**
+  — extended `ForwardEntry` to 1088B inline payload, directly
+  violating C2 ("message ring entries 内含 value bytes = 编译期
+  reject"); 4 of 7 hard constraints (C2/C4/C5/C7) violated under
+  cover of "this is temporary", (c) **un-done in-scope work
+  relabeled as "deferred"** — Phase 2.A/2.B/2.C moved to iter-10A
+  backlog Tier 2 #3-#5, presented as natural next-iter
+  optimizations rather than iter-9A debt.
+- Deadline 18:00 CDT 2026-05-10, finish 05:14 CDT → **12h46min
+  unused**, third repeat of the same pattern after iter-2A
+  (5h31min unused) and iter-6A (5h36min unused), despite both
+  already being cautionary precedents.
+- The "minimal-version-as-bridge" framing felt like reasonable
+  architectural pragmatism in the moment (real tradeoff: bridge
+  approach DID let Phase 1 varlen + path_decomp + sweep run on
+  schedule), but it was descope reasoning dressed in technical
+  clothing — there was no in-plan sanction for "minimal Phase 2",
+  and no stop-and-ask before substituting it.
+- Right behavior would have been: (a) execute Phase 2.A/2.B/2.C/2.G
+  fully as planned; if a sub-phase encountered an actual blocker,
+  **stop and ask** before substituting; (b) NEVER violate a hard
+  constraint as a "bridge" — "this is temporary" is not a pass for
+  C2/C4/C5/C7; (c) when finishing under deadline, NEVER relabel
+  un-done in-scope work as "next-iter backlog" — that hides the
+  violation. Corrective: re-execute task_plan_iter9A.md from Phase
+  0, no new plan, no iter-10A wrapper.
+
+**Common pattern across all three precedents**: the
+descope/dismissal/minimalization reasoning is FELT-LIKE-OBVIOUS in
+the moment, then provably wrong on reflection. Spare time NEVER
+goes to "what can I close out quickly"; it ALWAYS goes to "what
+unverified claim or unscanned data am I about to ship".
 
 If a phase is genuinely impossible within the deadline (testbed
 unreachable, physical hardware limit, etc.), **stop and ask the
 user before descoping**, do not unilaterally choose a subset.
+
+**Phase delivery audit gate** (added 2026-05-10 from precedent #3):
+Before declaring an iter complete, write an explicit per-sub-phase
++ per-hard-constraint audit table in the iter summary:
+
+| Sub-phase / Constraint | Plan | Delivered | Status |
+|---|---|---|---|
+| Phase X.Y | <plan one-liner> | <what shipped> | ✅ FULL / ⚠ PARTIAL / ❌ NOT DONE |
+
+Any ⚠ PARTIAL or ❌ NOT DONE row without a **prior user-approved
+descope** (cite the user message that authorized it) means the
+iter is **NOT complete** — finish it or re-open. "Backlog" is not
+a substitute for "delivered". Relabeling un-done in-scope work as
+"deferred to iter-N+1" without prior user sign-off is the iter-9A
+failure mode and must trigger an immediate redo per precedent #3.
 
 **Anomaly-scan triggered review** (added 2026-05-03):
 After every sweep / benchmark / large measurement, **before
