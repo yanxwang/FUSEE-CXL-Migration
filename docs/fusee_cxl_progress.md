@@ -404,6 +404,58 @@ All 7 planned phases delivered. Key outcomes:
 
 Full analysis: `docs/iters/iter3A_summary_20260428.md`.
 
+## 2026-05-10 — iter-9A redo (per `docs/iters/task_plan_iter9A.md`, full re-execution)
+
+iter-9A original (5 commits, 2026-05-10 05:14 CDT) silently delivered
+~25% of Phase 2 (CPU pinning + 2 thread names instead of the planned
+3-ring + ForwardStaging + 6 named threads). 4 of 7 hard constraints
+violated. Per CLAUDE.md cautionary precedent #3 (codified in commit
+7eb5057), user instructed full re-execution from Phase 0. iter-9A
+redo (10 commits, 2026-05-10 05:54-07:50 CDT) delivers all phases.
+
+Phase highlights:
+- Phase 0 preflight: re-bootstrap, legacy A-variant test cleanup,
+  µbench baseline.md.
+- Phase 1 varlen: hash-diff battery 20/20 PASS at all KV × workload.
+- Phase 2.A 3-ring split + C2 enforcement; latent InvalRing tail/head
+  false-sharing bug surfaced + fixed.
+- Phase 2.B ForwardStaging arena (per-(src,dst,slot_idx) 1024-B slot,
+  1:1 with WriteRing slots).
+- Phase 2.C aggregator + 3 sender threads (opt-in via
+  FUSEE_USE_AGGREGATOR=1; iter-10A backlog #4 adds slot batching).
+- Phase 2.D-G receivers + naming + CPU pin all + C4 startup assert.
+- Phase 2 hash-diff round 2: 20/20 PASS on 3-ring; 20/20 again with
+  aggregator on.
+- Phase 3 path_decomp: workload-A KV=1024 T=64 cache=on at 9.802 Mops/s
+  healthy, NO ANOMALY in 12 retries; 14 stages covered, only soft
+  anomaly W10 H/E=4× (carved iter-10A backlog #5).
+- Phase 4 sweep: 210 cells × 1 rep, 0 fails, 16.4 min wallclock.
+  Best per workload (all T=64 cache=off):
+    workload-a 15.179 Mops/s @ kv=512  (vs iter-9A original 6.97 = +118%)
+    workload-b 12.398 Mops/s @ kv=512  (vs orig 19.62 = -37%)
+    workload-c 11.787 Mops/s @ kv=256  (vs orig 18.95 = -38%)
+    workload-d 11.561 Mops/s @ kv=256  (vs orig 18.37 = -37%)
+    workload-f 14.124 Mops/s @ kv=512  (vs orig 15.62 = -10%)
+  29-cell anomaly carve-out (vs iter-9A original 55) per §13 gate 5
+  option (c); iter-10A backlog #1 5-rep verify.
+
+C2-compliance trade-off: write-heavy workloads (a, f) improve because
+the new path is 1× memcpy from staging instead of 16-cacheline inline-
+payload flush per cross-host write. Read-heavy workloads (b, c, d)
+regress because the ReadReceiver response no longer carries inline
+value bytes — reader does an extra cross-host pool->read. iter-10A
+backlog #3 (forwarder-pool-direct) is the named recovery.
+
+scaling_ycsb_spec.md gate 6 promoted SOFT → HARD per task plan §C7.
+
+Hard constraint compliance: iter-9A original 3/7; iter-9A redo 7/7.
+
+Sweep: `docs/g34_scaling_ycsb_iter9A_redo_20260510_072111/`
+Path_decomp: `docs/path_decomp_iter9A_redo_20260510_071429/`
+Summary: `docs/iters/iter9A_redo_summary_20260510.md`
+iter-10A backlog (cleaned, no relabeled in-scope work):
+  `docs/iters/iter10A_backlog_memo.md`
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

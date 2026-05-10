@@ -372,20 +372,24 @@ Iters that report fewer cells (e.g., iter-4A's 4-cell × 1-rep
 preview) violate this gate and must catch up before the next iter
 starts.
 
-6. **Gate 6 — per-stage attribution data (SOFT WARN iter-8A,
-   2026-05-04; HARD FAIL from iter-9A onwards)**: any iter shipping
-   a performance fix MUST include per-stage attribution data
-   (`docs/iterNA_phase3_*.md`) showing which stage transition was
-   the named bottleneck, with measured p50/p99/max from a probe-
-   instrumented run on the bug-trigger cell. Currently SOFT —
-   warning printed but iter not blocked. iter-9A onwards: HARD
-   FAIL (fix without attribution = invalid iter).
+6. **Gate 6 — per-stage attribution data (HARD FAIL from iter-9A
+   redo onwards, 2026-05-10)**: any iter shipping a performance fix
+   MUST include per-stage attribution data
+   (`docs/iter*_phase3_*.md` or `path_decomp_*/per_stage_decomp.md`)
+   showing which stage transition was the named bottleneck, with
+   measured p50/p99/max from a probe-instrumented run on the
+   bug-trigger cell. Promoted from SOFT to HARD by iter-9A redo
+   Phase 5.B per task_plan_iter9A §C7. Fix without attribution =
+   invalid iter.
    - Rationale: iter-3A through iter-7A all shipped fixes that
      made symptoms move without per-stage attribution. iter-8A
      Phase 3 named ForwardRing 200ms timeout as root cause with
      direct measurement (50% of CACHE_REGISTERs hit the cap),
      fixed it in 3 LOC, verified 4/5 reps OK on bug-trigger cell.
-     This is the new bar.
+     iter-9A redo Phase 3 found the W10 4× soft anomaly + a latent
+     InvalRing tail/head false-sharing bug via probe attribution
+     (the 60% timeout cascade in Phase 2 smoke testing). This
+     attribution discipline is the bar.
 
 **Doubling-ratio check (all 5 workloads, iter-7A 2026-05-03)**:
 the iter-6A Phase 6 doubling-ratio gate (≥ 1.5× per pre-saturation
