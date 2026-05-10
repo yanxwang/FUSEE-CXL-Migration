@@ -44,26 +44,29 @@ inline uint8_t key_fingerprint(uint64_t key) {
   return (uint8_t)(fnv1a_u64(key) & 0xFF);
 }
 
-// Spin-wait for ForwardEntry response with a timeout. Returns 0 on
-// response, -11 on timeout. Frees the slot (req_op_id=0) on success or
-// timeout.
-inline int forward_spin_wait(ForwardEntry *e, uint64_t op_id,
-                             int *out_status) {
-  // iter-8A Phase 5 fix [G6][AP16]: 200 ms → 5 ms. Mirrors iter-6A
-  // InvalRing fix; Phase 3 attribution showed 50% of cross-host
-  // CACHE_REGISTER fired this timeout, ballooning workload-d
-  // kv=1024 T=64 trans_wall to 36 sec. 5 ms cap = 500× healthy
-  // p99 (~10 µs) headroom. iter-9A backlog: fail-loud propagation.
-  const uint64_t kBudgetUs = 5000;  // was 200000 (200 ms)
+// iter-9A Phase 2: spin-wait helper templated over entry type.
+// WriteEntry and ReadEntry both have {req_op_id, resp_op_id, status}
+// at well-known offsets — both 2-cacheline (req on line 1, resp on
+// line 2). Caller flushes resp's cacheline (line 2 of the entry)
+// before each load so peer's CXL store reaches us.
+//
+// iter-8A Phase 5 timeout cap kept (5 ms): empirical 500× healthy p99
+// budget — guarantees a runaway ring stall doesn't balloon trans_wall
+// per-cell to tens of seconds.
+template <typename Entry>
+inline int generic_spin_wait(Entry *e, uint64_t op_id, int *out_status) {
+  const uint64_t kBudgetUs = 5000;
   uint64_t spin_start_ns = 0;
   for (;;) {
-    flush_line((void *)e);
+    flush_line((void *)&e->resp_op_id);
     full_fence();
     uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
     if (resp == op_id) {
       if (out_status) *out_status = e->status;
+      // Free slot: zero req_op_id (cacheline 1) so next forwarder
+      // sees it free.
       e->req_op_id.store(0, std::memory_order_release);
-      flush_line((void *)e);
+      flush_line((void *)&e->req_op_id);
       store_fence();
       return 0;
     }
@@ -75,11 +78,23 @@ inline int forward_spin_wait(ForwardEntry *e, uint64_t op_id,
       uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
       if ((now_ns - spin_start_ns) / 1000 > kBudgetUs) {
         e->req_op_id.store(0, std::memory_order_release);
+        flush_line((void *)&e->req_op_id);
+        store_fence();
         return -11;
       }
     }
     __builtin_ia32_pause();
   }
+}
+
+// Encode a request op_id with src host in high 8 bits.
+inline uint64_t encode_op_id(int host_id, uint64_t seq) {
+  return ((uint64_t)(host_id + 1) << 56) | (seq & 0x00FFFFFFFFFFFFFFULL);
+}
+
+// Decode src host id from op_id (1-based in high byte → 0-based).
+inline int decode_src_host(uint64_t op_id) {
+  return (int)((op_id >> 56) & 0xFF) - 1;
 }
 
 }  // anonymous namespace
@@ -184,8 +199,9 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   //
   // iter-5A Phase 4: broadcast OP_INVALIDATE on the SEPARATE
   // InvalRing channel and wait for ACK from each non-self sharer.
-  // The cache_dispatcher_loop on each peer host drains InvalRing
-  // independently of its responder, so no circular wait can form.
+  // The InvalReceiver on each peer host drains InvalRing
+  // independently of its WriteReceiver/ReadReceiver, so no circular
+  // wait can form.
   // (See cxl_inval_ring.h header comment + RAP in iter5A_summary
   // for the deadlock-freedom argument.)
   //
@@ -305,7 +321,7 @@ int CxlKvStoreA::insert(uint64_t key, const void *value, uint32_t value_len) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, value, value_len, kOpKindInsert);
+    return forward_write(owner, key, value, value_len, kOpKindInsert);
   }
   return execute_write_local(key, value, value_len, kOpKindInsert);
 }
@@ -314,7 +330,7 @@ int CxlKvStoreA::update(uint64_t key, const void *value, uint32_t value_len) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, value, value_len, kOpKindUpdate);
+    return forward_write(owner, key, value, value_len, kOpKindUpdate);
   }
   return execute_write_local(key, value, value_len, kOpKindUpdate);
 }
@@ -323,92 +339,152 @@ int CxlKvStoreA::remove(uint64_t key) {
   if (key == kEmptyKey) return -1;
   uint32_t owner = owner_host(key);
   if (owner != (uint32_t)host_id_) {
-    return forward_to_owner(owner, key, nullptr, 0, kOpKindDelete);
+    return forward_write(owner, key, nullptr, 0, kOpKindDelete);
   }
   return execute_write_local(key, nullptr, 0, kOpKindDelete);
 }
 
-// ---- Cross-host forwarding via ForwardRingMatrix ----
+// ---- Cross-host forwarding (iter-9A Phase 2: 3-ring + staging) ----
 
-int CxlKvStoreA::enable_forward(ForwardRingMatrix *fr, bool init_region,
-                                bool spawn_responder) {
-  if (!fr) return -1;
-  fr_ = fr;
+int CxlKvStoreA::enable_write_ring(WriteRingMatrix *wr,
+                                   ForwardStagingMatrix *fs,
+                                   bool init_region, bool spawn_receiver) {
+  if (!wr || !fs) return -1;
+  wr_ = wr;
+  fs_ = fs;
   if (init_region) {
-    std::memset(fr, 0, forward_ring_matrix_bytes());
-    flush_region(fr, forward_ring_matrix_bytes());
+    std::memset(wr, 0, write_ring_matrix_bytes());
+    flush_region(wr, write_ring_matrix_bytes());
+    std::memset(fs, 0, forward_staging_matrix_bytes());
+    flush_region(fs, forward_staging_matrix_bytes());
     store_fence();
   }
-  if (spawn_responder) {
-    responder_stop_.store(false, std::memory_order_relaxed);
-    responder_ = std::thread([this]() {
-      // iter-9A C3: name + pin to cpu 65 (WriteReceiver slot per
-      // task plan §2.F). Plan reserves cpu 64-69 for system threads.
+  if (spawn_receiver) {
+    write_receiver_stop_.store(false, std::memory_order_relaxed);
+    write_receiver_ = std::thread([this]() {
+      // iter-9A Phase 2.E + C3: named + CPU-pinned per task plan §2.F.
       pthread_setname_np(pthread_self(), "WriteReceiver");
-      cpu_set_t cs;
-      CPU_ZERO(&cs);
-      CPU_SET(65, &cs);
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(65, &cs);
       pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
       fprintf(stderr,
         "[A:thread] WriteReceiver pid=%d tid=%lu pinned cpu=65 (host_id=%d)\n",
         getpid(), (unsigned long)pthread_self(), host_id_);
-      this->responder_loop();
+      this->write_receiver_loop();
     });
   }
   return 0;
 }
 
-void CxlKvStoreA::stop_responder() {
-  if (!responder_.joinable()) return;
-  responder_stop_.store(true, std::memory_order_release);
-  responder_.join();
+void CxlKvStoreA::stop_write_receiver() {
+  if (!write_receiver_.joinable()) return;
+  write_receiver_stop_.store(true, std::memory_order_release);
+  write_receiver_.join();
 }
 
-// Generic ForwardEntry enqueue + spin. Used by all 5 op_kind values.
-int CxlKvStoreA::forward_to_owner(uint32_t owner, uint64_t key,
-                                  const void *value, uint32_t value_len,
-                                  int op_kind) {
-  if (!fr_) return -10;
-  if (value_len > kForwardEntryPayloadBytes) return -5;
-  ForwardRing *ring = &fr_->rings[host_id_][owner];
-  uint64_t my_op = req_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-  uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
-                   (my_op & 0x00FFFFFFFFFFFFFFULL);
+int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, bool init_region,
+                                  bool spawn_receiver) {
+  if (!rr) return -1;
+  rr_ = rr;
+  if (init_region) {
+    std::memset(rr, 0, read_ring_matrix_bytes());
+    flush_region(rr, read_ring_matrix_bytes());
+    store_fence();
+  }
+  if (spawn_receiver) {
+    read_receiver_stop_.store(false, std::memory_order_relaxed);
+    read_receiver_ = std::thread([this]() {
+      pthread_setname_np(pthread_self(), "ReadReceiver");
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(67, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] ReadReceiver pid=%d tid=%lu pinned cpu=67 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->read_receiver_loop();
+    });
+  }
+  return 0;
+}
+
+void CxlKvStoreA::stop_read_receiver() {
+  if (!read_receiver_.joinable()) return;
+  read_receiver_stop_.store(true, std::memory_order_release);
+  read_receiver_.join();
+}
+
+int CxlKvStoreA::assert_n_to_n_active() {
+  // iter-9A Phase 2.G — C4 startup assert (replaces obsolete
+  // phys_hosts_pr_ check). In multi-host mode the entire 3-ring +
+  // staging mesh must be wired before any cross-host op.
+  if (num_hosts_ < 2) return 0;
+  bool ok = (wr_ != nullptr) && (rr_ != nullptr) &&
+            (fs_ != nullptr) && (ir_ != nullptr);
+  if (!ok) {
+    fprintf(stderr,
+            "FATAL [iter-9A C4]: cross-host op attempted with "
+            "incomplete N:1:1:N wiring on host %d (num_hosts=%d): "
+            "wr_=%p rr_=%p fs_=%p ir_=%p — must call "
+            "enable_write_ring + enable_read_ring + enable_invalidate "
+            "before first cross-host op\n",
+            host_id_, num_hosts_,
+            (void *)wr_, (void *)rr_, (void *)fs_, (void *)ir_);
+    std::abort();
+  }
+  return 0;
+}
+
+// iter-9A Phase 2.A — write-path forward. Splits value bytes off the
+// message ring into ForwardStaging arena (C2 compliance).
+int CxlKvStoreA::forward_write(uint32_t owner, uint64_t key,
+                               const void *value, uint32_t value_len,
+                               int op_kind) {
+  if (!wr_ || !fs_) return -10;
+  if (value_len > kForwardStagingSlotBytes) return -5;
+  WriteRing *ring = &wr_->rings[host_id_][owner];
+  uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+  uint64_t op_id = encode_op_id(host_id_, my_op);
 
   // Reserve slot.
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
-  uint32_t slot = (uint32_t)(tpos % kForwardRingDepth);
-  ForwardEntry *e = &ring->entries[slot];
+  uint32_t slot_idx = (uint32_t)(tpos % kWriteRingDepth);
+  WriteEntry *e = &ring->entries[slot_idx];
 
-  // Wait for slot free.
+  // Wait for slot free (cacheline 1 holds req_op_id).
   for (;;) {
-    flush_line((void *)e);
+    flush_line((void *)&e->req_op_id);
     full_fence();
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
     __builtin_ia32_pause();
   }
 
-  e->key = key;
-  e->value_len = value_len;
-  e->op_kind = (uint8_t)op_kind;
+  // Copy value bytes into the staging arena slot first (op_kind=DELETE
+  // skips this — value_len == 0).
   if (value && value_len > 0) {
-    std::memcpy(e->payload, value, value_len);
-    // Flush payload cachelines.
+    uint8_t *staging =
+        forward_staging_bytes(fs_, host_id_, (int)owner, (int)slot_idx);
+    std::memcpy(staging, value, value_len);
     for (uint32_t off = 0; off < value_len; off += 64) {
-      flush_line((void *)(e->payload + off));
+      flush_line((void *)(staging + off));
     }
+    store_fence();
   }
+
+  // Fill control message (cacheline 1).
+  e->key = key;
+  e->op_kind = (uint8_t)op_kind;
+  e->value_len = value_len;
+  e->staging_off = slot_idx;          // sanity check; receiver asserts
+  e->staging_gen = 0;                 // reserved (iter-10A pool-gen)
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
   e->req_op_id.store(op_id, std::memory_order_release);
-  flush_line((void *)e);
+  flush_line((void *)&e->req_op_id);  // publish cacheline 1
   store_fence();
 
   int status = 0;
-  int rc = forward_spin_wait(e, op_id, &status);
+  int rc = generic_spin_wait(e, op_id, &status);
   if (rc != 0) return rc;
   return status;
 }
@@ -416,7 +492,7 @@ int CxlKvStoreA::forward_to_owner(uint32_t owner, uint64_t key,
 // iter-5A: send OP_INVALIDATE on the SEPARATE InvalRing channel.
 // Producer reserves a slot via fetch_add(tail) + flush, writes the
 // key, and spins on resp_op_id (which the dispatcher_loop on the
-// target host will set). No interaction with ForwardRingMatrix.
+// target host will set). No interaction with the WriteRing or ReadRing.
 int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
   if (!ir_) return -10;  // invalidate channel not enabled
   InvalRing *ring = &ir_->rings[host_id_][target_host];
@@ -501,39 +577,36 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
     store_fence();
   }
   if (spawn_dispatcher) {
-    dispatcher_stop_.store(false, std::memory_order_relaxed);
-    cache_dispatcher_ = std::thread([this]() {
-      // iter-9A C3: name + pin to cpu 69 (InvalReceiver slot per
-      // task plan §2.F).
+    inval_receiver_stop_.store(false, std::memory_order_relaxed);
+    inval_receiver_ = std::thread([this]() {
+      // iter-9A Phase 2.E + C3: named + CPU-pinned per task plan §2.F.
       pthread_setname_np(pthread_self(), "InvalReceiver");
-      cpu_set_t cs;
-      CPU_ZERO(&cs);
-      CPU_SET(69, &cs);
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(69, &cs);
       pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
       fprintf(stderr,
         "[A:thread] InvalReceiver pid=%d tid=%lu pinned cpu=69 (host_id=%d)\n",
         getpid(), (unsigned long)pthread_self(), host_id_);
-      this->cache_dispatcher_loop();
+      this->inval_receiver_loop();
     });
   }
   return 0;
 }
 
-void CxlKvStoreA::stop_dispatcher() {
-  if (!cache_dispatcher_.joinable()) return;
-  dispatcher_stop_.store(true, std::memory_order_release);
-  cache_dispatcher_.join();
+void CxlKvStoreA::stop_inval_receiver() {
+  if (!inval_receiver_.joinable()) return;
+  inval_receiver_stop_.store(true, std::memory_order_release);
+  inval_receiver_.join();
 }
 
-// Dispatcher: drain incoming InvalRing[*][me]; for each entry mark
+// InvalReceiver: drain incoming InvalRing[*][me]; for each entry mark
 // the key stale in the local cache_pool and ACK via resp_op_id.
 // CRUCIALLY this thread does NOT acquire the directory spinlock and
 // does NOT call execute_write_local — so it cannot deadlock with
-// the responder thread that is processing forwards.
-void CxlKvStoreA::cache_dispatcher_loop() {
+// the WriteReceiver/ReadReceiver that are processing forwards.
+void CxlKvStoreA::inval_receiver_loop() {
   // Touch probe ring so its FUSEE_PROBE_DUMP envvar is read on this thread.
   probe_ring();
-  while (!dispatcher_stop_.load(std::memory_order_acquire)) {
+  while (!inval_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
@@ -574,184 +647,229 @@ void CxlKvStoreA::cache_dispatcher_loop() {
   probe_flush();
 }
 
-int CxlKvStoreA::forward_cache_register(uint32_t owner, uint64_t key,
-                                        void *out_buf, uint32_t buf_len,
-                                        uint32_t *out_len) {
-  if (!fr_) return -10;
-  ForwardRing *ring = &fr_->rings[host_id_][owner];
-  uint64_t my_op = req_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-  uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
-                   (my_op & 0x00FFFFFFFFFFFFFFULL);
+// iter-9A Phase 2.A — read-path register-then-fill via ReadRing.
+// Producer enqueues control-only req; ReadReceiver responds with
+// (status, owner_blk_off, value_len). Reader pulls value bytes
+// directly via pool_->read — no value bytes on the message ring.
+int CxlKvStoreA::forward_read(uint32_t owner, uint64_t key,
+                              void *out_buf, uint32_t buf_len,
+                              uint32_t *out_len) {
+  if (!rr_) return -10;
+  ReadRing *ring = &rr_->rings[host_id_][owner];
+  uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+  uint64_t op_id = encode_op_id(host_id_, my_op);
 
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
-  uint32_t slot = (uint32_t)(tpos % kForwardRingDepth);
-  ForwardEntry *e = &ring->entries[slot];
+  uint32_t slot_idx = (uint32_t)(tpos % kReadRingDepth);
+  ReadEntry *e = &ring->entries[slot_idx];
 
   for (;;) {
-    flush_line((void *)e);
+    flush_line((void *)&e->req_op_id);
     full_fence();
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
     __builtin_ia32_pause();
   }
 
   e->key = key;
-  e->value_len = 0;
-  e->op_kind = kOpKindCacheRegister;
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
+  e->resp_value_len = 0;
+  e->resp_blk_off = 0;
   std::atomic_thread_fence(std::memory_order_release);
   e->req_op_id.store(op_id, std::memory_order_release);
-  flush_line((void *)e);
+  flush_line((void *)&e->req_op_id);
   store_fence();
 
   int status = 0;
-  int rc = forward_spin_wait(e, op_id, &status);
+  int rc = generic_spin_wait(e, op_id, &status);
   if (rc != 0) return rc;
-  if (status == 0) {
-    // Re-fetch entry to read response payload (resp_value_len_ + payload).
-    flush_line((void *)e);
-    full_fence();
-    uint32_t resp_len = (uint32_t)e->resp_value_len_;
-    if (resp_len > 0 && resp_len <= kForwardEntryPayloadBytes) {
-      // Flush payload cachelines to refetch from CXL.
-      for (uint32_t off = 0; off < resp_len; off += 64) {
-        flush_line((void *)(e->payload + off));
-      }
-      full_fence();
-      uint32_t copy_len = resp_len < buf_len ? resp_len : buf_len;
-      if (out_buf && copy_len > 0) std::memcpy(out_buf, e->payload, copy_len);
-      if (out_len) *out_len = resp_len;
-    } else {
-      if (out_len) *out_len = 0;
-    }
+  if (status != 0) {
+    if (out_len) *out_len = 0;
+    return status;
   }
-  return status;
+  // Owner ACKed; read response side (cacheline 2) for blk_off + len.
+  flush_line((void *)&e->resp_op_id);
+  full_fence();
+  uint32_t vlen = e->resp_value_len;
+  uint64_t blk_off = e->resp_blk_off;
+
+  // Two response shapes:
+  //   blk_off == 0  →  inline u64 (legacy fallback, owner had no pool
+  //                    or slot stored inline) — vlen carries the bytes
+  //                    in the low half of resp_blk_off (overloaded).
+  //   blk_off != 0  →  pool-backed: pool_->read(blk_off + 4, ...) of
+  //                    vlen bytes.
+  if (blk_off == 0 && vlen <= 8) {
+    if (out_buf && vlen > 0) {
+      std::memcpy(out_buf, &e->resp_blk_off, vlen);
+    }
+    if (out_len) *out_len = vlen;
+    return 0;
+  }
+
+  if (vlen == 0 || vlen > kForwardStagingSlotBytes || pool_ == nullptr) {
+    if (out_len) *out_len = 0;
+    return -1;
+  }
+  uint8_t scratch[kForwardStagingSlotBytes];
+  // Skip the 4 B value-length header (see execute_write_local block layout).
+  pool_->read(blk_off + 4, scratch, vlen);
+  uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+  if (out_buf && copy_len > 0) std::memcpy(out_buf, scratch, copy_len);
+  if (out_len) *out_len = vlen;
+  return 0;
 }
 
-void CxlKvStoreA::responder_handle(ForwardEntry *e) {
-  switch (e->op_kind) {
-    case kOpKindUpdate:
-    case kOpKindInsert:
-    case kOpKindDelete: {
-      int rc;
-      if (e->op_kind == kOpKindDelete) {
-        rc = execute_write_local(e->key, nullptr, 0, kOpKindDelete);
-      } else {
-        // iter-9A: read varlen payload from inline ForwardEntry.
-        // Flush payload to ensure we see CXL-fresh bytes.
-        for (uint32_t off = 0; off < e->value_len; off += 64) {
-          flush_line((void *)(e->payload + off));
-        }
-        full_fence();
-        rc = execute_write_local(e->key, e->payload, e->value_len,
-                                 (int)e->op_kind);
-      }
-      e->status = rc;
-      break;
-    }
-    // iter-5A: kOpKindInvalidate REMOVED from ForwardEntry path —
-    // invalidates now flow on InvalRing handled by cache_dispatcher_loop.
-    case kOpKindCacheRegister: {
-      // §I9 register-then-fill: under directory lock, set sharer bit
-      // for the requesting host, look up the value, return it.
-      uint32_t b = bucket_idx(e->key);
-      CxlKvBucket *bucket = &buckets_[b];
-      flush_line(bucket);
-      flush_line((char *)bucket + 64);
-      full_fence();
-
-      int found = -1;
-      for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
-        if (bucket->slots[s].key == e->key) { found = s; break; }
-      }
-      if (found < 0) {
-        e->status = -1;
-        e->resp_value_len_ = 0;
-        break;
-      }
-
-      SlotDirectoryEntry *de =
-          slot_directory_entry(dir_, b, (uint32_t)found);
-      slot_directory_lock(de);
-      uint64_t op_id = e->req_op_id.load(std::memory_order_relaxed);
-      int requester = (int)((op_id >> 56) & 0xFF) - 1;
-      if (requester >= 0 && requester < num_hosts_ &&
-          requester != host_id_) {
-        de->sharer_bitmap = (uint8_t)(de->sharer_bitmap |
-                                       (1u << requester));
-      }
-      uint64_t encoded = bucket->slots[found].value;
-      slot_directory_unlock(de);
-
-      // iter-9A: read varlen value from blockpool. Header layout:
-      //   pool block @ blk_off: [4B value_len][value bytes]
-      uint8_t sc = cxl_slot_size_class(encoded);
-      if (sc == kSizeClassInline || pool_ == nullptr) {
-        // Legacy inline u64: copy 8 bytes into payload.
-        std::memcpy(e->payload, &encoded, 8);
-        e->resp_value_len_ = 8;
-        // Flush payload cacheline so requester sees fresh bytes.
-        flush_line((void *)e->payload);
-        e->status = 0;
-      } else {
-        uint64_t blk_off = cxl_slot_blk_off(encoded);
-        if (blk_off != 0) {
-          uint8_t hdr_buf[4];
-          pool_->read(blk_off, hdr_buf, 4);
-          uint32_t vlen = 0;
-          std::memcpy(&vlen, hdr_buf, 4);
-          if (vlen == 0 || vlen > kForwardEntryPayloadBytes) {
-            e->status = -1;
-            e->resp_value_len_ = 0;
-            break;
-          }
-          uint8_t valbuf[kForwardEntryPayloadBytes];
-          pool_->read(blk_off + 4, valbuf, vlen);
-          std::memcpy(e->payload, valbuf, vlen);
-          for (uint32_t off = 0; off < vlen; off += 64) {
-            flush_line((void *)(e->payload + off));
-          }
-          e->resp_value_len_ = vlen;
-          e->status = 0;
-        } else {
-          e->resp_value_len_ = 0;
-          e->status = -1;
-        }
-      }
-      break;
-    }
-    default:
-      e->status = -1;
-      break;
+void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
+  // C2 staging contract: read forwarder's value bytes from
+  // ForwardStaging[src][me][slot_idx]. slot_idx is encoded in
+  // staging_off (sanity check: must equal e - ring->entries[0]).
+  uint32_t value_len = e->value_len;
+  uint32_t slot_idx = (uint32_t)e->staging_off;
+  if (e->op_kind == kOpKindDelete) {
+    e->status = execute_write_local(e->key, nullptr, 0, kOpKindDelete);
+    return;
   }
+  if (value_len == 0 || value_len > kForwardStagingSlotBytes) {
+    e->status = -5;
+    return;
+  }
+  uint8_t *staging =
+      forward_staging_bytes(fs_, src, host_id_, (int)slot_idx);
+  for (uint32_t off = 0; off < value_len; off += 64) {
+    flush_line((void *)(staging + off));
+  }
+  full_fence();
+  e->status = execute_write_local(e->key, staging, value_len,
+                                   (int)e->op_kind);
 }
 
-void CxlKvStoreA::responder_loop() {
+void CxlKvStoreA::read_handler(ReadEntry *e, int src) {
+  // §I9 register-then-fill: lookup slot under directory lock, set
+  // sharer bit, respond with owner_blk_off + value_len. Value bytes
+  // stay in owner's pool — reader pulls directly via pool->read.
+  uint32_t b = bucket_idx(e->key);
+  CxlKvBucket *bucket = &buckets_[b];
+  flush_line(bucket);
+  flush_line((char *)bucket + 64);
+  full_fence();
+
+  int found = -1;
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (bucket->slots[s].key == e->key) { found = s; break; }
+  }
+  if (found < 0) {
+    e->status = -1;
+    e->resp_value_len = 0;
+    e->resp_blk_off = 0;
+    return;
+  }
+
+  SlotDirectoryEntry *de =
+      slot_directory_entry(dir_, b, (uint32_t)found);
+  slot_directory_lock(de);
+  if (src >= 0 && src < num_hosts_ && src != host_id_) {
+    de->sharer_bitmap = (uint8_t)(de->sharer_bitmap | (1u << src));
+  }
+  uint64_t encoded = bucket->slots[found].value;
+  slot_directory_unlock(de);
+
+  uint8_t sc = cxl_slot_size_class(encoded);
+  if (sc == kSizeClassInline || pool_ == nullptr) {
+    // Inline u64 fallback — pack the 8 bytes into resp_blk_off
+    // (whose `blk_off == 0` sentinel tells the reader to interpret
+    // the field as inline value bytes; see forward_read).
+    e->resp_value_len = 8;
+    std::memcpy(&e->resp_blk_off, &encoded, 8);
+    e->status = 0;
+    return;
+  }
+  uint64_t blk_off = cxl_slot_blk_off(encoded);
+  if (blk_off == 0) {
+    e->status = -1;
+    e->resp_value_len = 0;
+    e->resp_blk_off = 0;
+    return;
+  }
+  // Read the 4 B value-length header out of the pool block. We
+  // intentionally don't fetch value bytes here — reader does that.
+  uint8_t hdr[4];
+  pool_->read(blk_off, hdr, 4);
+  uint32_t vlen = 0;
+  std::memcpy(&vlen, hdr, 4);
+  if (vlen == 0 || vlen > kForwardStagingSlotBytes) {
+    e->status = -1;
+    e->resp_value_len = 0;
+    e->resp_blk_off = 0;
+    return;
+  }
+  e->resp_value_len = vlen;
+  e->resp_blk_off = blk_off;
+  e->status = 0;
+}
+
+void CxlKvStoreA::write_receiver_loop() {
   probe_ring();
-  while (!responder_stop_.load(std::memory_order_acquire)) {
+  while (!write_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      ForwardRing *ring = &fr_->rings[src][host_id_];
+      WriteRing *ring = &wr_->rings[src][host_id_];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
       while (head < tail) {
-        uint32_t slot = (uint32_t)(head % kForwardRingDepth);
-        ForwardEntry *e = &ring->entries[slot];
-        flush_line((void *)e);
+        uint32_t slot = (uint32_t)(head % kWriteRingDepth);
+        WriteEntry *e = &ring->entries[slot];
+        flush_line((void *)&e->req_op_id);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
         if (op_id == 0) break;
-
-        responder_handle(e);
+        // Pull the rest of cacheline 1 (key, op_kind, value_len,
+        // staging_off, staging_gen) — they're on the same line as
+        // req_op_id, the flush above already fetched them.
+        write_handler(e, src);
 
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);
-        flush_line((void *)e);
+        flush_line((void *)&e->resp_op_id);
+        store_fence();
+        head++;
+        did_work = true;
+      }
+      ring->head = head;
+    }
+    if (!did_work) __builtin_ia32_pause();
+  }
+  probe_flush();
+}
+
+void CxlKvStoreA::read_receiver_loop() {
+  probe_ring();
+  while (!read_receiver_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int src = 0; src < num_hosts_; src++) {
+      if (src == host_id_) continue;
+      ReadRing *ring = &rr_->rings[src][host_id_];
+      uint64_t head = ring->head;
+      flush_line((void *)&ring->tail);
+      full_fence();
+      uint64_t tail = ring->tail.load(std::memory_order_acquire);
+      while (head < tail) {
+        uint32_t slot = (uint32_t)(head % kReadRingDepth);
+        ReadEntry *e = &ring->entries[slot];
+        flush_line((void *)&e->req_op_id);
+        full_fence();
+        uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
+        if (op_id == 0) break;
+        read_handler(e, src);
+
+        std::atomic_thread_fence(std::memory_order_release);
+        e->resp_op_id.store(op_id, std::memory_order_release);
+        flush_line((void *)&e->resp_op_id);
         store_fence();
         head++;
         did_work = true;
@@ -769,7 +887,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   PROBE_OP("R1", key);
 
   // Fast path: local cache lookup with stale check.
-  uint8_t buf[kForwardEntryPayloadBytes];
+  uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
     PROBE_OP("R2hit", key);
@@ -784,11 +902,11 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   uint32_t owner = owner_host(key);
 
   // Cross-host miss: §I9 register-then-fill via OP_CACHE_REGISTER.
-  if (owner != (uint32_t)host_id_ && fr_) {
+  if (owner != (uint32_t)host_id_ && rr_) {
     PROBE_OP("R3", key);
-    uint8_t v[kForwardEntryPayloadBytes];
+    uint8_t v[kForwardStagingSlotBytes];
     uint32_t vlen = 0;
-    int rc = forward_cache_register(owner, key, v, sizeof(v), &vlen);
+    int rc = forward_read(owner, key, v, sizeof(v), &vlen);
     if (rc != 0) return rc;
     PROBE_OP("R4", key);
     // §AP15: populate cache ONLY after register ACK (we got it here).
@@ -812,7 +930,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     if (bucket->slots[s].key == key) {
       uint64_t encoded = bucket->slots[s].value;
       uint8_t sc = cxl_slot_size_class(encoded);
-      uint8_t v[kForwardEntryPayloadBytes];
+      uint8_t v[kForwardStagingSlotBytes];
       uint32_t vlen = 0;
       if (sc == kSizeClassInline || pool_ == nullptr) {
         std::memcpy(v, &encoded, 8);
@@ -823,7 +941,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
           uint8_t hdr_buf[4];
           pool_->read(blk_off, hdr_buf, 4);
           std::memcpy(&vlen, hdr_buf, 4);
-          if (vlen > 0 && vlen <= kForwardEntryPayloadBytes) {
+          if (vlen > 0 && vlen <= kForwardStagingSlotBytes) {
             pool_->read(blk_off + 4, v, vlen);
           } else {
             return -1;

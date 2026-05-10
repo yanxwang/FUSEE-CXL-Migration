@@ -5,7 +5,6 @@
 
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
-#include "cxl_forward_ring.h"
 #include "cxl_hashtable.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"

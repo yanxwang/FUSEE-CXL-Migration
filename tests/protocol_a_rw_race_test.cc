@@ -16,14 +16,16 @@
 
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
-#include "cxl_forward_ring.h"
+#include "cxl_forward_staging.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_kv_ops_A.h"
 #include "cxl_mm.h"
+#include "cxl_read_ring.h"
 #include "cxl_sharding.h"
+#include "cxl_write_ring.h"
 
 #include <cassert>
 #include <cstdint>
@@ -63,11 +65,13 @@ int main(int argc, char **argv) {
   const uint32_t kBlocksPerHost = 1024;
   std::size_t pool_bytes =
       CxlKvBlockPool::bytes_for(kBlocksPerHost, kBlockSize, num_hosts);
-  std::size_t fr_bytes = forward_ring_matrix_bytes();
+  std::size_t wr_bytes = write_ring_matrix_bytes();
+  std::size_t rr_bytes = read_ring_matrix_bytes();
   std::size_t ir_bytes = inval_ring_matrix_bytes();
+  std::size_t fs_bytes = forward_staging_matrix_bytes();
   std::size_t header_bytes = 4096;
-  std::size_t total = header_bytes + bucket_bytes + pool_bytes + fr_bytes
-                    + ir_bytes + 4096;
+  std::size_t total = header_bytes + bucket_bytes + pool_bytes
+                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
   CXLRegion r{};
@@ -81,8 +85,10 @@ int main(int argc, char **argv) {
   CxlKvBucket *buckets = reinterpret_cast<CxlKvBucket *>(
       reinterpret_cast<char *>(r.base) + header_bytes);
   void *pool_mem = reinterpret_cast<char *>(buckets) + bucket_bytes;
-  void *fr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
-  void *ir_mem = reinterpret_cast<char *>(fr_mem) + fr_bytes;
+  void *wr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
+  void *rr_mem = reinterpret_cast<char *>(wr_mem) + wr_bytes;
+  void *ir_mem = reinterpret_cast<char *>(rr_mem) + rr_bytes;
+  void *fs_mem = reinterpret_cast<char *>(ir_mem) + ir_bytes;
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -118,10 +124,14 @@ int main(int argc, char **argv) {
   if (is_host_primary) {
     if (store.attach(buckets, kNumBuckets, host_id, num_hosts, true,
                      &st, &dir, &cache, &fl, &pool) != 0) return 1;
-    ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
-    if (store.enable_forward(fr, true, true) != 0) return 1;
+    WriteRingMatrix *wr = reinterpret_cast<WriteRingMatrix *>(wr_mem);
+    ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
+    ForwardStagingMatrix *fs = reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    if (store.enable_write_ring(wr, fs, true, true) != 0) return 1;
+    if (store.enable_read_ring(rr, true, true) != 0) return 1;
     if (store.enable_invalidate(ir, true, true) != 0) return 1;
+    if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
     flush_line(&hdr->init_done); store_fence();
@@ -133,10 +143,14 @@ int main(int argc, char **argv) {
     }
     if (store.attach(buckets, kNumBuckets, host_id, num_hosts, false,
                      &st, &dir, &cache, &fl, &pool) != 0) return 1;
-    ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
-    if (store.enable_forward(fr, false, true) != 0) return 1;
+    WriteRingMatrix *wr = reinterpret_cast<WriteRingMatrix *>(wr_mem);
+    ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
+    ForwardStagingMatrix *fs = reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    if (store.enable_write_ring(wr, fs, false, true) != 0) return 1;
+    if (store.enable_read_ring(rr, false, true) != 0) return 1;
     if (store.enable_invalidate(ir, false, true) != 0) return 1;
+    if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | 0x2ULL);
     flush_line(&hdr->init_done); store_fence();

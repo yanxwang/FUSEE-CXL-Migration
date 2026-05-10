@@ -24,9 +24,11 @@
 
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
-#include "cxl_forward_ring.h"
+#include "cxl_forward_staging.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
+#include "cxl_read_ring.h"
+#include "cxl_write_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_kv_ops_A.h"
@@ -172,8 +174,10 @@ int main(int argc, char **argv) {
     if (trans_ops.size() > max_ops) trans_ops.resize(max_ops);
   }
 
-  // CXL region layout:
-  //   [4 KB header][bucket array][KvBlockPool region][ForwardRingMatrix][stats]
+  // CXL region layout (iter-9A redo Phase 2):
+  //   [4 KB header][bucket array][KvBlockPool region]
+  //   [WriteRingMatrix][ReadRingMatrix][InvalRingMatrix]
+  //   [ForwardStagingMatrix][stats]
   std::size_t bucket_bytes = sizeof(CxlKvBucket) * num_buckets;
   // iter-5A Phase 7: KV_SIZE (= block_size) is per-cell, env-driven.
   uint32_t kBlockSize = 256;
@@ -187,12 +191,15 @@ int main(int argc, char **argv) {
   if (want_blocks > 1ULL << 23) want_blocks = 1ULL << 23;
   std::size_t pool_bytes =
       CxlKvBlockPool::bytes_for((uint32_t)want_blocks, kBlockSize, num_hosts);
-  std::size_t fr_bytes = forward_ring_matrix_bytes();
+  std::size_t wr_bytes = write_ring_matrix_bytes();
+  std::size_t rr_bytes = read_ring_matrix_bytes();
   std::size_t ir_bytes = inval_ring_matrix_bytes();
+  std::size_t fs_bytes = forward_staging_matrix_bytes();
   std::size_t stats_bytes = sizeof(WorkerStats) * 2 * kMaxClients;
   std::size_t header_bytes = 4096;
-  std::size_t total = header_bytes + bucket_bytes + pool_bytes + fr_bytes
-                    + ir_bytes + stats_bytes + 4096;
+  std::size_t total = header_bytes + bucket_bytes + pool_bytes
+                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes
+                    + stats_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
   CXLRegion r{};
@@ -210,10 +217,12 @@ int main(int argc, char **argv) {
   CxlKvBucket *buckets = reinterpret_cast<CxlKvBucket *>(
       reinterpret_cast<char *>(r.base) + header_bytes);
   void *pool_mem = reinterpret_cast<char *>(buckets) + bucket_bytes;
-  void *fr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
-  void *ir_mem = reinterpret_cast<char *>(fr_mem) + fr_bytes;
+  void *wr_mem = reinterpret_cast<char *>(pool_mem) + pool_bytes;
+  void *rr_mem = reinterpret_cast<char *>(wr_mem) + wr_bytes;
+  void *ir_mem = reinterpret_cast<char *>(rr_mem) + rr_bytes;
+  void *fs_mem = reinterpret_cast<char *>(ir_mem) + ir_bytes;
   WorkerStats *stats = reinterpret_cast<WorkerStats *>(
-      reinterpret_cast<char *>(ir_mem) + ir_bytes);
+      reinterpret_cast<char *>(fs_mem) + fs_bytes);
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -309,14 +318,21 @@ int main(int argc, char **argv) {
                      &st, &dir, &cache, &fl, &pool) != 0) {
       fprintf(stderr, "primary attach failed\n"); return 1;
     }
-    ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
-    if (store.enable_forward(fr, /*init=*/true, /*spawn_responder=*/true) != 0) {
-      fprintf(stderr, "primary enable_forward failed\n"); return 1;
-    }
+    WriteRingMatrix *wr = reinterpret_cast<WriteRingMatrix *>(wr_mem);
+    ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
-    if (store.enable_invalidate(ir, /*init=*/true, /*spawn_dispatcher=*/true) != 0) {
+    ForwardStagingMatrix *fs =
+        reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    if (store.enable_write_ring(wr, fs, /*init=*/true, /*spawn=*/true) != 0) {
+      fprintf(stderr, "primary enable_write_ring failed\n"); return 1;
+    }
+    if (store.enable_read_ring(rr, /*init=*/true, /*spawn=*/true) != 0) {
+      fprintf(stderr, "primary enable_read_ring failed\n"); return 1;
+    }
+    if (store.enable_invalidate(ir, /*init=*/true, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_invalidate failed\n"); return 1;
     }
+    if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
     CACHELINE_STORE(&hdr->init_done, cur | 0x1ULL);
     flush_line(&hdr->init_done); store_fence();
@@ -338,16 +354,23 @@ int main(int argc, char **argv) {
       return 1;
     }
     if (host_id == 1 && client_id == 0) {
-      // host 1 primary: enable forward + invalidate (no init), spawn
-      // responder + dispatcher.
-      ForwardRingMatrix *fr = reinterpret_cast<ForwardRingMatrix *>(fr_mem);
-      if (store.enable_forward(fr, /*init=*/false, /*spawn_responder=*/true) != 0) {
-        fprintf(stderr, "[h1 primary] enable_forward failed\n"); return 1;
-      }
+      // host 1 primary: attach (no init) the 3-ring + staging mesh and
+      // spawn its three named receivers.
+      WriteRingMatrix *wr = reinterpret_cast<WriteRingMatrix *>(wr_mem);
+      ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
       InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
-      if (store.enable_invalidate(ir, /*init=*/false, /*spawn_dispatcher=*/true) != 0) {
+      ForwardStagingMatrix *fs =
+          reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+      if (store.enable_write_ring(wr, fs, /*init=*/false, /*spawn=*/true) != 0) {
+        fprintf(stderr, "[h1 primary] enable_write_ring failed\n"); return 1;
+      }
+      if (store.enable_read_ring(rr, /*init=*/false, /*spawn=*/true) != 0) {
+        fprintf(stderr, "[h1 primary] enable_read_ring failed\n"); return 1;
+      }
+      if (store.enable_invalidate(ir, /*init=*/false, /*spawn=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_invalidate failed\n"); return 1;
       }
+      if (store.assert_n_to_n_active() != 0) return 1;
       uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
       CACHELINE_STORE(&hdr->init_done, cur | 0x2ULL);
       flush_line(&hdr->init_done); store_fence();
@@ -553,8 +576,12 @@ int main(int argc, char **argv) {
     }
   }
 
-  store.stop_responder();
-  store.stop_dispatcher();
+  // iter-9A redo Phase 2.D: stop all three named receivers
+  // (WriteReceiver, ReadReceiver, InvalReceiver). The legacy
+  // stop_responder/stop_dispatcher pair only joined two threads —
+  // the new ReadReceiver would leak and trigger terminate() on
+  // CxlKvStoreA destruction.
+  store.stop();
 
   if (is_primary_client) {
     flush_region(stats, stats_bytes); full_fence();

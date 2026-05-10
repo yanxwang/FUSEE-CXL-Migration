@@ -21,8 +21,10 @@ PROTECTED_GLOBS=(
   'src/cxl_cache_pool\.(h|cc)'
   'src/cxl_kv_blockpool\.(h|cc)'
   'src/cxl_kv_blockpool_freelist\.(h|cc)'
-  'src/cxl_forward_ring\.h'
+  'src/cxl_write_ring\.h'
+  'src/cxl_read_ring\.h'
   'src/cxl_inval_ring\.h'
+  'src/cxl_forward_staging\.h'
   'src/cxl_probe\.(h|cc)'
 )
 

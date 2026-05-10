@@ -57,9 +57,20 @@ static_assert(sizeof(InvalEntry) == 128,
               "InvalEntry must be exactly two cachelines (iter-6A layout)");
 
 struct alignas(64) InvalRing {
-  std::atomic<uint64_t> tail;        // producer cursor (CXL-flushed)
-  uint64_t head;                     // consumer cursor (plain, dst-local)
-  uint8_t  _pad[64 - 16];
+  // iter-9A redo Phase 2 fix: tail and head MUST be on separate
+  // cachelines. The original iter-5A InvalRing put them on the same
+  // 64 B header, which works on cache-coherent hardware but on
+  // non-coherent CXL Type 3 causes false-sharing — forwarder writes
+  // tail, receiver writes head, last-writer-wins clobbers one or the
+  // other. The bug was latent in iter-9A original (less invalidate
+  // traffic than write/read forwards) but surfaced as a 60%-timeout
+  // cascade once iter-9A redo Phase 2.A built WriteRing/ReadRing
+  // with the same flawed layout. See cxl_write_ring.h header for the
+  // full RAP.
+  std::atomic<uint64_t> tail;        // producer cursor
+  char _pad_tail[64 - sizeof(std::atomic<uint64_t>)];
+  uint64_t head;                     // consumer cursor (dst-local)
+  char _pad_head[64 - sizeof(uint64_t)];
   InvalEntry entries[kInvalRingDepth];
 };
 

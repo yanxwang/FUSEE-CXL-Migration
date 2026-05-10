@@ -13,16 +13,21 @@
 //   - I9:  reader fast = local cache; slow = register-then-fill
 //          (OP_CACHE_REGISTER → owner directory.set_sharer + value)
 //   - I10: write commit = all sharer ACK + CXL durable
-//   - I11: cross-host write via N:1:1:N forward (ForwardRingMatrix)
+//   - I11: cross-host write via N:1:1:N forward (iter-9A Phase 2:
+//          WriteRingMatrix + ReadRingMatrix + InvalRingMatrix +
+//          ForwardStagingMatrix; control on rings, value bytes on
+//          staging arena per C2)
 
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
-#include "cxl_forward_ring.h"
+#include "cxl_forward_staging.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
+#include "cxl_read_ring.h"
 #include "cxl_sharding.h"
+#include "cxl_write_ring.h"
 
 #include <atomic>
 #include <cstddef>
@@ -46,27 +51,58 @@ class CxlKvStoreA {
              ShardingTable *st, SlotDirectory *dir, KvCachePool *cache,
              BlockFreeList *freelist, CxlKvBlockPool *pool);
 
-  // Phase 8: wire cross-host write forward / OP_CACHE_REGISTER via
-  // ForwardRing in CXL. `fr` lives in CXL (init_region=true on host
-  // 0 zeroes the matrix). Spawns one responder thread per host on
-  // the primary client.
-  int enable_forward(ForwardRingMatrix *fr, bool init_region,
-                     bool spawn_responder);
+  // iter-9A Phase 2.A: wire the WriteRing channel for op 1/2/3
+  // (UPDATE/INSERT/DELETE). `wr` and `fs` live in CXL; `wr` carries
+  // control-only WriteEntry messages and `fs` is the per-host value-
+  // bytes staging arena. init_region=true on host 0 zeroes the
+  // matrices. Spawns one named WriteReceiver thread (cpu 65) per host
+  // on the primary client.
+  int enable_write_ring(WriteRingMatrix *wr, ForwardStagingMatrix *fs,
+                        bool init_region, bool spawn_receiver);
+
+  // iter-9A Phase 2.A: wire the ReadRing channel for op 4
+  // (CACHE_REGISTER, register-then-fill). `rr` lives in CXL. Response
+  // carries (status, owner_blk_off, value_len) and the reader pulls
+  // value bytes directly via pool->read — no value bytes on the ring.
+  // Spawns one named ReadReceiver thread (cpu 67) per host on the
+  // primary client.
+  int enable_read_ring(ReadRingMatrix *rr, bool init_region,
+                       bool spawn_receiver);
 
   // iter-5A Phase 4: wire the SEPARATE invalidate channel. `ir` lives
   // in CXL (init_region=true on host 0 zeroes the matrix). Spawns one
-  // cache_dispatcher thread per host on the primary client. Must be
-  // called AFTER enable_forward (the writer-side broadcast in
-  // execute_write_local needs both fr_ and ir_ wired).
+  // cache_dispatcher thread (now named "InvalReceiver", cpu 69) per
+  // host on the primary client. Must be called AFTER both
+  // enable_write_ring and enable_read_ring (writer broadcast in
+  // execute_write_local needs them all wired).
   int enable_invalidate(InvalRingMatrix *ir, bool init_region,
                         bool spawn_dispatcher);
 
-  // Stop the responder + dispatcher threads (call before destroying
-  // CXL region).
-  void stop_responder();
-  void stop_dispatcher();
+  // iter-9A Phase 2.G — C4 startup assert (replaces the obsolete
+  // phys_hosts_pr_ ≥ 2 check). In multi-host mode (num_hosts_ ≥ 2)
+  // ALL of {wr_, rr_, fs_, ir_} must be non-null before any
+  // cross-host operation can proceed. Call this AFTER all enable_*
+  // calls and BEFORE the first user op. Aborts on missing wiring;
+  // returns 0 on success.
+  int assert_n_to_n_active();
+
+  // Stop the receiver threads (call before destroying CXL region).
+  // iter-9A: 3 named system threads instead of the iter-5A pair.
+  void stop_write_receiver();
+  void stop_read_receiver();
+  void stop_inval_receiver();
   // Convenience: same shape as B/C — stop all spawned threads.
-  void stop() { stop_responder(); stop_dispatcher(); }
+  void stop() {
+    stop_write_receiver();
+    stop_read_receiver();
+    stop_inval_receiver();
+  }
+  // Legacy aliases — iter-9A renamed responder→write_receiver,
+  // dispatcher→inval_receiver. Kept here so test code compiled
+  // against pre-Phase-2 names (protocol_a_ycsb's stop sequence)
+  // still links.
+  void stop_responder()  { stop_write_receiver(); }
+  void stop_dispatcher() { stop_inval_receiver(); }
 
   // Public KV API (iter-9A Phase 1: variable-length value).
   //
@@ -118,18 +154,23 @@ class CxlKvStoreA {
   int execute_write_local(uint64_t key, const void *value,
                           uint32_t value_len, int op_kind);
 
-  // Cross-host helpers (Phase 7 + 8). All use ForwardRingMatrix slots.
-  int forward_to_owner(uint32_t owner, uint64_t key,
-                       const void *value, uint32_t value_len, int op_kind);
-  int forward_cache_register(uint32_t owner, uint64_t key,
-                             void *out_buf, uint32_t buf_len, uint32_t *out_len);
+  // Cross-host helpers — iter-9A Phase 2.A 3-ring split.
+  // Op 1/2/3 go via WriteRing + ForwardStaging.
+  int forward_write(uint32_t owner, uint64_t key,
+                    const void *value, uint32_t value_len, int op_kind);
+  // Op 4 goes via ReadRing; reader pulls value bytes from owner's
+  // CxlKvBlockPool via pool_->read (no value bytes on the message ring).
+  int forward_read(uint32_t owner, uint64_t key,
+                   void *out_buf, uint32_t buf_len, uint32_t *out_len);
 
-  // iter-5A: invalidate goes on its own channel (InvalRing) rather
-  // than ForwardRing, to break the responder-context circular wait.
+  // iter-5A: invalidate goes on its own channel (InvalRing) — one of
+  // the three iter-9A rings.
   int send_invalidate(uint32_t target_host, uint64_t key);
 
-  // Responder dispatch (one entry per cycle).
-  void responder_handle(ForwardEntry *e);
+  // Receiver dispatch — one handler per ring (iter-9A Phase 2.D).
+  // src is the originating host id (decoded from req_op_id high bits).
+  void write_handler(WriteEntry *e, int src);
+  void read_handler(ReadEntry *e, int src);
 
   CxlKvBucket *buckets_ = nullptr;
   uint32_t num_buckets_ = 0;
@@ -142,31 +183,38 @@ class CxlKvStoreA {
   BlockFreeList *freelist_ = nullptr;
   CxlKvBlockPool *pool_ = nullptr;
 
-  // Phase 8: cross-host forward.
-  ForwardRingMatrix *fr_ = nullptr;
-  std::thread responder_;
-  std::atomic<bool> responder_stop_{false};
-  std::atomic<uint64_t> req_op_counter_{0};
+  // iter-9A Phase 2.A: 3-ring split + ForwardStaging arena.
+  WriteRingMatrix       *wr_ = nullptr;
+  ReadRingMatrix        *rr_ = nullptr;
+  ForwardStagingMatrix  *fs_ = nullptr;
+  InvalRingMatrix       *ir_ = nullptr;
 
-  // iter-5A Phase 4: cache invalidate channel + dispatcher.
-  InvalRingMatrix *ir_ = nullptr;
-  std::thread cache_dispatcher_;
-  std::atomic<bool> dispatcher_stop_{false};
+  // iter-9A Phase 2.D-E: 3 named system threads per host (the senders
+  // are added in Phase 2.C as a follow-on commit).
+  std::thread write_receiver_;
+  std::thread read_receiver_;
+  std::thread inval_receiver_;
+  std::atomic<bool> write_receiver_stop_{false};
+  std::atomic<bool> read_receiver_stop_{false};
+  std::atomic<bool> inval_receiver_stop_{false};
+
+  std::atomic<uint64_t> write_op_counter_{0};
+  std::atomic<uint64_t> read_op_counter_{0};
   std::atomic<uint64_t> inval_op_counter_{0};
 
-  void responder_loop();
-  void cache_dispatcher_loop();
+  void write_receiver_loop();
+  void read_receiver_loop();
+  void inval_receiver_loop();
 };
 
-// op_kind values used on ForwardEntry::op_kind. UPDATE/INSERT/DELETE
-// flow through the responder; CACHE_REGISTER also flows through the
-// responder (request side). INVALIDATE has its own channel
-// (InvalRing) per iter-5A Phase 4 — it is NOT carried on ForwardEntry
-// any more.
+// op_kind values for write-path messages (WriteEntry::op_kind):
+//   UPDATE/INSERT/DELETE  → carried on WriteRing
+//   CACHE_REGISTER (op 4) → carried on ReadRing instead (no payload)
+//   INVALIDATE     (op 5) → carried on InvalRing (control-only, iter-5A)
 constexpr uint8_t kOpKindUpdate        = 0;
 constexpr uint8_t kOpKindInsert        = 1;
 constexpr uint8_t kOpKindDelete        = 2;
-constexpr uint8_t kOpKindCacheRegister = 4;  // sharer -> owner; resp value = u64
+constexpr uint8_t kOpKindCacheRegister = 4;  // routed via ReadRing
 
 }  // namespace fusee
 
