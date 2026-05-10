@@ -1,0 +1,19 @@
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=190211)
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=190212)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=190213)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=190214)
+[A:thread] WriteReceiver pid=190211 tid=139633462605504 pinned cpu=65 (host_id=0)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:thread] InvalReceiver pid=190211 tid=139633454212800 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=190211 tid=139633445820096 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P1 K=16 T_us=100 host_id=0
+[A:thread] ReadReceiver pid=190211 tid=139633318950592 pinned cpu=67 (host_id=0)
+[A:thread] ReadSender pid=190211 tid=139633437427392 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P1 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=190211 tid=139633429034688 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P1 K=16 T_us=100 host_id=0
+[h0] FUSEE_FINAL_STATE_DUMP wrote 8388608 bytes to /tmp/iter10A_p3_hd_workloadc_kv256_h0.bin
+YCSB opt=A cache=1 num_hosts=2 threads=4 threads_eff=4 rep=1 load_ops=10000 load_thpt=253108 trans_ops=10000 trans_wall_max=0.070314 trans_agg_thpt=142217 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=10336 r_p50_ns=759 r_p99_ns=109924 # workloadc_optA_t4_cacheon_rep1

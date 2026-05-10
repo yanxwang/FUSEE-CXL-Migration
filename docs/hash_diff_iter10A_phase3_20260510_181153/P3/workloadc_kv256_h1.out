@@ -1,0 +1,18 @@
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=195763)
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=195764)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=195765)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=195766)
+[A:thread] WriteReceiver pid=195763 tid=139670684956352 pinned cpu=65 (host_id=1)
+[A:thread] ReadReceiver pid=195763 tid=139670676563648 pinned cpu=67 (host_id=1)
+[A:thread] InvalReceiver pid=195763 tid=139670668170944 pinned cpu=69 (host_id=1)
+[A:thread] WriteSender pid=195763 tid=139670659778240 pinned cpu=64 (host_id=1)
+[A:sender] kind=0 policy=P3 K=16 T_us=100 host_id=1
+[A:thread] ReadSender pid=195763 tid=139670651385536 pinned cpu=66 (host_id=1)
+[A:sender] kind=1 policy=P3 K=16 T_us=100 host_id=1
+[A:thread] InvalSender pid=195763 tid=139670642992832 pinned cpu=68 (host_id=1)
+[A:sender] kind=2 policy=P3 K=16 T_us=100 host_id=1
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[h1] FUSEE_FINAL_STATE_DUMP wrote 8388608 bytes to /tmp/iter10A_p3_hd_workloadc_kv256_h1.bin

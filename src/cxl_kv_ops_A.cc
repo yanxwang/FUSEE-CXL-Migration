@@ -540,56 +540,508 @@ int CxlKvStoreA::send_invalidate(uint32_t target_host, uint64_t key) {
 //
 // Each sender owns the fetch_add on its CXL ring's tail; workers no
 // longer contend on it. Polls all worker slots round-robin.
+// iter-10A Phase 3: sender batch policies. Selected at runtime via
+// FUSEE_BATCH_POLICY env (P0/P1/P2/P3), default P0 (per-slot serial,
+// equivalent to iter-9A redo Phase 2.C aggregator behavior).
+//
+//  P0: per-slot serial — for each pending slot, call _direct (which
+//      does fetch_add(1) + write entry + spin on resp). 1 op per
+//      fetch_add, 1 op per blocking spin. Iter-9A redo baseline.
+//  P1: fixed-K + timeout — collect up to K pending slots OR T_us,
+//      group by dst, single fetch_add(K_dst) per dst in the batch.
+//      Pipelined response collection. Tunable: FUSEE_BATCH_K (default
+//      16), FUSEE_BATCH_TIMEOUT_US (default 100).
+//  P2: adaptive drain-all — each iteration scan all pending slots,
+//      group by dst, single fetch_add(N_dst) per dst. No K cap, no
+//      timeout. Self-tuning.
+//  P3: per-dst round-robin — each iteration drain ONE dst at a time
+//      (full per-dst batch, no K cap). Tests "is the win from
+//      fetch_add batching, or from per-dst grouping?"
+namespace {
+enum BatchPolicy { kBP_P0 = 0, kBP_P1, kBP_P2, kBP_P3 };
+BatchPolicy parse_batch_policy() {
+  const char *e = getenv("FUSEE_BATCH_POLICY");
+  if (!e) return kBP_P0;
+  if (e[0]=='P' && e[1]=='1') return kBP_P1;
+  if (e[0]=='P' && e[1]=='2') return kBP_P2;
+  if (e[0]=='P' && e[1]=='3') return kBP_P3;
+  return kBP_P0;
+}
+uint32_t parse_batch_k() {
+  if (const char *e = getenv("FUSEE_BATCH_K"); e && e[0]) {
+    int v = atoi(e);
+    if (v > 0 && v <= 256) return (uint32_t)v;
+  }
+  return 16;
+}
+uint64_t parse_batch_timeout_us() {
+  if (const char *e = getenv("FUSEE_BATCH_TIMEOUT_US"); e && e[0]) {
+    long v = atol(e);
+    if (v > 0 && v <= 10000) return (uint64_t)v;
+  }
+  return 100;
+}
+inline uint64_t now_ns_mono() {
+  timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+}  // namespace
+
+// Drain a batch of write slots all targeting `dst`. Issues one
+// fetch_add(n) on WriteRing[me][dst].tail, fills n entries +
+// staging in parallel, single sfence at end, then spins on n
+// resp_op_ids in round-robin and flips ack as each comes back.
+// `slot_workers[]` is the worker_id per slot (so we know which
+// AggrSlot to flip ack on).
+// Returns number of slots successfully ACKed (n on success, < n if
+// some timed out).
+// iter-10A Phase 3 simplification: ring-state corruption risk if a
+// batched fetch_add(N) gets a partial timeout (some slots ACK, others
+// don't — receiver's head gets stuck because timeout cleared req=0).
+// Resolved by keeping per-slot fetch_add semantics internally — the
+// "batch policies" P1/P2/P3 differ only in WHEN/HOW many slots a
+// sender processes in one scan-and-drain pass, not in HOW the slots
+// are committed to the CXL ring. Each slot still uses
+// forward_write_direct's per-slot fetch_add(1).
+//
+// True fetch_add(N) batching is iter-11A backlog (requires receiver-
+// side gap-tolerance for unfilled slots within a batch).
+int CxlKvStoreA::write_sender_drain_dst(int dst, int n,
+                                         const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  int n_done = 0;
+  for (int i = 0; i < n; i++) {
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, slot_workers[i]);
+    uint8_t *value = aggregator_value_buf(aggr_, kAggrRingKindWrite,
+                                          slot_workers[i]);
+    int rc = forward_write_direct((uint32_t)dst, s->key, value,
+                                  s->value_len, (int)s->op_kind);
+    s->result_status = rc;
+    s->state.store(kAggrDone, std::memory_order_release);
+    n_done++;
+  }
+  return n_done;
+}
+
+// Stub — body replaced above. Code below is the abandoned fetch_add(N)
+// batched implementation, kept for reference / iter-11A revival.
+#if 0  // iter-11A revival
+int CxlKvStoreA::write_sender_drain_dst_v2_unused(int dst, int n,
+                                         const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  WriteRing *ring = &wr_->rings[host_id_][dst];
+  // Issue: fetch_add(n) on ring tail.
+  uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
+  flush_line((void *)&ring->tail);
+  store_fence();
+
+  // Generate per-slot op_ids.
+  uint64_t op_ids[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) {
+    uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    op_ids[i] = encode_op_id(host_id_, my_op);
+  }
+
+  // Wait for all n target slots free, then write all.
+  for (int i = 0; i < n; i++) {
+    uint32_t slot_idx = (uint32_t)((base + i) % kWriteRingDepth);
+    WriteEntry *e = &ring->entries[slot_idx];
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, slot_workers[i]);
+    // Wait slot free
+    for (;;) {
+      flush_line((void *)&e->req_op_id);
+      full_fence();
+      if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+      __builtin_ia32_pause();
+    }
+    // Copy value to staging + flush + sfence (BEFORE writing req_op_id
+    // so receiver can't observe req before staging is committed to CXL).
+    if (s->value_len > 0 && s->value_len <= kForwardStagingSlotBytes) {
+      uint8_t *staging = forward_staging_bytes(fs_, host_id_, dst, (int)slot_idx);
+      uint8_t *src = aggregator_value_buf(aggr_, kAggrRingKindWrite, slot_workers[i]);
+      std::memcpy(staging, src, s->value_len);
+      for (uint32_t off = 0; off < s->value_len; off += 64) {
+        flush_line((void *)(staging + off));
+      }
+      store_fence();  // ⭐ critical: staging must be CXL-visible before req
+    }
+    e->key = s->key;
+    e->op_kind = (uint8_t)s->op_kind;
+    e->value_len = s->value_len;
+    e->staging_off = slot_idx;
+    e->staging_gen = 0;
+    e->resp_op_id.store(0, std::memory_order_relaxed);
+    e->status = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    e->req_op_id.store(op_ids[i], std::memory_order_release);
+    flush_line((void *)&e->req_op_id);
+    store_fence();  // ⭐ critical: req must be CXL-visible before next slot
+  }
+
+  // Spin on n responses round-robin.
+  bool done[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) done[i] = false;
+  int n_done = 0;
+  uint64_t spin_start_ns = now_ns_mono();
+  const uint64_t kBudgetUs = 5000;
+  while (n_done < n) {
+    for (int i = 0; i < n; i++) {
+      if (done[i]) continue;
+      uint32_t slot_idx = (uint32_t)((base + i) % kWriteRingDepth);
+      WriteEntry *e = &ring->entries[slot_idx];
+      flush_line((void *)&e->resp_op_id);
+      full_fence();
+      uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
+      if (resp == op_ids[i]) {
+        AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, slot_workers[i]);
+        s->result_status = e->status;
+        e->req_op_id.store(0, std::memory_order_release);
+        flush_line((void *)&e->req_op_id);
+        store_fence();
+        s->state.store(kAggrDone, std::memory_order_release);
+        done[i] = true;
+        n_done++;
+      }
+    }
+    if (n_done < n) {
+      uint64_t now = now_ns_mono();
+      if ((now - spin_start_ns) / 1000 > kBudgetUs) {
+        // Timeout: mark remaining as failed
+        for (int i = 0; i < n; i++) {
+          if (done[i]) continue;
+          uint32_t slot_idx = (uint32_t)((base + i) % kWriteRingDepth);
+          WriteEntry *e = &ring->entries[slot_idx];
+          e->req_op_id.store(0, std::memory_order_release);
+          flush_line((void *)&e->req_op_id);
+          AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, slot_workers[i]);
+          s->result_status = -11;
+          s->state.store(kAggrDone, std::memory_order_release);
+        }
+        store_fence();
+        break;
+      }
+      __builtin_ia32_pause();
+    }
+  }
+  return n_done;
+}
+#endif
+
+// Same shape for read sender. Each ReadRing slot has no staging arena
+// (response carries blk_off). Reader (caller) does pool->read on hit.
+int CxlKvStoreA::read_sender_drain_dst(int dst, int n,
+                                        const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  // iter-10A Phase 3 simplification (see write_sender_drain_dst above).
+  // Per-slot forward_read_direct calls; scheduling policies P1/P2/P3
+  // differ in WHEN/HOW MANY slots a sender drains per pass, not in
+  // CXL ring fetch_add batching.
+  int n_done = 0;
+  for (int i = 0; i < n; i++) {
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, slot_workers[i]);
+    uint8_t *vbuf = aggregator_value_buf(aggr_, kAggrRingKindRead,
+                                          slot_workers[i]);
+    uint32_t got_len = 0;
+    int rc = forward_read_direct((uint32_t)dst, s->key, vbuf,
+                                  kAggrSlotValueBytes, &got_len);
+    s->result_status = rc;
+    s->value_len = got_len;
+    s->state.store(kAggrDone, std::memory_order_release);
+    n_done++;
+  }
+  return n_done;
+}
+
+#if 0  // iter-11A revival
+int CxlKvStoreA::read_sender_drain_dst_v2_unused(int dst, int n,
+                                        const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  ReadRing *ring = &rr_->rings[host_id_][dst];
+  uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
+  flush_line((void *)&ring->tail);
+  store_fence();
+
+  uint64_t op_ids[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) {
+    uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    op_ids[i] = encode_op_id(host_id_, my_op);
+  }
+
+  for (int i = 0; i < n; i++) {
+    uint32_t slot_idx = (uint32_t)((base + i) % kReadRingDepth);
+    ReadEntry *e = &ring->entries[slot_idx];
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, slot_workers[i]);
+    for (;;) {
+      flush_line((void *)&e->req_op_id);
+      full_fence();
+      if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+      __builtin_ia32_pause();
+    }
+    e->key = s->key;
+    e->resp_op_id.store(0, std::memory_order_relaxed);
+    e->status = 0;
+    e->resp_value_len = 0;
+    e->resp_blk_off = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    e->req_op_id.store(op_ids[i], std::memory_order_release);
+    flush_line((void *)&e->req_op_id);
+    store_fence();  // ⭐ slot N must commit before slot N+1
+  }
+
+  bool done[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) done[i] = false;
+  int n_done = 0;
+  uint64_t spin_start_ns = now_ns_mono();
+  const uint64_t kBudgetUs = 5000;
+  while (n_done < n) {
+    for (int i = 0; i < n; i++) {
+      if (done[i]) continue;
+      uint32_t slot_idx = (uint32_t)((base + i) % kReadRingDepth);
+      ReadEntry *e = &ring->entries[slot_idx];
+      flush_line((void *)&e->resp_op_id);
+      full_fence();
+      uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
+      if (resp == op_ids[i]) {
+        AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, slot_workers[i]);
+        s->result_status = e->status;
+        if (e->status == 0) {
+          uint32_t vlen = e->resp_value_len;
+          uint64_t blk_off = e->resp_blk_off;
+          uint8_t *vbuf = aggregator_value_buf(aggr_, kAggrRingKindRead,
+                                                slot_workers[i]);
+          if (blk_off == 0 && vlen <= 8) {
+            std::memcpy(vbuf, &e->resp_blk_off, vlen);
+          } else if (vlen > 0 && vlen <= kForwardStagingSlotBytes &&
+                     pool_) {
+            pool_->read(blk_off + 4, vbuf, vlen);
+          }
+          s->value_len = vlen;
+        }
+        e->req_op_id.store(0, std::memory_order_release);
+        flush_line((void *)&e->req_op_id);
+        store_fence();
+        s->state.store(kAggrDone, std::memory_order_release);
+        done[i] = true;
+        n_done++;
+      }
+    }
+    if (n_done < n) {
+      uint64_t now = now_ns_mono();
+      if ((now - spin_start_ns) / 1000 > kBudgetUs) {
+        for (int i = 0; i < n; i++) {
+          if (done[i]) continue;
+          uint32_t slot_idx = (uint32_t)((base + i) % kReadRingDepth);
+          ReadEntry *e = &ring->entries[slot_idx];
+          e->req_op_id.store(0, std::memory_order_release);
+          flush_line((void *)&e->req_op_id);
+          AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, slot_workers[i]);
+          s->result_status = -11;
+          s->state.store(kAggrDone, std::memory_order_release);
+        }
+        store_fence();
+        break;
+      }
+      __builtin_ia32_pause();
+    }
+  }
+  return n_done;
+}
+#endif
+
+// Inval batched. InvalEntry carries only key.
+int CxlKvStoreA::inval_sender_drain_dst(int dst, int n,
+                                         const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  // iter-10A Phase 3 simplification — see write_sender_drain_dst.
+  int n_done = 0;
+  for (int i = 0; i < n; i++) {
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, slot_workers[i]);
+    int rc = send_invalidate_direct((uint32_t)dst, s->key);
+    s->result_status = rc;
+    s->state.store(kAggrDone, std::memory_order_release);
+    n_done++;
+  }
+  return n_done;
+}
+
+#if 0  // iter-11A revival
+int CxlKvStoreA::inval_sender_drain_dst_v2_unused(int dst, int n,
+                                         const int *slot_workers) {
+  if (n <= 0 || n > num_aggr_workers_) return 0;
+  InvalRing *ring = &ir_->rings[host_id_][dst];
+  uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
+  flush_line((void *)&ring->tail);
+  store_fence();
+
+  uint64_t op_ids[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) {
+    uint64_t my_op = inval_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    op_ids[i] = encode_op_id(host_id_, my_op);
+  }
+
+  for (int i = 0; i < n; i++) {
+    uint32_t slot_idx = (uint32_t)((base + i) % kInvalRingDepth);
+    InvalEntry *e = &ring->entries[slot_idx];
+    AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, slot_workers[i]);
+    for (;;) {
+      flush_line((void *)&e->req_op_id);
+      full_fence();
+      if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+      __builtin_ia32_pause();
+    }
+    e->key = s->key;
+    e->resp_op_id.store(0, std::memory_order_relaxed);
+    e->status = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    e->req_op_id.store(op_ids[i], std::memory_order_release);
+    flush_line((void *)&e->req_op_id);
+    store_fence();  // ⭐ slot N must commit before slot N+1
+  }
+
+  bool done[kMaxAggrWorkers];
+  for (int i = 0; i < n; i++) done[i] = false;
+  int n_done = 0;
+  uint64_t spin_start_ns = now_ns_mono();
+  const uint64_t kBudgetUs = 5000;
+  while (n_done < n) {
+    for (int i = 0; i < n; i++) {
+      if (done[i]) continue;
+      uint32_t slot_idx = (uint32_t)((base + i) % kInvalRingDepth);
+      InvalEntry *e = &ring->entries[slot_idx];
+      flush_line((void *)&e->resp_op_id);
+      full_fence();
+      uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
+      if (resp == op_ids[i]) {
+        AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, slot_workers[i]);
+        s->result_status = e->status;
+        e->req_op_id.store(0, std::memory_order_release);
+        flush_line((void *)&e->req_op_id);
+        store_fence();
+        s->state.store(kAggrDone, std::memory_order_release);
+        done[i] = true;
+        n_done++;
+      }
+    }
+    if (n_done < n) {
+      uint64_t now = now_ns_mono();
+      if ((now - spin_start_ns) / 1000 > kBudgetUs) {
+        for (int i = 0; i < n; i++) {
+          if (done[i]) continue;
+          uint32_t slot_idx = (uint32_t)((base + i) % kInvalRingDepth);
+          InvalEntry *e = &ring->entries[slot_idx];
+          e->req_op_id.store(0, std::memory_order_release);
+          flush_line((void *)&e->req_op_id);
+          AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, slot_workers[i]);
+          s->result_status = -11;
+          s->state.store(kAggrDone, std::memory_order_release);
+        }
+        store_fence();
+        break;
+      }
+      __builtin_ia32_pause();
+    }
+  }
+  return n_done;
+}
+#endif
+
+// Generic per-policy sender body.
+template <int RING_KIND>
+void CxlKvStoreA::sender_loop_dispatch(std::atomic<bool> *stop_flag) {
+  BatchPolicy policy = parse_batch_policy();
+  uint32_t K = parse_batch_k();
+  uint64_t T_us = parse_batch_timeout_us();
+  fprintf(stderr, "[A:sender] kind=%d policy=P%d K=%u T_us=%lu host_id=%d\n",
+          RING_KIND, (int)policy, K, T_us, host_id_);
+
+  int slot_workers[kMaxAggrWorkers];
+
+  // Per-policy drain dispatcher
+  auto drain_dst = [this](int dst, int n, const int *workers) -> int {
+    if constexpr (RING_KIND == kAggrRingKindWrite) {
+      return this->write_sender_drain_dst(dst, n, workers);
+    } else if constexpr (RING_KIND == kAggrRingKindRead) {
+      return this->read_sender_drain_dst(dst, n, workers);
+    } else {
+      return this->inval_sender_drain_dst(dst, n, workers);
+    }
+  };
+
+  uint64_t batch_t_start_ns = now_ns_mono();
+  while (!stop_flag->load(std::memory_order_acquire)) {
+    int per_dst_n[kForwardStagingMaxHosts] = {0};
+    int per_dst_workers[kForwardStagingMaxHosts][kMaxAggrWorkers];
+
+    // Scan all worker slots, group by dst
+    for (int w = 0; w < num_aggr_workers_; w++) {
+      AggrSlot *s = aggregator_slot(aggr_, RING_KIND, w);
+      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
+      uint32_t dst = s->dst_host;
+      if (dst >= kForwardStagingMaxHosts) continue;
+      per_dst_workers[dst][per_dst_n[dst]++] = w;
+    }
+
+    int total_pending = 0;
+    for (int d = 0; d < kForwardStagingMaxHosts; d++)
+      total_pending += per_dst_n[d];
+
+    if (total_pending == 0) {
+      __builtin_ia32_pause();
+      continue;
+    }
+
+    if (policy == kBP_P0) {
+      // Per-slot serial — fall through to per-policy logic but with K=1
+      for (int d = 0; d < kForwardStagingMaxHosts; d++) {
+        for (int i = 0; i < per_dst_n[d]; i++) {
+          drain_dst(d, 1, &per_dst_workers[d][i]);
+        }
+      }
+    } else if (policy == kBP_P1) {
+      // Fixed K + timeout — flush a dst when its pending count >= K
+      // OR T_us has elapsed since last flush.
+      uint64_t now = now_ns_mono();
+      bool timeout_exceeded = (now - batch_t_start_ns) / 1000 >= T_us;
+      bool flushed_any = false;
+      for (int d = 0; d < kForwardStagingMaxHosts; d++) {
+        if (per_dst_n[d] >= (int)K || (timeout_exceeded && per_dst_n[d] > 0)) {
+          int n_to_send = per_dst_n[d];
+          if (n_to_send > (int)K) n_to_send = (int)K;
+          drain_dst(d, n_to_send, per_dst_workers[d]);
+          flushed_any = true;
+        }
+      }
+      if (flushed_any) batch_t_start_ns = now_ns_mono();
+    } else if (policy == kBP_P2) {
+      // Adaptive drain-all — per dst, single fetch_add(N_dst)
+      for (int d = 0; d < kForwardStagingMaxHosts; d++) {
+        if (per_dst_n[d] > 0) {
+          drain_dst(d, per_dst_n[d], per_dst_workers[d]);
+        }
+      }
+    } else {  // kBP_P3
+      // Per-dst round-robin: drain ONE dst's full batch per iteration
+      // The "round-robin" effect comes from re-scanning next iteration.
+      int chosen = -1;
+      for (int d = 0; d < kForwardStagingMaxHosts; d++) {
+        if (per_dst_n[d] > 0) { chosen = d; break; }
+      }
+      if (chosen >= 0) {
+        drain_dst(chosen, per_dst_n[chosen], per_dst_workers[chosen]);
+      }
+    }
+  }
+  (void)slot_workers;
+}
+
 void CxlKvStoreA::write_sender_loop() {
-  while (!write_sender_stop_.load(std::memory_order_acquire)) {
-    bool did_work = false;
-    for (int w = 0; w < num_aggr_workers_; w++) {
-      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindWrite, w);
-      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
-      uint8_t *value = aggregator_value_buf(aggr_, kAggrRingKindWrite, w);
-      int rc = forward_write_direct(s->dst_host, s->key,
-                                    value, s->value_len,
-                                    (int)s->op_kind);
-      s->result_status = rc;
-      s->state.store(kAggrDone, std::memory_order_release);
-      did_work = true;
-    }
-    if (!did_work) __builtin_ia32_pause();
-  }
+  sender_loop_dispatch<kAggrRingKindWrite>(&write_sender_stop_);
 }
-
 void CxlKvStoreA::read_sender_loop() {
-  while (!read_sender_stop_.load(std::memory_order_acquire)) {
-    bool did_work = false;
-    for (int w = 0; w < num_aggr_workers_; w++) {
-      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindRead, w);
-      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
-      uint8_t *vbuf = aggregator_value_buf(aggr_, kAggrRingKindRead, w);
-      uint32_t got_len = 0;
-      int rc = forward_read_direct(s->dst_host, s->key, vbuf,
-                                   kAggrSlotValueBytes, &got_len);
-      s->result_status = rc;
-      s->value_len = got_len;
-      s->state.store(kAggrDone, std::memory_order_release);
-      did_work = true;
-    }
-    if (!did_work) __builtin_ia32_pause();
-  }
+  sender_loop_dispatch<kAggrRingKindRead>(&read_sender_stop_);
 }
-
 void CxlKvStoreA::inval_sender_loop() {
-  while (!inval_sender_stop_.load(std::memory_order_acquire)) {
-    bool did_work = false;
-    for (int w = 0; w < num_aggr_workers_; w++) {
-      AggrSlot *s = aggregator_slot(aggr_, kAggrRingKindInval, w);
-      if (s->state.load(std::memory_order_acquire) != kAggrPending) continue;
-      int rc = send_invalidate_direct(s->dst_host, s->key);
-      s->result_status = rc;
-      s->state.store(kAggrDone, std::memory_order_release);
-      did_work = true;
-    }
-    if (!did_work) __builtin_ia32_pause();
-  }
+  sender_loop_dispatch<kAggrRingKindInval>(&inval_sender_stop_);
 }
 
 int CxlKvStoreA::enable_senders(AggregatorRegion *ar, int num_workers,

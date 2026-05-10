@@ -257,6 +257,19 @@ class CxlKvStoreA {
   void write_sender_loop();
   void read_sender_loop();
   void inval_sender_loop();
+
+  // iter-10A Phase 3: per-dst batched drain helpers. Issue one
+  // fetch_add(n) on (host_id_, dst) ring tail, fill n entries +
+  // staging in parallel, single sfence, then spin on n resp_op_ids
+  // round-robin and flip ack as each comes back.
+  int write_sender_drain_dst(int dst, int n, const int *slot_workers);
+  int read_sender_drain_dst (int dst, int n, const int *slot_workers);
+  int inval_sender_drain_dst(int dst, int n, const int *slot_workers);
+
+  // Per-policy generic sender body — selects between
+  // FUSEE_BATCH_POLICY=P0/P1/P2/P3 at startup.
+  template <int RING_KIND>
+  void sender_loop_dispatch(std::atomic<bool> *stop_flag);
 };
 
 // op_kind values for write-path messages (WriteEntry::op_kind):
