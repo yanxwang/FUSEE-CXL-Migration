@@ -418,12 +418,16 @@ int main(int argc, char **argv) {
   (void)cache_on;  // Protocol A's cache is always-on; FUSEE_CACHE no-op
                    // here, retained only for SUMMARY.log compat.
 
-  // iter-9A Phase 2.C: register this worker thread's id into the
-  // aggregator. Worker forward_*/send_invalidate calls now route
-  // through aggregator->slots[*][client_id]. Receiver/sender threads
-  // never call set_worker_id, so they fall back to the direct CXL
-  // path (preserving deadlock-freedom for receiver-context invalidates).
-  CxlKvStoreA::set_worker_id(client_id);
+  // iter-9A Phase 2.C: opt-in aggregator routing. Default OFF — the
+  // single-sender-per-ring design without batching is the spec
+  // implementation but bottlenecks at high T (T=64 path_decomp showed
+  // workload-A KV=1024 cache=on at 0.5 Mops/s vs 9.89 Mops/s direct).
+  // Enable with FUSEE_USE_AGGREGATOR=1 to exercise the spec path
+  // (correctness equivalent — same hash-diff result — but slower
+  // until iter-10A adds batching to the senders).
+  if (const char *e = getenv("FUSEE_USE_AGGREGATOR"); e && e[0] == '1') {
+    CxlKvStoreA::set_worker_id(client_id);
+  }
 
   // Cross-host primary barrier: both hosts inited.
   // (Skipped entirely when num_hosts == 1 — no peer to wait for.)
