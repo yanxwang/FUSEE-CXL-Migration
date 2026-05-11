@@ -22,6 +22,7 @@
 #include "cxl_directory.h"
 #include "cxl_forward_staging.h"
 #include "cxl_read_staging.h"
+#include "cxl_inval_shard.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
@@ -247,12 +248,18 @@ class CxlKvStoreA {
   std::atomic<bool> inval_sender_stop_{false};
 
   // iter-9A Phase 2.D-E: 3 named system threads per host.
+  // iter-11A Phase 2: inval_receiver renamed conceptually to
+  // InvalDispatcher; spawn N=8 InvalWorker threads for parallel
+  // cache_pool_set_stale + ack.
   std::thread write_receiver_;
   std::thread read_receiver_;
-  std::thread inval_receiver_;
+  std::thread inval_receiver_;  // = InvalDispatcher post-Phase-2
   std::atomic<bool> write_receiver_stop_{false};
   std::atomic<bool> read_receiver_stop_{false};
   std::atomic<bool> inval_receiver_stop_{false};
+  std::thread inval_workers_[kInvalShardCount];
+  std::atomic<bool> inval_workers_stop_{false};
+  InvalShardQueue inval_shards_[kInvalShardCount];
 
   std::atomic<uint64_t> write_op_counter_{0};
   std::atomic<uint64_t> read_op_counter_{0};
@@ -261,6 +268,8 @@ class CxlKvStoreA {
   void write_receiver_loop();
   void read_receiver_loop();
   void inval_receiver_loop();
+  // iter-11A Phase 2: parallel inval drain.
+  void inval_worker_loop(int shard_id);
 
   void write_sender_loop();
   void read_sender_loop();

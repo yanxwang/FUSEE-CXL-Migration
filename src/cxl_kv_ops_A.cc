@@ -1277,14 +1277,34 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
     store_fence();
   }
   if (spawn_dispatcher) {
+    // iter-11A Phase 2: spawn N=8 worker threads BEFORE dispatcher
+    // so the dispatcher's first push has a consumer waiting.
+    for (auto &q : inval_shards_) {
+      q.tail.store(0, std::memory_order_relaxed);
+      q.head.store(0, std::memory_order_relaxed);
+    }
+    inval_workers_stop_.store(false, std::memory_order_relaxed);
+    for (int s = 0; s < kInvalShardCount; s++) {
+      inval_workers_[s] = std::thread([this, s]() {
+        char name[16]; snprintf(name, sizeof(name), "InvalWorker%d", s);
+        pthread_setname_np(pthread_self(), name);
+        cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(70 + s, &cs);
+        pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+        fprintf(stderr,
+          "[A:thread] InvalWorker%d pid=%d tid=%lu pinned cpu=%d (host_id=%d)\n",
+          s, getpid(), (unsigned long)pthread_self(), 70 + s, host_id_);
+        this->inval_worker_loop(s);
+      });
+    }
     inval_receiver_stop_.store(false, std::memory_order_relaxed);
     inval_receiver_ = std::thread([this]() {
-      // iter-9A Phase 2.E + C3: named + CPU-pinned per task plan §2.F.
-      pthread_setname_np(pthread_self(), "InvalReceiver");
+      // iter-9A Phase 2.E + iter-11A Phase 2: dispatcher (renamed
+      // conceptually, kept InvalReceiver for thread-name continuity).
+      pthread_setname_np(pthread_self(), "InvalDispatcher");
       cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(69, &cs);
       pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
       fprintf(stderr,
-        "[A:thread] InvalReceiver pid=%d tid=%lu pinned cpu=69 (host_id=%d)\n",
+        "[A:thread] InvalDispatcher pid=%d tid=%lu pinned cpu=69 (host_id=%d)\n",
         getpid(), (unsigned long)pthread_self(), host_id_);
       this->inval_receiver_loop();
     });
@@ -1293,18 +1313,27 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
 }
 
 void CxlKvStoreA::stop_inval_receiver() {
-  if (!inval_receiver_.joinable()) return;
-  inval_receiver_stop_.store(true, std::memory_order_release);
-  inval_receiver_.join();
+  if (inval_receiver_.joinable()) {
+    inval_receiver_stop_.store(true, std::memory_order_release);
+    inval_receiver_.join();
+  }
+  // iter-11A Phase 2: stop workers AFTER dispatcher (so no new
+  // jobs land on already-stopped workers).
+  inval_workers_stop_.store(true, std::memory_order_release);
+  for (auto &t : inval_workers_) {
+    if (t.joinable()) t.join();
+  }
 }
 
-// InvalReceiver: drain incoming InvalRing[*][me]; for each entry mark
-// the key stale in the local cache_pool and ACK via resp_op_id.
-// CRUCIALLY this thread does NOT acquire the directory spinlock and
-// does NOT call execute_write_local — so it cannot deadlock with
-// the WriteReceiver/ReadReceiver that are processing forwards.
+// iter-11A Phase 2: InvalDispatcher — polls InvalRing[*][me], reads
+// each InvalEntry, dispatches an InvalShardJob to the appropriate
+// worker shard (sharded by bucket_id per C14). Worker calls
+// cache_pool_set_stale + bumps bucket epoch + writes resp_op_id back.
+//
+// Fallback: if a shard queue is full, dispatcher processes inline
+// (calls set_stale itself + acks). Preserves liveness if a worker
+// thread is descheduled.
 void CxlKvStoreA::inval_receiver_loop() {
-  // Touch probe ring so its FUSEE_PROBE_DUMP envvar is read on this thread.
   probe_ring();
   while (!inval_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
@@ -1325,17 +1354,21 @@ void CxlKvStoreA::inval_receiver_loop() {
         if (op_id == 0) break;
         PROBE_OP("I4", op_id);
 
-        // Lazy stale flag — no directory lock, no execute_write_local.
-        cache_pool_set_stale(cache_, e->key);
-        PROBE_OP("I5", op_id);
-        e->status = 0;
-        std::atomic_thread_fence(std::memory_order_release);
-        e->resp_op_id.store(op_id, std::memory_order_release);
-        // iter-6A: resp_op_id is on the SECOND cacheline; flush THAT
-        // line so the producer's CXL-coherent load on resp_op_id sees
-        // the new value.
-        flush_line((void *)&e->resp_op_id);
-        store_fence();
+        // Per C14: shard by bucket_id (= bucket_idx(key)). Same
+        // bucket → same worker → per-bucket FIFO preserved.
+        uint32_t b = bucket_idx(e->key);
+        int shard = (int)(b & (kInvalShardCount - 1));
+        InvalShardJob job{e, e->key, op_id, src};
+        if (!inval_shard_push(&inval_shards_[shard], job)) {
+          // Queue full → fallback to inline processing (dispatcher
+          // does the work itself). Preserves liveness.
+          cache_pool_set_stale(cache_, e->key);
+          e->status = 0;
+          std::atomic_thread_fence(std::memory_order_release);
+          e->resp_op_id.store(op_id, std::memory_order_release);
+          flush_line((void *)&e->resp_op_id);
+          store_fence();
+        }
         PROBE_OP("I6", op_id);
         head++;
         did_work = true;
@@ -1343,6 +1376,31 @@ void CxlKvStoreA::inval_receiver_loop() {
       ring->head = head;
     }
     if (!did_work) __builtin_ia32_pause();
+  }
+  probe_flush();
+}
+
+// iter-11A Phase 2: InvalWorker — pops InvalShardJob from its shard
+// queue, calls cache_pool_set_stale + bumps epoch (already done by
+// set_stale internally), then writes resp_op_id back to the original
+// InvalEntry on producer's CXL ring.
+void CxlKvStoreA::inval_worker_loop(int shard_id) {
+  probe_ring();
+  InvalShardQueue *q = &inval_shards_[shard_id];
+  while (!inval_workers_stop_.load(std::memory_order_acquire)) {
+    InvalShardJob job;
+    if (!inval_shard_pop(q, &job)) {
+      __builtin_ia32_pause();
+      continue;
+    }
+    PROBE_OP("I5", job.req_op_id);
+    cache_pool_set_stale(cache_, job.key);
+    job.entry->status = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    job.entry->resp_op_id.store(job.req_op_id, std::memory_order_release);
+    flush_line((void *)&job.entry->resp_op_id);
+    store_fence();
+    PROBE_OP("I8", job.req_op_id);
   }
   probe_flush();
 }
