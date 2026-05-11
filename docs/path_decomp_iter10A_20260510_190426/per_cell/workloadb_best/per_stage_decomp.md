@@ -1,0 +1,41 @@
+# workloadb_best per-stage decomposition
+
+**Cell**: workload=workloadb kv=256 T=64 cache=on
+**Sweep headline**: 11.67 Mops/s
+**Build**: TLS=1024 + lock-free CAS cache_pool + B0 (worker direct multi-MPSC)
+
+## Healthy capture (try_1)
+
+| Stage | N | p50 µs | p90 µs | p99 µs | max µs | mean µs |
+|---|---|---|---|---|---|---|
+| W1 | 105050 | 0.766 | 1.303 | 5.985 | 102.102 | 1.067 |
+| W2 | 105042 | 0.146 | 0.203 | 1.613 | 39.270 | 0.229 |
+| W3 | 105042 | 0.025 | 0.028 | 4.921 | 120.216 | 0.170 |
+| W4 | — | — | — | — | — | ✱ no data (workload-specific) |
+| W6 | — | — | — | — | — | ✱ no data (workload-specific) |
+| W7 | 105042 | 0.031 | 0.032 | 0.062 | 104.352 | 0.086 |
+| W8 | 105042 | 0.030 | 0.030 | 1.801 | 184.849 | 0.168 |
+| W9 | 105042 | 0.021 | 0.024 | 0.029 | 46.220 | 0.044 |
+| W10 | 105042 | 2.973 | 7.679 | 13.109 | 653.208 | 4.239 |
+| W12 | 105038 | 0.187 | 0.237 | 5.147 | 3250.684 | 0.454 |
+| R1 | 190062 | 6.927 | 10.204 | 16.001 | 199.103 | 4.924 |
+| R2hit | 116274 | 0.069 | 0.171 | 0.368 | 45.635 | 0.124 |
+| R2miss | 22889 | 2.685 | 3.174 | 7.904 | 74.887 | 2.874 |
+| R3 | 451 | 9.162 | 9.950 | 14.135 | 36.835 | 9.291 |
+| R4 | 451 | 0.153 | 0.260 | 0.657 | 6.970 | 0.225 |
+| R6 | 189918 | 0.467 | 0.745 | 1.493 | 193.526 | 0.575 |
+| R0_tls_h | 50899 | 0.023 | 0.025 | 0.042 | 85.406 | 0.063 |
+| I1 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I2 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I3 | — | — | — | — | — | ✱ no data |
+| I4 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I5 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I6 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I7 | — | — | — | — | — | ✱ no data (workload-specific) |
+| I8 | — | — | — | — | — | ✱ no data (workload-specific) |
+
+## Top-3 mean-cost stages (healthy)
+
+- **R3**: 9.291 µs/op (p99=14.135 µs)
+- **R1**: 4.924 µs/op (p99=16.001 µs)
+- **W10**: 4.239 µs/op (p99=13.109 µs)
