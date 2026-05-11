@@ -1,0 +1,14 @@
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=209132)
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=209155)
+[A:thread] WriteReceiver pid=209132 tid=140596103608000 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=209132 tid=140596095215296 pinned cpu=67 (host_id=0)
+[A:thread] InvalReceiver pid=209132 tid=140596086822592 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=209132 tid=140596078429888 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=209132 tid=140596070037184 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=209132 tid=140596061644480 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+YCSB opt=A cache=0 num_hosts=2 threads=2 threads_eff=2 rep=3 load_ops=50000 load_thpt=237980 trans_ops=50000 trans_wall_max=0.060129 trans_agg_thpt=831531 w_avg_ns=7820 w_p50_ns=6567 w_p99_ns=19662 r_avg_ns=2973 r_p50_ns=608 r_p99_ns=14409 # workloada_optA_t2_cacheoff_rep3

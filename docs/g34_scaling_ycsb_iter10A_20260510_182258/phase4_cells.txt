@@ -1,0 +1,13 @@
+# iter-10A Phase 4 cells — best + worst per workload
+# Format: label workload kv T cache expected_mops
+# Best = sweep peak (verified). Worst = bimodal-anomaly or structurally-slow.
+workloada_best   workloada  512  64 off 14.81
+workloada_worst  workloada  1024 64 on  13.5
+workloadb_best   workloadb  256  64 on  11.67
+workloadb_worst  workloadb  512  64 on  11.86
+workloadc_best   workloadc  1024 64 on  11.72
+workloadc_worst  workloadc  512  2  off 1.10
+workloadd_best   workloadd  512  64 off 11.35
+workloadd_worst  workloadd  512  4  off 1.78
+workloadf_best   workloadf  512  64 on  13.65
+workloadf_worst  workloadf  512  2  on  0.005

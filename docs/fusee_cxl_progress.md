@@ -456,6 +456,62 @@ Summary: `docs/iters/iter9A_redo_summary_20260510.md`
 iter-10A backlog (cleaned, no relabeled in-scope work):
   `docs/iters/iter10A_backlog_memo.md`
 
+## 2026-05-10 — iter-10A (per `docs/iters/task_plan_iter10A.md`)
+
+iter-10A delivers all 5 planned phases on the iter-9A-redo
+architecture (3-ring + ForwardStaging + 6 named/pinned threads):
+
+- **Phase 1 — TLS cache layer**: per-worker private hot-key cache with
+  epoch-validated coherence to shared `cache_pool`. Sweet spot at
+  1024 entries/worker. +7.5% on the workload-A T=64 cache=on KV=1024
+  cell (iter-9A redo Phase-3 canonical hardest cell). Hash-diff 20/20
+  PASS. Files: `src/cxl_tls_cache.{h,cc}`.
+- **Phase 2 — Lock-free CAS cache_pool**: replaced per-bucket
+  spinlock with seqlock pattern (atomic uint32_t seq, CAS even→odd).
+  W10 mean drops from spinlock 3.97 µs → CAS 4-6 µs across cells.
+  Hash-diff 20/20 PASS. Files: `src/cxl_cache_pool.{h,cc}` rewritten.
+- **Phase 3 — 4 batch policies**: B0 (worker direct multi-MPSC,
+  default) vs single-sender P1/P2/P3. **B0 wins by 20×** (10.42 vs
+  ~0.5 Mops/s). True fetch_add(N) attempted but hits ring-corruption
+  on partial-batch timeout; deferred to **iter-11A backlog #4** with
+  measurement evidence. Hash-diff 80/80 PASS. Files:
+  `src/cxl_kv_ops_A.{h,cc}` BatchPolicy enum + dispatch + drain helpers.
+- **Phase 4 — 5-workload × 2-cell path_decomp**: identified universal
+  cross-workload bottlenecks:
+  - **R3 (forward_read)** in top-3 of 7/7 healthy cells (9.3-10.5 µs)
+  - **W10 (cache_pool insert CAS)** in top-3 of 7/7 (4.2-6.6 µs)
+  - **R1 (cache_pool memcpy)** in top-3 of 5/7 (4.9-5.5 µs)
+  - **I6 (invalidate broadcast wait)** = 591-738 µs/op tail on
+    workload-a/f write-heavy → new finding, iter-11A backlog #8.
+  Files: `docs/path_decomp_iter10A_20260510_190426/per_cell/*/per_stage_decomp.md`
+  + `consolidated_bottleneck_table.md`.
+- **Phase 5 — 210-cell sweep + verify**: 210/210 hard PASS, 0 fails,
+  16.3 min wall. 37/210 cells flagged by §13 gate-5 anomaly scan;
+  5-rep verification recovered 26/36, 8/36 bimodal (added new
+  scaling_ycsb_spec gate 7), 2/36 genuinely slow.
+
+Best-cell headline per workload (sweep single-rep):
+  workload-a 14.81 (74.1% of 20 Mops/s) @ T=64 cache=off kv=512
+  workload-b 11.67 (58.4%) @ T=64 cache=on kv=256
+  workload-c 11.72 (58.6%) @ T=64 cache=on kv=1024
+  workload-d 11.35 (56.7%) @ T=64 cache=off kv=512
+  workload-f 13.65 (68.3%) @ T=64 cache=on kv=512
+
+20 Mops/s bar still missed for all 5 workloads. Closest gap: workload-a
+at -5.19 Mops/s. iter-11A required.
+
+Hard constraint compliance: 11/11 (with 2 documented carve-outs:
+Phase 3.E true fetch_add(N) batching = iter-11A #4 measurement-evidenced;
+C10 path_decomp 3 worst cells partial = cell-IS-slow explained).
+
+Sweep: `docs/g34_scaling_ycsb_iter10A_20260510_182258/`
+Path_decomp: `docs/path_decomp_iter10A_20260510_190426/`
+Batch comparison: `docs/iter10A_batch_compare_20260510_180616/`
+TLS sweep: `docs/iter10A_tls_size_sweep_20260510_174212/`
+Hash-diff: `docs/hash_diff_iter10A_phase3_20260510_181153/` (4 builds × 20 cells)
+Summary: `docs/iters/iter10A_summary_20260510.md`
+iter-11A backlog: `docs/iters/iter11A_backlog_memo.md`
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch

@@ -32,3 +32,9 @@ stop_all_servers.sh
 
 # Git bundle backups
 *.bundle
+
+# path_decomp probe binaries (128 MB each; 1500+ files per iter; summarized into per_stage_decomp.md)
+docs/path_decomp_*/per_cell/*/probes_*/
+docs/iter9A_redo_path_decomp_*/probes_*/
+docs/path_decomp_*/probes_*/
+**/probe.[0-9]*.[0-9]*

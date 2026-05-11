@@ -391,6 +391,23 @@ starts.
      (the 60% timeout cascade in Phase 2 smoke testing). This
      attribution discipline is the bar.
 
+7. **Gate 7 — bimodal-cell flag (added iter-10A 2026-05-10)**: if
+   the 5-rep verification of an anomaly cell yields BOTH a max
+   reading ≥ 5× the median AND a median in the anomaly zone (per
+   gate-5 thresholds), the cell is flagged **bimodal**, not
+   genuinely-slow. Bimodal cells must be:
+   - explicitly listed in the iter summary's "anomaly disposition"
+     section, AND
+   - filed as an iter-N+1 backlog entry (per CLAUDE.md gate-5
+     option (c)) for root-cause investigation.
+   - Rationale: iter-10A Phase 5.B found 8/210 sweep cells with
+     this pattern (max 5-13 Mops/s, median <0.1 Mops/s, no
+     intermediate values). Pattern is real cell instability — not
+     init noise (which would yield consistent low values across all
+     reps) and not steady-state (which would yield consistent high
+     values). Without this gate, single-rep sweeps catch only
+     "median behavior" and silently miss the bimodal failure mode.
+
 **Doubling-ratio check (all 5 workloads, iter-7A 2026-05-03)**:
 the iter-6A Phase 6 doubling-ratio gate (≥ 1.5× per pre-saturation
 T) was applied **only to workload-a**. From iter-7A onwards, the

@@ -1,0 +1,18 @@
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=214509)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=214508)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=214510)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=214511)
+[A:thread] WriteReceiver pid=214508 tid=140372315408064 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=214508 tid=140372307015360 pinned cpu=67 (host_id=0)
+[A:thread] InvalReceiver pid=214508 tid=140372298622656 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=214508 tid=140372080588480 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=214508 tid=140372214806208 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:thread] InvalSender pid=214508 tid=140372206413504 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+YCSB opt=A cache=0 num_hosts=2 threads=4 threads_eff=4 rep=4 load_ops=50000 load_thpt=204319 trans_ops=50000 trans_wall_max=0.022061 trans_agg_thpt=2266340 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=3377 r_p50_ns=686 r_p99_ns=15505 # workloadc_optA_t4_cacheoff_rep4

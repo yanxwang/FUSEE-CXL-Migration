@@ -350,3 +350,17 @@ contains:
 - perf_capture/ (Phase 3)
 
 Future iters' path_decomp output dirs follow the §5 layout.
+
+### Additional reference instances
+
+- `docs/iter9A_redo_path_decomp_phase3_20260510_*/` — single-cell
+  workload-A KV=1024 T=64 path_decomp on the iter-9A redo
+  3-ring + ForwardStaging + 6 named threads architecture.
+- `docs/path_decomp_iter10A_20260510_190426/` — **5-workload × 2-cell
+  cross-workload path_decomp** (best + worst per workload, 14-stage
+  per-cell tables + consolidated bottleneck table). First iter to
+  run path_decomp on more than one workload simultaneously.
+  Universal cross-workload bottlenecks identified: R3 (forward_read
+  9.3-10.5 µs), W10 (cache_pool insert CAS 4.2-6.6 µs), R1
+  (cache_pool memcpy 4.9-5.5 µs); workload-specific tail finding:
+  I6 invalidate-broadcast wait 591-738 µs on a/f write-heavy.
