@@ -404,13 +404,16 @@ void CxlKvStoreA::stop_write_receiver() {
   write_receiver_.join();
 }
 
-int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, bool init_region,
-                                  bool spawn_receiver) {
-  if (!rr) return -1;
+int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, ReadStagingMatrix *rs,
+                                  bool init_region, bool spawn_receiver) {
+  if (!rr || !rs) return -1;
   rr_ = rr;
+  rs_ = rs;
   if (init_region) {
     std::memset(rr, 0, read_ring_matrix_bytes());
     flush_region(rr, read_ring_matrix_bytes());
+    std::memset(rs, 0, read_staging_matrix_bytes());
+    flush_region(rs, read_staging_matrix_bytes());
     store_fence();
   }
   if (spawn_receiver) {
@@ -1109,16 +1112,16 @@ int CxlKvStoreA::assert_n_to_n_active() {
   // staging mesh must be wired before any cross-host op.
   if (num_hosts_ < 2) return 0;
   bool ok = (wr_ != nullptr) && (rr_ != nullptr) &&
-            (fs_ != nullptr) && (ir_ != nullptr);
+            (fs_ != nullptr) && (rs_ != nullptr) && (ir_ != nullptr);
   if (!ok) {
     fprintf(stderr,
-            "FATAL [iter-9A C4]: cross-host op attempted with "
-            "incomplete N:1:1:N wiring on host %d (num_hosts=%d): "
-            "wr_=%p rr_=%p fs_=%p ir_=%p — must call "
+            "FATAL [iter-9A C4 + iter-11A C13]: cross-host op attempted "
+            "with incomplete N:1:1:N wiring on host %d (num_hosts=%d): "
+            "wr_=%p rr_=%p fs_=%p rs_=%p ir_=%p — must call "
             "enable_write_ring + enable_read_ring + enable_invalidate "
             "before first cross-host op\n",
             host_id_, num_hosts_,
-            (void *)wr_, (void *)rr_, (void *)fs_, (void *)ir_);
+            (void *)wr_, (void *)rr_, (void *)fs_, (void *)rs_, (void *)ir_);
     std::abort();
   }
   return 0;
@@ -1348,10 +1351,24 @@ void CxlKvStoreA::inval_receiver_loop() {
 // ReadRing. Producer enqueues control-only req; ReadReceiver responds
 // with (status, owner_blk_off, value_len). Reader pulls value bytes
 // directly via pool_->read — no value bytes on the message ring.
+// iter-11A Phase 1 forwarder-pool-direct reader path:
+//   1. Allocate ReadRing slot via fetch_add(tail). Wait for slot
+//      to be free (req_op_id == 0).
+//   2. Capture my_epoch_at_send = bucket_epoch(key). Used by C13
+//      validation post-response.
+//   3. CLEAR staging.ready_op_id = 0 (so we don't observe the
+//      previous user of this slot's stale signal).
+//   4. Write ReadEntry{key, req_op_id}, flush, sfence.
+//   5. Spin on staging.ready_op_id == req_op_id. Owner forwarder
+//      writes value bytes + lookup_epoch + status, then publishes
+//      ready_op_id.
+//   6. C13 validate: staging.lookup_epoch >= my_epoch_at_send.
+//      Stale → retry (loop back to step 1).
+//   7. Copy staging.value_bytes to out_buf. No second pool->read.
 int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
                                      void *out_buf, uint32_t buf_len,
                                      uint32_t *out_len) {
-  if (!rr_) return -10;
+  if (!rr_ || !rs_) return -10;
   ReadRing *ring = &rr_->rings[host_id_][owner];
   uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
@@ -1369,6 +1386,18 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
     __builtin_ia32_pause();
   }
 
+  // C13: my_epoch_at_send (bucket epoch reader observed prior to send).
+  uint64_t my_epoch_at_send =
+      cache_ ? cache_pool_bucket_epoch(cache_, key) : 0;
+
+  // Clear staging slot's ready_op_id so we don't observe prior
+  // user's stale signal. Owner will re-publish with our op_id.
+  ReadStagingSlot *st =
+      read_staging_slot(rs_, host_id_, (int)owner, (int)slot_idx);
+  st->ready_op_id.store(0, std::memory_order_release);
+  flush_line(&st->ready_op_id);
+  store_fence();
+
   e->key = key;
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
@@ -1379,42 +1408,70 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   flush_line((void *)&e->req_op_id);
   store_fence();
 
-  int status = 0;
-  int rc = generic_spin_wait(e, op_id, &status);
-  if (rc != 0) return rc;
-  if (status != 0) {
-    if (out_len) *out_len = 0;
-    return status;
-  }
-  // Owner ACKed; read response side (cacheline 2) for blk_off + len.
-  flush_line((void *)&e->resp_op_id);
-  full_fence();
-  uint32_t vlen = e->resp_value_len;
-  uint64_t blk_off = e->resp_blk_off;
-
-  // Two response shapes:
-  //   blk_off == 0  →  inline u64 (legacy fallback, owner had no pool
-  //                    or slot stored inline) — vlen carries the bytes
-  //                    in the low half of resp_blk_off (overloaded).
-  //   blk_off != 0  →  pool-backed: pool_->read(blk_off + 4, ...) of
-  //                    vlen bytes.
-  if (blk_off == 0 && vlen <= 8) {
-    if (out_buf && vlen > 0) {
-      std::memcpy(out_buf, &e->resp_blk_off, vlen);
+  // Spin on staging.ready_op_id (single cacheline, faster than
+  // the legacy 2-step ack-then-pool-read).
+  const uint64_t kReadSpinTimeoutNs = 200ULL * 1000 * 1000;  // 200 ms
+  uint64_t t0 = now_ns_mono();
+  bool timed_out = false;
+  for (;;) {
+    flush_line(&st->ready_op_id);
+    full_fence();
+    uint64_t r = st->ready_op_id.load(std::memory_order_acquire);
+    if (r == op_id) break;
+    if (now_ns_mono() - t0 > kReadSpinTimeoutNs) {
+      timed_out = true;
+      break;
     }
-    if (out_len) *out_len = vlen;
+    __builtin_ia32_pause();
+  }
+  // CRITICAL: free the ring slot by clearing req_op_id=0 BEFORE
+  // returning. Otherwise the slot stays "busy" and the next
+  // wraparound deadlocks at fetch_add+spin-on-zero in this same
+  // function. (Legacy reader path did this inside generic_spin_wait;
+  // we replaced it with the staging poll above and forgot to free
+  // the slot — caused 100% hang at >256 reads per (req_host, owner)
+  // pair, exposed by Phase 1 hash-diff battery 2026-05-10.)
+  e->req_op_id.store(0, std::memory_order_release);
+  flush_line((void *)&e->req_op_id);
+  store_fence();
+  if (timed_out) {
+    if (out_len) *out_len = 0;
+    return -2;
+  }
+
+  // C13: validate lookup_epoch >= my_epoch_at_send. If stale, the
+  // forwarder's lookup observed an OLDER cache snapshot than ours
+  // (highly unlikely on shared-bus CXL, but defensive). Treat as
+  // miss + retry (caller will fall back via cache_pool_lookup).
+  flush_line(st);
+  full_fence();
+  if (st->lookup_epoch < my_epoch_at_send) {
+    if (out_len) *out_len = 0;
+    return -3;  // stale snapshot — caller retries
+  }
+  if (st->status != 0) {
+    if (out_len) *out_len = 0;
+    return st->status;
+  }
+  uint32_t vlen = st->value_size;
+  if (vlen == 0) {
+    if (out_len) *out_len = 0;
     return 0;
   }
-
-  if (vlen == 0 || vlen > kForwardStagingSlotBytes || pool_ == nullptr) {
+  if (vlen > kReadStagingSlotBytes) {
     if (out_len) *out_len = 0;
     return -1;
   }
-  uint8_t scratch[kForwardStagingSlotBytes];
-  // Skip the 4 B value-length header (see execute_write_local block layout).
-  pool_->read(blk_off + 4, scratch, vlen);
+  // Direct copy from CXL staging (one CXL load of vlen bytes —
+  // saves the legacy resp-then-pool-read second roundtrip).
+  for (uint32_t off = 0; off < vlen; off += 64) {
+    flush_line(st->value_bytes + off);
+  }
+  full_fence();
   uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
-  if (out_buf && copy_len > 0) std::memcpy(out_buf, scratch, copy_len);
+  if (out_buf && copy_len > 0) {
+    std::memcpy(out_buf, st->value_bytes, copy_len);
+  }
   if (out_len) *out_len = vlen;
   return 0;
 }
@@ -1443,21 +1500,56 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
                                    (int)e->op_kind);
 }
 
-void CxlKvStoreA::read_handler(ReadEntry *e, int src) {
-  // §I9 register-then-fill: lookup slot under directory lock, set
-  // sharer bit, respond with owner_blk_off + value_len. Value bytes
-  // stay in owner's pool — reader pulls directly via pool->read.
+// iter-11A Phase 1 forwarder-pool-direct: owner's read_handler writes
+// value bytes directly into rs_[src][me][slot_idx].value_bytes, sets
+// staging.lookup_epoch (C13 tag) + status + value_size, then publishes
+// staging.ready_op_id = req_op_id. Reader polls ready_op_id and
+// memcpy's value_bytes from staging — no second pool->read needed.
+//
+// Legacy resp_op_id/resp_blk_off/resp_value_len on the ReadEntry are
+// still set for protocol compatibility but no longer consulted by the
+// new reader path.
+void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
+  uint64_t req_op_id = e->req_op_id.load(std::memory_order_acquire);
   uint32_t b = bucket_idx(e->key);
   CxlKvBucket *bucket = &buckets_[b];
   flush_line(bucket);
   flush_line((char *)bucket + 64);
   full_fence();
 
+  // C13: capture bucket epoch at lookup time. Reader validates
+  // staging.lookup_epoch >= my_epoch_at_send.
+  uint64_t lookup_epoch =
+      cache_ ? cache_pool_bucket_epoch(cache_, e->key) : 0;
+  ReadStagingSlot *st =
+      read_staging_slot(rs_, src, host_id_, (int)slot_idx);
+
+  auto publish_staging = [&](int32_t st_status, uint32_t vlen) {
+    st->key = e->key;
+    st->value_size = vlen;
+    st->status = st_status;
+    st->lookup_epoch = lookup_epoch;
+    // Flush control cacheline (excluding ready_op_id, published last).
+    flush_line(st);
+    if (vlen > 0) {
+      for (uint32_t off = 0; off < vlen; off += 64) {
+        flush_line(st->value_bytes + off);
+      }
+    }
+    store_fence();
+    // Release-publish: reader polling ready_op_id observes the
+    // staging fields populated above only after this store.
+    st->ready_op_id.store(req_op_id, std::memory_order_release);
+    flush_line(&st->ready_op_id);
+    store_fence();
+  };
+
   int found = -1;
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (bucket->slots[s].key == e->key) { found = s; break; }
   }
   if (found < 0) {
+    publish_staging(-1, 0);
     e->status = -1;
     e->resp_value_len = 0;
     e->resp_blk_off = 0;
@@ -1475,33 +1567,42 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src) {
 
   uint8_t sc = cxl_slot_size_class(encoded);
   if (sc == kSizeClassInline || pool_ == nullptr) {
-    // Inline u64 fallback — pack the 8 bytes into resp_blk_off
-    // (whose `blk_off == 0` sentinel tells the reader to interpret
-    // the field as inline value bytes; see forward_read).
+    // Inline u64 fallback — pack 8 bytes into staging.value_bytes.
+    std::memcpy(st->value_bytes, &encoded, 8);
+    publish_staging(0, 8);
     e->resp_value_len = 8;
     std::memcpy(&e->resp_blk_off, &encoded, 8);
     e->status = 0;
     return;
   }
+
   uint64_t blk_off = cxl_slot_blk_off(encoded);
   if (blk_off == 0) {
+    publish_staging(-1, 0);
     e->status = -1;
     e->resp_value_len = 0;
     e->resp_blk_off = 0;
     return;
   }
-  // Read the 4 B value-length header out of the pool block. We
-  // intentionally don't fetch value bytes here — reader does that.
+
+  // Read value-length header out of the pool block.
   uint8_t hdr[4];
   pool_->read(blk_off, hdr, 4);
   uint32_t vlen = 0;
   std::memcpy(&vlen, hdr, 4);
-  if (vlen == 0 || vlen > kForwardStagingSlotBytes) {
+  if (vlen == 0 || vlen > kReadStagingSlotBytes) {
+    publish_staging(-1, 0);
     e->status = -1;
     e->resp_value_len = 0;
     e->resp_blk_off = 0;
     return;
   }
+
+  // Direct-deposit: copy value bytes from pool into staging arena.
+  pool_->read(blk_off + 4, st->value_bytes, vlen);
+  publish_staging(0, vlen);
+
+  // Legacy resp fields (compat — new reader ignores).
   e->resp_value_len = vlen;
   e->resp_blk_off = blk_off;
   e->status = 0;
@@ -1562,7 +1663,9 @@ void CxlKvStoreA::read_receiver_loop() {
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
         if (op_id == 0) break;
-        read_handler(e, src);
+        // iter-11A Phase 1: pass slot_idx so read_handler can deposit
+        // value bytes directly into rs_[src][me][slot_idx].
+        read_handler(e, src, slot);
 
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);

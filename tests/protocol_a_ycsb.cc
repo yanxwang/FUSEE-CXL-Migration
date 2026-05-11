@@ -200,10 +200,11 @@ int main(int argc, char **argv) {
   std::size_t rr_bytes = read_ring_matrix_bytes();
   std::size_t ir_bytes = inval_ring_matrix_bytes();
   std::size_t fs_bytes = forward_staging_matrix_bytes();
+  std::size_t rs_bytes = read_staging_matrix_bytes();  // iter-11A Phase 1
   std::size_t stats_bytes = sizeof(WorkerStats) * 2 * kMaxClients;
   std::size_t header_bytes = 4096;
   std::size_t total = header_bytes + bucket_bytes + pool_bytes
-                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes
+                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes + rs_bytes
                     + stats_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
@@ -226,8 +227,9 @@ int main(int argc, char **argv) {
   void *rr_mem = reinterpret_cast<char *>(wr_mem) + wr_bytes;
   void *ir_mem = reinterpret_cast<char *>(rr_mem) + rr_bytes;
   void *fs_mem = reinterpret_cast<char *>(ir_mem) + ir_bytes;
+  void *rs_mem = reinterpret_cast<char *>(fs_mem) + fs_bytes;  // iter-11A Phase 1
   WorkerStats *stats = reinterpret_cast<WorkerStats *>(
-      reinterpret_cast<char *>(fs_mem) + fs_bytes);
+      reinterpret_cast<char *>(rs_mem) + rs_bytes);
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -343,10 +345,12 @@ int main(int argc, char **argv) {
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
     ForwardStagingMatrix *fs =
         reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    ReadStagingMatrix *rs =
+        reinterpret_cast<ReadStagingMatrix *>(rs_mem);  // iter-11A Phase 1
     if (store.enable_write_ring(wr, fs, /*init=*/true, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_write_ring failed\n"); return 1;
     }
-    if (store.enable_read_ring(rr, /*init=*/true, /*spawn=*/true) != 0) {
+    if (store.enable_read_ring(rr, rs, /*init=*/true, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_read_ring failed\n"); return 1;
     }
     if (store.enable_invalidate(ir, /*init=*/true, /*spawn=*/true) != 0) {
@@ -394,10 +398,12 @@ int main(int argc, char **argv) {
       InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
       ForwardStagingMatrix *fs =
           reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+      ReadStagingMatrix *rs =
+          reinterpret_cast<ReadStagingMatrix *>(rs_mem);  // iter-11A Phase 1
       if (store.enable_write_ring(wr, fs, /*init=*/false, /*spawn=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_write_ring failed\n"); return 1;
       }
-      if (store.enable_read_ring(rr, /*init=*/false, /*spawn=*/true) != 0) {
+      if (store.enable_read_ring(rr, rs, /*init=*/false, /*spawn=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_read_ring failed\n"); return 1;
       }
       if (store.enable_invalidate(ir, /*init=*/false, /*spawn=*/true) != 0) {

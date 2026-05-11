@@ -21,6 +21,7 @@
 #include "cxl_cache_pool.h"
 #include "cxl_directory.h"
 #include "cxl_forward_staging.h"
+#include "cxl_read_staging.h"
 #include "cxl_hashtable.h"
 #include "cxl_inval_ring.h"
 #include "cxl_kv_blockpool.h"
@@ -68,8 +69,12 @@ class CxlKvStoreA {
   // value bytes directly via pool->read — no value bytes on the ring.
   // Spawns one named ReadReceiver thread (cpu 67) per host on the
   // primary client.
-  int enable_read_ring(ReadRingMatrix *rr, bool init_region,
-                       bool spawn_receiver);
+  // iter-11A Phase 1: enable_read_ring takes a ReadStagingMatrix (rs)
+  // for forwarder-pool-direct value-bytes deposit. Owner forwarder
+  // writes value bytes directly to rs[req_host][me][slot_idx] +
+  // bumps ready_epoch; reader polls staging, no second pool->read.
+  int enable_read_ring(ReadRingMatrix *rr, ReadStagingMatrix *rs,
+                       bool init_region, bool spawn_receiver);
 
   // iter-5A Phase 4: wire the SEPARATE invalidate channel. `ir` lives
   // in CXL (init_region=true on host 0 zeroes the matrix). Spawns one
@@ -209,7 +214,8 @@ class CxlKvStoreA {
   // Receiver dispatch — one handler per ring (iter-9A Phase 2.D).
   // src is the originating host id (decoded from req_op_id high bits).
   void write_handler(WriteEntry *e, int src);
-  void read_handler(ReadEntry *e, int src);
+  // iter-11A Phase 1: slot_idx required for ReadStaging direct-deposit.
+  void read_handler(ReadEntry *e, int src, uint32_t slot_idx);
 
   CxlKvBucket *buckets_ = nullptr;
   uint32_t num_buckets_ = 0;
@@ -223,9 +229,11 @@ class CxlKvStoreA {
   CxlKvBlockPool *pool_ = nullptr;
 
   // iter-9A Phase 2.A: 3-ring split + ForwardStaging arena.
+  // iter-11A Phase 1: ReadStagingMatrix for forwarder-pool-direct.
   WriteRingMatrix       *wr_ = nullptr;
   ReadRingMatrix        *rr_ = nullptr;
   ForwardStagingMatrix  *fs_ = nullptr;
+  ReadStagingMatrix     *rs_ = nullptr;  // iter-11A Phase 1
   InvalRingMatrix       *ir_ = nullptr;
 
   // iter-9A Phase 2.C: aggregator + 3 sender threads.
