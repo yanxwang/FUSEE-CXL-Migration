@@ -50,6 +50,14 @@ struct alignas(64) KvCacheEntry {
 };
 
 // Bucket = chain of N entries; collision resolved by linear scan.
+// iter-11A Phase 3a investigated 4→16 entries/bucket as a hot-bucket
+// mitigation. Reverted after analysis (no bucket spinlock contention
+// to relieve since iter-10A Phase 2 made cache_pool seqlock-CAS, and
+// the bigger scan loop added ~2.4 µs to insert latency on hot buckets
+// = MESI ping-pong on extra cachelines). Carved out as iter-12A
+// backlog #6 — proper fix is hot-KEY replication with per-CPU value
+// copies, but the write amplification (8× memcpy per insert) needs
+// careful per-key adaptive detection to avoid net-loss on workload-a.
 constexpr int kCacheEntriesPerBucket = 4;
 
 struct alignas(64) KvCacheBucket {
