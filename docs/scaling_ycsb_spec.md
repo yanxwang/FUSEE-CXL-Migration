@@ -391,6 +391,22 @@ starts.
      (the 60% timeout cascade in Phase 2 smoke testing). This
      attribution discipline is the bar.
 
+8. **Gate 12 — bimodal cell count regression (added iter-11A Phase 0
+   2026-05-10)**: each iter must show its post-phase bimodal cell
+   count ≤ the prior iter's baseline. iter-11A Phase 0 measurement:
+   - iter-10A Phase 5.B: 8/210 sweep cells flagged bimodal
+   - iter-11A Phase 0 baseline (5 cells × 20 reps): 26/100 collapse
+   - iter-11A Phase 0 post-`probe.h` fix: 21/100 (-19%)
+   - iter-11A baseline for gate-12 enforcement: **≤ 21/100 on the
+     5 known-bimodal-cell × 20-rep verification battery**
+   Any phase whose post-phase verification shows count > 21/100 must
+   be root-caused or reverted before the iter can declare complete.
+   Rationale: bimodal cells silently corrupt single-rep sweep
+   conclusions. The probe.h null-guard fix eliminated the dominant
+   ReadReceiver-segfault cause; the residual 21/100 has at least one
+   distinct workload-A T=64 cache=on KV=1024 mode (carved to
+   iter-12A backlog #9).
+
 7. **Gate 7 — bimodal-cell flag (added iter-10A 2026-05-10)**: if
    the 5-rep verification of an anomaly cell yields BOTH a max
    reading ≥ 5× the median AND a median in the anomaly zone (per

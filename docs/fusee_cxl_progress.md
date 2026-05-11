@@ -456,6 +456,41 @@ Summary: `docs/iters/iter9A_redo_summary_20260510.md`
 iter-10A backlog (cleaned, no relabeled in-scope work):
   `docs/iters/iter10A_backlog_memo.md`
 
+## 2026-05-10 — iter-11A Phase 0 (per `docs/iters/task_plan_iter11A.md`)
+
+iter-11A Phase 0 root-causes the 8/210 bimodal cells flagged by
+iter-10A Phase 5.B verification (single-rep sweep cells whose 5-rep
+median lands in <0.5 Mops/s but max reaches 5-13 Mops/s).
+
+Findings (`docs/iter11A_bimodal_p0_postfix_20260510_210506/PHASE0_RCA.md`):
+- Per-rep `first_op_ns` + `ops_to_first_ns` instrumentation showed
+  identical startup signatures across healthy and collapsed reps —
+  bimodal pattern is **NOT** a cold-start race.
+- dmesg correlation found ReadReceiver segfaults at
+  `cxl_probe.h:83` (`header_->count`). When ReadReceiver dies,
+  forward_read requests stall → reads hit timeout → 0.006 Mops/s
+  collapse signature.
+- 1-line null-guard fix in `src/cxl_probe.h::emit` (`!header_ ||
+  !base_` added to early-return condition) eliminated the
+  segfault in 100/100 post-fix reps.
+- Bimodal count: 26/100 baseline → 21/100 post-fix (-19% overall;
+  -83% on the segfault-dominant cells).
+- 1 cell (workload-A T=64 cache=on KV=1024) retains a separate,
+  non-segfault bimodal mode → iter-12A backlog #9 with measurement
+  evidence (median jumps to 11.87 Mops/s post-fix when it works,
+  so cell-IS-fine; ~50% of reps still trigger a deadlock-like
+  state at high T cache=on).
+
+scaling_ycsb_spec.md gate-12 (NEW) codifies post-phase bimodal
+count regression check at ≤ 21/100 baseline.
+
+Phase 0 deliverables:
+- src/cxl_probe.h: null-guard fix
+- tests/protocol_a_ycsb.cc: first_op_ns + ops_to_first_ns probe
+- scripts/iter11A_p0_bimodal_verify.sh: 5×20 rep verification
+- docs/iter11A_bimodal_p0_20260510_205659/ (baseline)
+- docs/iter11A_bimodal_p0_postfix_20260510_210506/ (post-fix + RCA)
+
 ## 2026-05-10 — iter-10A (per `docs/iters/task_plan_iter10A.md`)
 
 iter-10A delivers all 5 planned phases on the iter-9A-redo

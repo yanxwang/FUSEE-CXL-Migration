@@ -1,0 +1,26 @@
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=255221)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=255222)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=255223)
+[A:thread] Worker pinned host=0 client=4 -> cpu=4 (pid=255224)
+[A:thread] Worker pinned host=0 client=5 -> cpu=5 (pid=255225)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=255220)
+[A:thread] Worker pinned host=0 client=6 -> cpu=6 (pid=255226)
+[A:thread] Worker pinned host=0 client=7 -> cpu=7 (pid=255227)
+[A:thread] WriteReceiver pid=255220 tid=140028763174592 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=255220 tid=140028754781888 pinned cpu=67 (host_id=0)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=7 entries=1024 (~1088 KiB)
+[A:thread] InvalReceiver pid=255220 tid=140028746389184 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=255220 tid=140028737996480 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=255220 tid=140028729603776 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=255220 tid=140028721211072 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+YCSB opt=A cache=1 num_hosts=2 threads=8 threads_eff=8 rep=18 load_ops=50000 load_thpt=237576 trans_ops=50000 trans_wall_max=0.013808 trans_agg_thpt=3621089 w_avg_ns=9090 w_p50_ns=6989 w_p99_ns=20179 r_avg_ns=3829 r_p50_ns=754 r_p99_ns=20061 first_op_ns_max=35352 first_op_ns_avg=15979 ops_to_first_ns_max=319831 ops_to_first_ns_avg=76777 # workloadf_optA_t8_cacheon_rep18

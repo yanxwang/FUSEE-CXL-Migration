@@ -79,7 +79,16 @@ class ProbeRing {
   ~ProbeRing() { if (enabled_) flush(); }
 
   inline void emit(const char *tag, uint64_t op_id) {
-    if (!enabled_ || overflowed_) return;
+    // iter-11A Phase 0.E fix: defensive null-guard on header_/base_.
+    // Bimodal-cell investigation traced 8/210 sweep cells' 250×
+    // throughput collapse to ReadReceiver SIGSEGV at this exact line
+    // (cxl_probe.h:83 `header_->count`). enabled_ was true (so mmap
+    // succeeded at constructor) but header_ was unmappable at emit()
+    // time, which the prior code did not guard. Adding `!header_ ||
+    // !base_` to the early-return condition prevents the crash;
+    // probes are silently skipped when mapping is invalid (acceptable
+    // — probes are diagnostic, not correctness-critical).
+    if (!enabled_ || overflowed_ || !header_ || !base_) return;
     uint64_t idx = header_->count;
     if (idx >= kProbeFrameCapacity) {
       overflowed_ = true;

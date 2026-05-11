@@ -137,6 +137,9 @@ struct alignas(64) WorkerStats {
   cacheline_u64 r_sum_ns;
   cacheline_u64 r_p50_ns;
   cacheline_u64 r_p99_ns;
+  // iter-11A Phase 0: bimodal-cell investigation probe
+  cacheline_u64 first_op_ns;       // duration of the first successful op (attach-warmup signal)
+  cacheline_u64 ops_to_first_ms;   // wall ns between t_start and first op completion
 };
 
 }  // anonymous namespace
@@ -541,6 +544,10 @@ int main(int argc, char **argv) {
 
   uint64_t t_start = now_ns();
   uint64_t my_count = 0;
+  // iter-11A Phase 0 bimodal probe: capture (a) wall-ns from t_start to first
+  // successful op completion, and (b) duration of first successful op.
+  uint64_t first_op_b = 0;
+  uint64_t first_op_dur_ns = 0;
   for (size_t i = 0; i < trans_ops.size(); i++) {
     if ((int)(i % (size_t)total_workers) != global_id) continue;
     auto &op = trans_ops[i];
@@ -568,11 +575,16 @@ int main(int argc, char **argv) {
     } else {
       continue;
     }
+    if (rc == 0 && first_op_b == 0) {
+      first_op_b = b;
+      first_op_dur_ns = b - a;
+    }
     (void)rc;
     my_count++;
   }
   uint64_t t_end = now_ns();
   uint64_t my_wall_ns = t_end - t_start;
+  uint64_t ops_to_first_ns = first_op_b ? (first_op_b - t_start) : 0;
 
   // Publish stats.
   WorkerStats *me = &stats[host_id * kMaxClients + client_id];
@@ -594,6 +606,8 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&me->r_sum_ns, r_sum_ns);
   CACHELINE_STORE(&me->r_p50_ns, r_p50);
   CACHELINE_STORE(&me->r_p99_ns, r_p99);
+  CACHELINE_STORE(&me->first_op_ns, first_op_dur_ns);
+  CACHELINE_STORE(&me->ops_to_first_ms, ops_to_first_ns);
   CACHELINE_STORE(&me->done, 1ULL);
   flush_line(me); store_fence();
 
@@ -665,6 +679,10 @@ int main(int argc, char **argv) {
     uint64_t total_trans_ops = 0, max_wall_ns = 0;
     uint64_t total_w_count = 0, total_w_sum_ns = 0;
     uint64_t total_r_count = 0, total_r_sum_ns = 0;
+    // iter-11A Phase 0 bimodal probe aggregates
+    uint64_t max_first_op_ns = 0, max_ops_to_first_ns = 0;
+    uint64_t sum_first_op_ns = 0, sum_ops_to_first_ns = 0;
+    int seen_workers = 0;
     std::vector<uint64_t> all_w_p50, all_w_p99, all_r_p50, all_r_p99;
     for (int h = 0; h < num_hosts; h++) {
       for (int c = 0; c < num_threads; c++) {
@@ -680,8 +698,17 @@ int main(int argc, char **argv) {
         all_w_p99.push_back(CACHELINE_LOAD(&ws->w_p99_ns));
         all_r_p50.push_back(CACHELINE_LOAD(&ws->r_p50_ns));
         all_r_p99.push_back(CACHELINE_LOAD(&ws->r_p99_ns));
+        uint64_t fo = CACHELINE_LOAD(&ws->first_op_ns);
+        uint64_t of = CACHELINE_LOAD(&ws->ops_to_first_ms);
+        if (fo > max_first_op_ns) max_first_op_ns = fo;
+        if (of > max_ops_to_first_ns) max_ops_to_first_ns = of;
+        sum_first_op_ns += fo;
+        sum_ops_to_first_ns += of;
+        seen_workers++;
       }
     }
+    uint64_t avg_first_op_ns = seen_workers ? (sum_first_op_ns / seen_workers) : 0;
+    uint64_t avg_ops_to_first_ns = seen_workers ? (sum_ops_to_first_ns / seen_workers) : 0;
     auto agg_p50 = [](std::vector<uint64_t> &v) {
       std::sort(v.begin(), v.end());
       return v.empty() ? 0 : v[v.size() / 2];
@@ -705,12 +732,16 @@ int main(int argc, char **argv) {
         "trans_ops=%lu trans_wall_max=%.6f trans_agg_thpt=%lu "
         "w_avg_ns=%lu w_p50_ns=%lu w_p99_ns=%lu "
         "r_avg_ns=%lu r_p50_ns=%lu r_p99_ns=%lu "
+        "first_op_ns_max=%lu first_op_ns_avg=%lu "
+        "ops_to_first_ns_max=%lu ops_to_first_ns_avg=%lu "
         "# %s_optA_t%d_cache%s_rep%d\n",
         cache_on ? 1 : 0, num_hosts, num_threads, num_threads, rep,
         load_ops.size(), load_thpt_kops,
         total_trans_ops, trans_wall_s, trans_agg_kops,
         w_avg, w_p50_a, w_p99_a,
         r_avg, r_p50_a, r_p99_a,
+        max_first_op_ns, avg_first_op_ns,
+        max_ops_to_first_ns, avg_ops_to_first_ns,
         wl_name.c_str(), num_threads, cache_on ? "on" : "off", rep);
     fflush(stdout);
   }
