@@ -9,14 +9,15 @@
 > anti-patterns); **this** is the "what + how" (current implementation
 > shape).
 >
-> **Snapshot point**: end of iter-7A (2026-05-03).
+> **Snapshot point**: end of iter-11A (2026-05-11).
 
 This doc has two layers and one cross-cutting reference:
 - **Part I — System overview**: plain language, no code.
 - **Part II — Per-stage pseudo-code dictionary**: indexed by stage tag
-  (W1..W12, R1..R6, I1..I8, F1..F7, D1..D5). When a probe trace says
-  "stage W7 p99 = 300 µs", you open Part II §W7 and immediately see what
-  W7 does in sub-steps + which CXL/DRAM primitives are involved.
+  (W1..W12, R0_tls_hit, R1..R6, I1..I8, F1..F7, D1..D5). When a probe
+  trace says "stage W7 p99 = 300 µs", you open Part II §W7 and
+  immediately see what W7 does in sub-steps + which CXL/DRAM primitives
+  are involved.
 - **Part III — Cross-cutting reference**: CXL primitive cost cheat sheet,
   synchronization contracts, known failure modes.
 
@@ -59,19 +60,19 @@ This doc has two layers and one cross-cutting reference:
 
 H ≤ 8 (hard cap from sharer_bitmap = 8 bits). Currently H = 2 on g3+g4.
 
-## I.2 The roles (per host) — iter-9A redo
+## I.2 The roles (per host) — iter-9A redo through iter-11A
 
 Workers are processes; the 6 named system threads live in the host's primary client process.
 
 | # | Role | Count per host | What it owns | CPU | Spawn site |
 |---|---|---|---|---|---|
-| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`) | cpu 0..(T-1) (pinned) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
-| 2 | **WriteSender** | 1 | Drains aggregator slots[Write][*]; sole producer on `WriteRing[me][*]`. (Default OFF — workers go direct to the CXL ring; opt in via `FUSEE_USE_AGGREGATOR=1`.) | cpu 64 (pinned) | spawned in `enable_senders(spawn=true)` |
-| 3 | **WriteReceiver** | 1 | Drains incoming `WriteRing[*][me]`. Handles op 1/2/3 (UPDATE/INSERT/DELETE) from peer host workers. Reads value bytes from `ForwardStaging[src][me]`. | cpu 65 (pinned) | spawned in `enable_write_ring(spawn=true)` |
+| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`). Each worker has its own `TlsCache` L1 (iter-10A Phase 1) pointed at via thread-local `g_thread_tls`. | cpu 0..(T-1) (pinned) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
+| 2 | **WriteSender** | 1 | Drains aggregator slots[Write][*]; sole producer on `WriteRing[me][*]`. (Default OFF — workers go direct to the CXL ring; opt in via `FUSEE_USE_AGGREGATOR=1`.) iter-10A Phase 3 added 4 batch policies P0/P1/P2/P3 via `FUSEE_BATCH_POLICY`; **B0 (worker-direct, no aggregator) wins by 20×** so the default stays direct. | cpu 64 (pinned) | spawned in `enable_senders(spawn=true)` |
+| 3 | **WriteReceiver** | 1 | Drains incoming `WriteRing[*][me]`. Handles op 1/2/3 (UPDATE/INSERT/DELETE) from peer host workers. Reads value bytes from `ForwardStaging[src][me][slot_idx]` then calls `execute_write_local` (full W1..W12) on behalf of the forwarder. | cpu 65 (pinned) | spawned in `enable_write_ring(spawn=true)` |
 | 4 | **ReadSender** | 1 | Drains aggregator slots[Read][*]; sole producer on `ReadRing[me][*]`. (Default OFF, see WriteSender.) | cpu 66 (pinned) | `enable_senders(spawn=true)` |
-| 5 | **ReadReceiver** | 1 | Drains incoming `ReadRing[*][me]`. Handles op 4 (CACHE_REGISTER): under directory lock sets sharer bit + responds with owner_blk_off + value_len. Reader (caller) pulls value bytes via `pool_->read` directly. | cpu 67 (pinned) | `enable_read_ring(spawn=true)` |
+| 5 | **ReadReceiver** | 1 | Drains incoming `ReadRing[*][me]`. Handles op 4 (CACHE_REGISTER) **forwarder-pool-direct path (iter-11A Phase 1)**: under directory lock sets sharer bit, reads value bytes from local pool, writes them **directly** into `ReadStaging[req_host][me][slot_idx].value_bytes` along with `lookup_epoch` (C13 tag), then publishes `staging.ready_op_id = req_op_id`. Reader polls staging instead of doing a second `pool_->read`. | cpu 67 (pinned) | `enable_read_ring(spawn=true)` |
 | 6 | **InvalSender** | 1 | Drains aggregator slots[Inval][*]; sole producer on `InvalRing[me][*]` for worker-originated invalidates. (Default OFF.) | cpu 68 (pinned) | `enable_senders(spawn=true)` |
-| 7 | **InvalReceiver** | 1 | Drains incoming `InvalRing[*][me]`. Handles op 5 (INVALIDATE) from peer writers; sets local cache stale flag; ACKs. CRUCIALLY does NOT call `execute_write_local` and holds NO directory lock — breaks the iter-4A-redo deadlock cycle. | cpu 69 (pinned) | `enable_invalidate(spawn=true)` |
+| 7 | **InvalReceiver** | 1 | Drains incoming `InvalRing[*][me]`. Handles op 5 (INVALIDATE) from peer writers; calls `cache_pool_set_stale(key)` (bumps bucket epoch under seqlock CAS → invalidates same-bucket TLS entries on this host); ACKs. CRUCIALLY does NOT call `execute_write_local` and holds NO directory lock — breaks the iter-4A-redo deadlock cycle. **Single-thread** (iter-11A Phase 2 shipped a `1 dispatcher + 8 workers` design that PASSed hash-diff 20/20 but regressed w_p99 26×; reverted in commit 5664945 — see iter-12A backlog #4 for redesign). | cpu 69 (pinned) | `enable_invalidate(spawn=true)` |
 | 8 | (Implicit) primary client process | 1 | Sets up CXL region + DRAM regions pre-fork; owns the 6 background threads above; itself runs as worker. | (its main thread is pinned per row 1) | The first process started per host (`FUSEE_HOST_ID=0/1`, `FUSEE_NUM_THREADS=T` → forks `T-1` children). |
 
 At T=64: each host has **64 worker processes + 6 background threads on primary's process** = 70 schedulable entities. Workers pinned to cpu 0..63, system threads pinned to cpu 64..69, spare cpu 70..85. **All threads CPU-pinned per iter-9A C3** (verified by the `[A:thread]` startup log — see `tests/protocol_a_ycsb.cc`).
@@ -80,63 +81,106 @@ At T=64: each host has **64 worker processes + 6 background threads on primary's
 workers enqueue ops into per-(ring_kind, worker) DRAM slots and spin on a
 local ack — the 3 senders are the sole CXL-ring producers, eliminating
 the T-way `fetch_add(tail)` contention. **Default off** because the
-single-sender-per-ring design without batching becomes a new bottleneck
-at high T (workload-A KV=1024 T=64 cache=on dropped from 9.8 Mops/s
-direct → 0.5 Mops/s aggregator). iter-10A backlog adds slot batching
-to senders so the aggregator path becomes net-positive at high T.
+single-sender-per-ring design became a new bottleneck at high T even
+with iter-10A Phase 3's P1/P2/P3 batch policies (workload-A KV=1024 T=64
+cache=on dropped from 9.8 Mops/s direct → 0.5 Mops/s aggregator pre-P*;
+P1/P2/P3 narrowed the gap but did not close it — B0 is the production
+default and aggregator-path batching is iter-12A backlog #11).
+
+**iter-10A Phase 1.C TLS L1 attach** (per worker, post-fork):
+- `set_thread_tls_cache(tls)` stores `tls` in TU-local `g_thread_tls`.
+- TLS cache is 1024 entries by default (`FUSEE_TLS_SIZE` env), each
+  entry 1088 B (key 8 + observed_epoch 8 + value_size 4 + 1024-B
+  inline `value_bytes`, alignas(64) padding) → ~1.1 MiB per worker.
+- On TLS hit: compare `entry.observed_epoch` against
+  `cache_pool_bucket_epoch(key)`; mismatch → evict TLS slot, fall
+  through to shared `cache_pool_lookup`.
+- TLS hit/miss is reported by stage tag `R0_tls_hit` / (no tag, falls
+  through to `R2hit` / `R2miss`).
 
 ## I.3 Data layout cheat sheet
 
 | Region | Tier | Sharing | Purpose | Approx. size |
 |---|---|---|---|---|
-| **Hashtable** | CXL | one copy | Authoritative key→slot map. B buckets × S=7 slots × 16 B/slot. | `B × S × 16 B` (8 MB at B=65536) |
-| **KV blockpool** | CXL | partitioned: H segments, each owned by one host | Value bytes (size class 256 / 512 / 1024 B). Within a host's segment only that host's workers allocate. | workload-dependent (~512 MB/host at MAX_OPS=200k KV=1024) |
+| **Hashtable** | CXL | one copy | Authoritative key→slot map. B buckets × S=7 slots × 16 B/slot. iter-9A: slot.value encodes a pool `blk_off` (size class + 8-bit fingerprint + offset bits packed via `cxl_slot_pack`); pool block starts with a 4-B `value_len` header followed by value bytes. | `B × S × 16 B` (8 MB at B=65536) |
+| **KV blockpool** | CXL | partitioned: H segments, each owned by one host | Value bytes prefixed by 4-B `value_len` header. Single size class per pool (256 / 512 / 1024 B). Within a host's segment only that host's workers allocate via `pool_->alloc()` (`bump.fetch_add(1)` on a CXL cursor — AP16 hazard: no `flush_line` after the RMW, see III.3). | workload-dependent (~512 MB/host at MAX_OPS=200k KV=1024) |
 | **WriteRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 1/2/3 (UPDATE/INSERT/DELETE) only. `[H][H]` rings, depth 256 each, **128-B entry** (req on cl 1, resp on cl 2; tail and head on SEPARATE cachelines per iter-9A redo Phase 2 fix). C2-compliant: NO value bytes inline, just `(key, op_kind, value_len, staging_off, staging_gen)`. | `~H² × 256 × 128 B` |
-| **ReadRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 4 (CACHE_REGISTER) only. Same 128-B 2-cacheline layout as WriteRing. Req `(key)`, resp `(status, owner_blk_off, value_len)` — reader pulls value bytes directly via `pool_->read`. | `~H² × 256 × 128 B` |
+| **ReadRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 4 (CACHE_REGISTER) only. Same 128-B 2-cacheline layout as WriteRing. Req `(key)`. **iter-11A Phase 1**: the ring response is just a slot-free signal; the actual value bytes ride on `ReadStagingMatrix` (next row) — reader no longer does a second `pool_->read`. | `~H² × 256 × 128 B` |
 | **ForwardStagingMatrix** | CXL | per (src_host, dst_host, slot_idx) | iter-9A redo Phase 2.B — value-bytes arena for op 1/2 (writes). Slot 1:1 with WriteRing slots (same `slot_idx`); each slot holds up to `kForwardStagingSlotBytes` (1024 B) value bytes. Lifetime tracked by ring slot reuse — no separate allocator. | `~H² × 256 × 1024 B` (~4 MiB) |
+| **ReadStagingMatrix** | CXL | per (req_host, owner_host, slot_idx) | **iter-11A Phase 1** — owner-forwarder→reader value-bytes arena for op 4 (CACHE_REGISTER) responses. `ReadStagingSlot` = 1 control cacheline {`atomic<uint64_t> ready_op_id`, `lookup_epoch`, `key`, `value_size`, `status`, _pad} + 1024-B `value_bytes`. Owner's `read_handler` writes value bytes + `lookup_epoch` (C13 tag) here directly, then publishes `ready_op_id = req_op_id`; reader polls `ready_op_id`. Eliminates the iter-10A second `pool_->read` roundtrip. | `~4.4 MiB` (`H² × 256 × 1088 B` at H=4) |
 | **InvalRingMatrix** | CXL | per ordered pair: SPSC | Carries `OP_INVALIDATE` only (separate from Write/Read rings — see I.7 deadlock argument). `[H][H]` rings, depth 256 each, **128-B entry** (2-cacheline split, head/tail on separate cachelines per iter-9A redo Phase 2 fix). | `~H² × 256 × 128 B` |
 | **AggregatorRegion** | DRAM | `MAP_SHARED` across same-host workers | iter-9A redo Phase 2.C — per-(ring_kind, worker) DRAM slots + value buffers. Used only when `FUSEE_USE_AGGREGATOR=1`. | ~204 KiB (DRAM) |
-| **SlotDirectory** | DRAM | `MAP_SHARED` across same-host workers | Per-(bucket, slot) coherence state: `sharer_bitmap`, MESI state, host-local `pthread_spinlock`, version. | `B × S × 16 B` |
-| **KvCachePool** | DRAM | `MAP_SHARED` across same-host workers | Per-host hashmap (key → cached value bytes) + 1-byte stale flag per entry. | LRU-bounded, ~8 MB |
+| **SlotDirectory** | DRAM | `MAP_SHARED` across same-host workers | Per-(bucket, slot) coherence state: `sharer_bitmap` (8-bit, one per host), `state` (SHARED / INVALID / …), host-local `pthread_spinlock`, `version` (bumped on every commit). | `B × S × 16 B` |
+| **KvCachePool (L2)** | DRAM | `MAP_SHARED` across same-host workers | Open-addressed bucket array. `KvCacheBucket` = host-local spinlock (legacy, unused after iter-10A Phase 2) + **`std::atomic<uint64_t> epoch`** (iter-10A Phase 1.B — bumped on insert/evict/set_stale; TLS readers compare against this) + 4 `KvCacheEntry` slots. Each entry has `std::atomic<uint32_t> seq` (**iter-10A Phase 2 seqlock CAS**: even = stable, odd = mid-update; CAS even→odd to claim, store back even+1 to publish; readers re-load seq after value copy and treat mismatch as miss-retry). | ~8 MB (1024 entry default) |
+| **TlsCache (L1)** | DRAM | per-worker private | **iter-10A Phase 1.A** — `kTlsValueMaxBytes=1024` per entry, open-addressed with linear probe (`kTlsProbeMax=8`). Each entry stores `(key, observed_epoch, value_size, value_bytes[1024])` = 1088 B. On TLS hit, reader reloads `cache_pool_bucket_epoch(key)` and compares; mismatch = stale, evict + fall through. **0 cross-core MESI traffic on hit.** | ~1.1 MiB per worker (1024 entries × 1088 B); at T=64 → ~70 MiB/host |
 | **ShardingTable** | DRAM | read-only after init | Static `σ: K → H` mapping (`hash(K) >> 31) & (H-1)` currently). | trivial |
 
 ## I.4 Read path (overview)
 
-Five logical outcomes:
-1. **Cache HIT, fresh** → fastest path, returns from local DRAM
-2. **Cache HIT, stale flag set** → treat as miss, fetch fresh
-3. **Cache MISS, owner == self** → scan local CXL bucket array directly
-4. **Cache MISS, owner == peer host** → send `OP_CACHE_REGISTER` cross-host, peer returns value, populate cache
-5. **Key not found** → return -1
+iter-10A introduced an L1 (per-worker TLS) above the shared L2 cache_pool;
+iter-11A Phase 1 replaced the cross-host miss path's req→ack→pool_read
+with **forwarder-pool-direct** (owner writes value bytes straight into a
+CXL staging slot the reader polls).
 
-Stage tags (R1..R6):
+Six logical outcomes:
+1. **TLS L1 HIT, epoch fresh** → 0 cross-core MESI traffic; ~50-300 ns
+2. **TLS L1 HIT, epoch stale** → evict TLS entry, fall through to L2
+3. **L2 cache_pool HIT, not stale** → seqlock read of shared bucket; populate L1 + return
+4. **L2 MISS, owner == self** → scan local CXL bucket array directly + pool read
+5. **L2 MISS, owner == peer host** → send `OP_CACHE_REGISTER` via ReadRing; owner forwarder writes value bytes directly into `ReadStagingMatrix`; reader polls staging
+6. **Key not found** → return -1
+
+Stage tags (R0_tls_hit, R1..R6):
 
 ```mermaid
 sequenceDiagram
   participant W as Worker (caller)
-  participant CACHE as KvCachePool (DRAM)
+  participant TLS as TlsCache L1 (DRAM private)
+  participant L2 as KvCachePool L2 (DRAM shared)
   participant CXL as CXL bucket+pool
-  participant FR as ForwardRing (CXL)
-  participant RESP as Peer ForwardResponder
-  W->>+CACHE: R1: enter search(K)
-  CACHE-->>-W: R2: lookup result (hit-fresh / stale / miss)
-  alt cache hit fresh
-    W->>W: R6: return value (≈ 0.3 µs total)
-  else cache miss, cross-host owner
-    W->>+FR: R3: enqueue OP_CACHE_REGISTER
-    FR->>+RESP: (CXL ring delivery)
-    RESP->>RESP: scan bucket; set sharer bit; read pool
-    RESP-->>-FR: ACK with value
-    FR-->>-W: R4: read value from response
-    W->>CACHE: populate cache (post-ACK, AP15)
-    W->>W: R6: return value (≈ 5-10 µs total)
-  else cache miss, owner == self
-    W->>+CXL: R5: bucket scan + pool read
-    CXL-->>-W: value
-    W->>CACHE: populate cache
-    W->>W: R6: return value (≈ 8 µs total)
+  participant RR as ReadRing (CXL)
+  participant RS as ReadStaging (CXL)
+  participant RECV as Peer ReadReceiver
+  W->>+TLS: R1: enter search(K)
+  TLS-->>W: epoch compare
+  alt TLS hit + epoch fresh
+    W->>W: R0_tls_hit: return value (~50-300 ns)
+  else TLS miss / stale → L2
+    W->>+L2: cache_pool_lookup (seqlock CAS read)
+    L2-->>-W: R2hit / R2miss
+    alt L2 hit
+      W->>TLS: populate L1 with current epoch
+      W->>W: R6: return (≈ 5-15 µs depending on KV size memcpy)
+    else cross-host miss
+      W->>+RR: R3: enqueue OP_CACHE_REGISTER; clear staging.ready_op_id; capture my_epoch_at_send
+      RR->>+RECV: (CXL ring delivery)
+      RECV->>RECV: scan bucket; set sharer bit (under dir lock)
+      RECV->>RS: write value_bytes + lookup_epoch (C13) + status; publish ready_op_id = req_op_id
+      W->>RS: poll ready_op_id == req_op_id (200 ms timeout)
+      RS-->>-W: R4: validate lookup_epoch >= my_epoch_at_send; memcpy value_bytes
+      RR-->>-W: (ring slot freed by reader, not by recv)
+      W->>L2: cache_pool_insert (§AP15: only after ACK)
+      W->>TLS: populate L1 with new epoch
+      W->>W: R6: return (≈ 3-8 µs total, ~30 % faster than iter-10A's req-then-pool path)
+    else owner-self miss
+      W->>+CXL: R5: bucket flush+scan; pool->read header (4 B) then bytes (value_len)
+      CXL-->>-W: value
+      W->>L2: cache_pool_insert; W->>TLS: populate L1
+      W->>W: R6: return (≈ 8 µs total)
+    end
   end
 ```
+
+**iter-11A Phase 1 §I9 / C13 invariant**: the staging slot's
+`lookup_epoch` is the bucket epoch at the owner forwarder's
+`cache_pool_lookup` time. Reader compares against the bucket epoch it
+observed BEFORE sending the request (`my_epoch_at_send`). If
+`staging.lookup_epoch < my_epoch_at_send`, the owner's view was
+older than the reader's local cache snapshot at send time → reader
+returns `-3` (stale-snapshot) and the caller retries (re-reads
+cache_pool, which now sees the fresh entry). Without this check the
+reader could install a stale value into TLS/L2 before a concurrent
+writer's invalidate reaches this host → strict-A violated.
 
 ## I.5 Write path (overview)
 
@@ -176,6 +220,22 @@ sequenceDiagram
 
 **The commit point** (when the new value becomes visible to peer hosts) is **W9** (the slot pointer flush). Steps W10-W12 are owner-local bookkeeping. By the time W9 fires, all peer caches must already be marked stale (W6 ACK received) — that's how strict-A linearizability (§I9) is preserved.
 
+**iter-10A Phase 1.C TLS coherence on write**: after `cache_pool_insert`
+in W11 bumps the bucket epoch, this thread immediately calls
+`tls_insert(g_thread_tls, key, value, value_len, new_epoch)` so its
+own subsequent read hits TLS with the freshest epoch. On DELETE,
+`tls_evict(g_thread_tls, key)` runs (belt + suspenders — the bucket
+epoch bump from `cache_pool_evict` would already invalidate any
+TLS entry on next read of any key in that bucket).
+
+**iter-10A Phase 2 seqlock CAS on cache_pool**: W11's
+`cache_pool_insert` no longer takes the legacy per-bucket spinlock.
+Inserter CAS-claims the target entry's `seq` (even → odd), writes
+`(key, stale=0, value_size, value_bytes)`, then stores `seq = even+1`
+(release). Readers loop "load seq → memcpy fields → re-load seq"
+and on mismatch retry up to 8 times. Net effect: writer can complete
+without blocking concurrent same-bucket readers (they retry).
+
 ## I.6 The four cross-host messages
 
 | Op | From | To | Channel | Carries |
@@ -184,6 +244,39 @@ sequenceDiagram
 | `OP_CACHE_REGISTER` | reader Worker | owner ForwardResponder | ForwardRing | `(key)` request; response carries `value` |
 | `OP_INVALIDATE` | writer Worker | sharer CacheDispatcher | **InvalRing** (separate from ForwardRing) | `(key)` only |
 | `OP_RESPONSE` | ForwardResponder / CacheDispatcher | original requester | back-channel of same SPSC slot (`resp_op_id` field) | `(status, [optional value])` |
+
+## I.7a Cache hierarchy snapshot (iter-11A)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Worker thread (CPU 0..T-1)                                   │
+│  ├─ L1: TlsCache (DRAM private)         ~1.1 MiB / worker    │
+│  │   key, observed_epoch, value_bytes                        │
+│  │   epoch-validated against L2 bucket_epoch                 │
+│  └─ ↓ on miss / stale                                        │
+└─────────────┬────────────────────────────────────────────────┘
+              │
+┌─────────────▼────────────────────────────────────────────────┐
+│ KvCachePool (DRAM MAP_SHARED across same-host workers)       │
+│   per-bucket: 4 entries + 8-B `epoch` atomic                 │
+│   per-entry:  seqlock seq (CAS even→odd→even) + value bytes  │
+│   stale flag: lazy invalidation by InvalReceiver             │
+└─────────────┬────────────────────────────────────────────────┘
+              │ ↓ on miss
+┌─────────────▼────────────────────────────────────────────────┐
+│ CXL: hashtable + per-host blockpool                          │
+│   slot.value = packed(blk_off, size_class, fingerprint)      │
+│   pool block = 4-B value_len header + value bytes            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+For cross-host reads (owner != self):
+- Reader's `my_epoch_at_send` = `cache_pool_bucket_epoch(key)` at send
+  time (captured immediately before `ring->tail.fetch_add`).
+- Owner forwarder's `lookup_epoch` = `cache_pool_bucket_epoch(key)` at
+  read-handler dispatch time.
+- Reader rejects responses with `lookup_epoch < my_epoch_at_send`
+  (C13 invariant) → return `-3`, caller retries.
 
 ## I.7 Key design choices (one-liner each)
 
@@ -494,87 +587,152 @@ W11: local cache update:
 
 ---
 
-## II.2 Worker read path (R1..R6)
+## II.2 Worker read path (R0_tls_hit, R1..R6)
 
 Source: `src/cxl_kv_ops_A.cc :: search()`.
 
 ### R1 — Entry to search
 
 ```
-R1: enter search(key, *out):
+R1: enter search(key, *out_buf, *out_len):
   if key == EMPTY: return -1
   PROBE("R1", key)
 ```
 
-### R2 — Cache lookup (with stale check)
+### R0_tls_hit — TLS L1 fast path (iter-10A Phase 1.C)
 
 ```
-R2: cache_pool_lookup:
-  ok = cache_pool_lookup(cache_, key, buf, 8, &sz)
-  if ok:                                    // hit AND not stale
-    PROBE("R2hit", key)
-    *out = *(u64*)buf
-    PROBE("R6", key); return 0
+R0: TLS L1 lookup:
+  if g_thread_tls is set:
+    cur_epoch = cache_pool_bucket_epoch(cache_, key)   // 1 LD on shared bucket
+    if tls_lookup(g_thread_tls, key, cur_epoch, buf, &sz):
+      PROBE("R0_tls_hit", key)
+      copy buf to out_buf (up to buf_len)
+      PROBE("R6", key); return 0
+```
+
+**Healthy baseline**: ~50-300 ns (bucket epoch load + linear probe ≤ 8
+slots in private DRAM + value memcpy from L1/L2 cache). The bucket
+epoch is on the cache_pool's shared cacheline so the load is one
+MESI fetch (worst case ~100 ns); on hit no other shared cacheline is
+touched.
+
+→ `src/cxl_kv_ops_A.cc:1704-1717`
+
+### R2 — Shared L2 cache_pool lookup (with stale + seqlock check)
+
+```
+R2: cache_pool_lookup (iter-10A Phase 2 seqlock CAS reader):
+  for retry in 0..7:
+    seq0 = entry->seq.load()        // even = stable
+    if seq0 is odd: pause; continue
+    key0 = entry->key
+    stale = entry->stale
+    sz = entry->value_size
+    memcpy(buf, entry->value_bytes, sz)
+    seq1 = entry->seq.load()
+    if seq0 == seq1 and key0 == key and !stale: return HIT
+  return MISS
+  if HIT:
+    PROBE("R2hit", key); populate TLS L1; PROBE("R6", key); return 0
   PROBE("R2miss", key)
 ```
 
-`cache_pool_lookup` returns false if entry not present OR stale flag set (lazy stale = treated as miss at API level per §I4).
+`cache_pool_lookup` returns false if entry not present, stale flag set, or seqlock retry budget exhausted.
 
-**Healthy baseline**: ~300 ns hit, ~500 ns miss.
+**Healthy baseline**: ~300-500 ns hit (seqlock read), ~500 ns miss.
+**Hot-bucket p99**: 5-15 µs (Phase 5 path_decomp on workload-a T=64
+cache=on shows R1+R2 dominated by the 1024-B `value_bytes` memcpy
+MESI ping-pong — this is the gap TlsCache closes).
 
-### R3 — (cross-host miss only) Send OP_CACHE_REGISTER
+→ `src/cxl_cache_pool.cc::cache_pool_lookup`
+
+### R3 — (cross-host miss only) Send OP_CACHE_REGISTER + capture epoch
 
 ```
-R3: forward_cache_register:
+R3: forward_read_direct(owner, key) (iter-11A Phase 1):
   owner = host_of(key)
-  if owner != self and fr_ != NULL:
-    PROBE("R3", key)
-    rc = forward_cache_register(owner, key, &v)   // BLOCKING (uses ForwardRing)
-    if rc != 0: return rc
+  if owner == self: goto R5
+  PROBE("R3", key)
+  ring = &rr_->rings[self][owner]
+  op_id = encode(self, ++read_op_counter)
+  tpos = ring->tail.fetch_add(1)   // RMW-CXL
+  flush(&ring->tail); sfence
+  e = &ring->entries[tpos % depth]
+  while e->req_op_id != 0: pause   // wait-for-slot-free
+  my_epoch_at_send = cache_pool_bucket_epoch(cache_, key)   // C13
+  st = read_staging_slot(rs_, self, owner, slot_idx)
+  st->ready_op_id = 0; flush; sfence   // clear prior signal
+  e->key = key; e->req_op_id = op_id; flush; sfence
 ```
 
-The call into `forward_cache_register` runs the producer side of the F-stage pipeline (see II.4 below) on the ForwardRing, with the request being `OP_CACHE_REGISTER`.
+**Primitives**: 1× RMW-CXL on tail, 1× LD-DRAM (`bucket_epoch`), 1× ST-CXL on staging.ready_op_id, 1× ST-CXL on entry. Probes emitted at the start (`R3`).
 
-### R4 — Receive value via OP_RESPONSE; populate cache
+### R4 — Poll ReadStaging + C13 validate + memcpy
 
 ```
-R4: post-ACK:
+R4: spin on staging (200 ms timeout):
   PROBE("R4", key)
-  cache_pool_insert(cache_, key, &v, 8)  // §AP15: insert ONLY after ACK
-  *out = v
+  t0 = now_ns_mono()
+  for (;;):
+    flush(&st->ready_op_id); mfence
+    if st->ready_op_id == op_id: break
+    if now_ns - t0 > 200 ms: timed_out = true; break
+    pause
+  e->req_op_id = 0; flush; sfence   // CRITICAL — free ring slot
+  if timed_out: return -2
+
+  flush(st); mfence
+  if st->lookup_epoch < my_epoch_at_send:   // C13 reject
+    return -3   // caller retries from R2
+  if st->status != 0: return st->status
+  vlen = st->value_size
+  for off in 0..vlen step 64: flush(value_bytes + off)
+  mfence
+  memcpy(out_buf, st->value_bytes, min(vlen, buf_len))
+  cache_pool_insert(cache_, key, v, vlen)   // §AP15 — only after ready
+  if g_thread_tls: tls_insert(key, v, vlen, current_bucket_epoch)
   PROBE("R6", key); return 0
 ```
 
-Per `§AP15`: cache insert must NOT happen before the register ACK, otherwise reader can install the value before the owner directory has registered the reader as sharer → next writer's invalidate broadcast will MISS the reader → strict-A violated.
+**Primitives per spin**: 1× flush + 1× mfence + 1× LD-CXL on staging.ready_op_id (1 cacheline). After ready: 1× flush on each value cacheline + 1 mfence + memcpy.
+**Healthy baseline (R3+R4 combined)**: ~3-5 µs (one CXL roundtrip for the ring tail + one for the staging poll + value-byte read; no second `pool->read`).
+**Per `§AP15`**: cache insert AND TLS insert must NOT happen before `ready_op_id` is observed AND `lookup_epoch >= my_epoch_at_send` (the C13 reject path keeps L1/L2 from caching values older than the reader's view).
+
+→ `src/cxl_kv_ops_A.cc:1378-1487` (`forward_read_direct`)
+→ `src/cxl_kv_ops_A.cc:1522-1619` (`read_handler` — peer side)
 
 ### R5 — (owner-self miss only) Direct CXL bucket scan + pool fetch
 
 ```
 R5: owner-self miss:
   bucket = &buckets_[bucket_idx(key)]
-  FLUSH(bucket); FLUSH(bucket+64); MFENCE
+  flush(bucket); flush(bucket+64); mfence
   for s in 0..6:
     if bucket->slots[s].key == key:
       encoded = bucket->slots[s].value
-      sc = decode_size_class(encoded)
+      sc = cxl_slot_size_class(encoded)
       if sc == INLINE or pool_ == NULL:
-        v = encoded
+        v = encoded; vlen = 8
       else:
-        blk_off = decode_blk_off(encoded)
-        pool_->read(blk_off, &v, 8)        // FLUSH each cacheline + MFENCE + LD-CXL
-      *out = v
-      cache_pool_insert(cache_, key, &v, 8)
+        blk_off = cxl_slot_blk_off(encoded)
+        pool_->read(blk_off, hdr, 4)        // 4-B header = value_len
+        memcpy(&vlen, hdr, 4)
+        pool_->read(blk_off + 4, v, vlen)   // FLUSH + LD-CXL per cacheline
+      memcpy(out_buf, v, min(vlen, buf_len))
+      cache_pool_insert(cache_, key, v, vlen)
+      if g_thread_tls: tls_insert(key, v, vlen, current_bucket_epoch)
       PROBE("R6", key); return 0
   return -1   // not found
 ```
 
-**Healthy baseline (R5 path, miss)**: ~5 µs (bucket flush + scan + pool read + cache insert).
+**Healthy baseline (R5 path, miss)**: ~5-10 µs (bucket flush + scan + pool header read + pool value read + L2 + L1 populate). Scales with KV size: at KV=1024 the pool->read is 16 cachelines = ~10 µs of LD-CXL.
 
 ### R6 — Return
 
 `PROBE("R6"); return 0` — uniform exit point regardless of which sub-path was taken.
 
-→ `src/cxl_kv_ops_A.cc:644-700`
+→ `src/cxl_kv_ops_A.cc:1694-1806`
 
 ---
 
@@ -766,17 +924,25 @@ D3: load entry:
   PROBE("I4", op_id)
 ```
 
-### D4 — Apply: set cache stale
+### D4 — Apply: set cache stale (iter-10A Phase 2 update)
 
 ```
 D4: cache_pool_set_stale:
-  cache_pool_set_stale(cache_, e->key)                 // DRAM hashmap lookup + 1B atomic store
+  cache_pool_set_stale(cache_, e->key)
+    // seqlock CAS entry: claim seq even→odd, store stale=1, bump
+    // bucket_epoch (atomic fetch_add), release seq+1
   PROBE("I5", op_id)
 ```
 
-**Primitive**: 1× DRAM hashmap lookup + 1× ST-DRAM (1-byte stale flag).
-**Healthy baseline**: ~200 ns.
-**Sync contract**: lazy stale flag — peer worker's next `cache_pool_lookup` returns miss; refetch via R3-R4.
+**Primitives**: 1× DRAM open-addressed bucket scan + 1× seqlock CAS + 1× atomic `bucket_epoch` fetch_add + 1× ST-DRAM (stale flag).
+**Healthy baseline**: ~300-500 ns (uncontended seqlock).
+**Sync contract**: bumping `bucket_epoch` invalidates ALL TlsCache
+entries on this host whose key hashes to this bucket (next TLS reader
+sees epoch mismatch → falls through to L2 → seqlock read sees
+`stale=1` → miss → R3 register-then-fill). The lazy stale flag +
+bucket epoch is the §I9 strict-A enforcement at the L1/L2 layer.
+
+→ `src/cxl_cache_pool.cc::cache_pool_set_stale`
 
 ### D5 — Write ACK back + advance head
 
@@ -793,9 +959,22 @@ D5: ACK + advance:
 
 After loop: `ring->head = head` (write back consumer cursor — purely local, producer never reads).
 
-**Per-inval cost (D2 + D3 + D4 + D5)**: ~3.2 µs typical. Single thread → max throughput ~310k inval/sec. With T=64 producers each generating ~1k inval/sec on hot keys, dispatcher saturation point is roughly ~T=64 mark — coincidence with the saturation T iter-6A observed.
+**Per-inval cost (D2 + D3 + D4 + D5)**: ~1.5-3 µs typical. Single thread → max throughput ~300-650k inval/sec. With T=64 producers each generating ~1k inval/sec on hot keys, dispatcher saturation point is roughly ~T=64 mark — coincidence with the saturation T iter-6A observed.
 
-→ `src/cxl_kv_ops_A.cc:444-485`
+**iter-11A Phase 2 (455379e, REVERTED in 5664945)**: shipped a
+`1 dispatcher + 8 worker threads + per-bucket FIFO` design intended
+to parallelize the InvalReceiver. G1 hash-diff 20/20 PASS but `w_p99`
+regressed 26× (~25 µs → ~700 µs) because per-bucket FIFO forced
+bucket-stripe serialization across workers and DRAM queue handoff
+added ~5 µs latency floor per inval. Reverted to single-thread per
+plan §4 revert clause. iter-12A backlog #4 plans a redesign with
+bucket-affinity batching (each worker owns a hash-stable bucket
+range, no cross-worker coordination needed). The plan's predicted
+gain (I6 591 µs → 50 µs) was based on a misinterpretation of
+iter-10A's I6 measurement — I6 was receiver IDLE-GAP between
+bursts, not processing time per inval.
+
+→ `src/cxl_kv_ops_A.cc:1322-1358` (current single-thread loop)
 
 ---
 
@@ -902,11 +1081,14 @@ responder_handle(e):
 
 | Symptom | Code | Meaning | Recovery |
 |---|---|---|---|
-| `send_invalidate` returns -11 | timeout @ I7 (5 ms cap) | dispatcher didn't ACK in time; cache may be stale on peer | iter-7A: silent — writer proceeds anyway → STRICT-A WEAKENED. iter-9A backlog: fail-loud + escalate. |
-| `forward_to_owner` / `forward_cache_register` returns -11 | timeout @ F7 (**5 ms cap iter-8A**, was 200 ms iter-7A) | responder didn't process in time | iter-8A Phase 5: 200ms→5ms (40× wallclock damage cap reduction). Still silent — fail-loud is iter-9A backlog. |
+| `send_invalidate` returns -11 | timeout @ I7 (5 ms cap) | dispatcher didn't ACK in time; cache may be stale on peer | iter-7A: silent — writer proceeds anyway → STRICT-A WEAKENED. iter-12A backlog: fail-loud + escalate. |
+| `forward_write_direct` returns -11 | timeout @ generic_spin_wait (5 ms cap iter-8A) | WriteReceiver didn't process in time | Still silent — fail-loud is iter-12A backlog. |
+| `forward_read_direct` returns -2 | timeout @ staging.ready_op_id poll (**200 ms cap iter-11A**) | ReadReceiver / staging path stalled | Reader frees ring slot then returns -2; caller propagates (no retry-loop). iter-11A increased timeout vs the iter-8A 5ms because reads are now part of the steady-state hot path and a transient 5ms hiccup was triggering false misses. |
+| `forward_read_direct` returns -3 | C13 epoch reject: `staging.lookup_epoch < my_epoch_at_send` | owner's view of the bucket was older than reader's at send time → stale-snapshot rejection | caller retries from R2 (re-reads `cache_pool_lookup`, which now sees the fresh entry — the owner's invalidate must have already been visible at our `my_epoch_at_send` capture point). Strict-A preserved. |
 | `pool.alloc` returns 0 | exhausted | bump cursor reached `num_blocks_per_host_` | `execute_write_local` returns -4 (caller aborts) |
-| Worker hangs in I2/F3 wait-for-slot-free | ring slot N's previous occupant timed out without consumer ACK; `req_op_id` not cleared | worker loops forever; cell collapses | iter-8A: add cap on wait-for-slot-free (but then need slot-recycle protocol) |
-| Cell throughput collapses to 0.0005 Mops/s | hypothesized: CacheDispatcher CPU starvation cascade (iter-7A H5 hypothesis, not directly measured yet) | pile-up at I2 + I7 timeout cascade | iter-8A: dispatcher CPU pinning + RDTSCP probe to confirm |
+| Worker hangs in I2/F3 wait-for-slot-free | ring slot N's previous occupant timed out without consumer ACK; `req_op_id` not cleared | worker loops forever; cell collapses | iter-11A `forward_read_direct` ALWAYS frees `e->req_op_id = 0` after staging poll (regardless of timeout) to avoid wraparound deadlocks at ring depth 256 — fix landed during Phase 1 hash-diff battery 2026-05-10 (root cause was hang at >256 reads per (req_host, owner) pair). WriteRing + InvalRing still lack a wait-for-slot-free timeout — iter-12A backlog. |
+| Cell throughput bimodal (median < 0.5 Mops/s, max > 5 Mops/s) | hypothesized: forwarder-pool-direct epoch retry storm on hot Zipf buckets at small KV; concurrent workers see cascading C13 rejects | 13 such cells in iter-11A Phase 6 sweep (gate-12 FAIL, baseline 8) | iter-12A backlog #2: bound retry count + fall back to ReadStaging copy on retry-budget-exhausted. |
+| ReadReceiver SIGSEGV before staging attach (iter-10A) | `staging_arena_` pointer null-derefed in cxl_probe.h | bimodal cells when probe rings allocated mid-flight | iter-11A Phase 0 fix (c03a81a): null-guard in `cxl_probe.h:83`. Crash rate 26→21/100. |
 
 ---
 
@@ -932,7 +1114,7 @@ Snapshot history kept in iter summary docs (each summary references
 the blueprint version at iter-end, so historical code archaeology is
 possible without git-diffing this file).
 
-**Latest version**: end of iter-8A (2026-05-04).
+**Latest version**: end of iter-11A (2026-05-11).
 
 ## iter-8A blueprint changes summary
 
@@ -943,3 +1125,78 @@ possible without git-diffing this file).
   paths).
 - Part III.3 failure modes: ForwardRing timeout 200 ms → 5 ms cap.
 - Part II.4 `forward_spin_wait` timeout corrected to 5 ms.
+
+## iter-9A redo blueprint changes summary
+
+- Part I.2: 6 named system threads — WriteReceiver / ReadReceiver /
+  InvalReceiver (always on) + WriteSender / ReadSender / InvalSender
+  (opt-in via aggregator). All CPU-pinned per C3.
+- Part I.3: 3-ring split — `WriteRingMatrix` (op 1/2/3 control only),
+  `ReadRingMatrix` (op 4 control only), `InvalRingMatrix` (op 5). Plus
+  `ForwardStagingMatrix` CXL arena for write-path value bytes per C2
+  (no value bytes inline on rings). Variable-length values: pool block
+  is 4-B `value_len` header + value bytes; `slot.value` is packed
+  `(blk_off, size_class, fingerprint)` via `cxl_slot_pack`.
+- Part II.3-II.6 terminology mapping table — old `ForwardRing` /
+  `ForwardResponder` / `CacheDispatcher` names map to new
+  Write/Read/Inval rings + WriteReceiver/ReadReceiver/InvalReceiver.
+
+## iter-10A blueprint changes summary
+
+- Part I.2: per-worker `TlsCache` L1 added — `set_thread_tls_cache(tls)`
+  post-fork; 1024 entries × 1088 B default (~1.1 MiB/worker, ~70 MiB
+  at T=64). Bucket-epoch coherence: `KvCacheBucket::epoch` (atomic u64)
+  bumped on every cache_pool insert/evict/set_stale; TLS readers
+  compare against this.
+- Part I.3 (KvCachePool): bucket-level spinlock removed; per-entry
+  seqlock CAS (Phase 2) replaces it. 4 entries per bucket; reader
+  loops "load seq → memcpy fields → re-load seq" with mismatch =
+  retry (up to 8).
+- Part I.5 W11/W12: cache_pool_insert now also populates the worker's
+  TLS L1 with the post-bump epoch; cache_pool_evict triggers a TLS
+  evict too (belt + suspenders on top of the epoch bump).
+- Part II.2 R0_tls_hit stage added at the top of `search()`. R2 reader
+  now does seqlock CAS read (not spinlock).
+- Part II.5 D4 (set_stale): now also bumps `bucket_epoch` →
+  invalidates all TLS entries in that bucket across all workers on
+  the host.
+- Part II (senders): 4 batch policies P0/P1/P2/P3 via
+  `FUSEE_BATCH_POLICY` (default P0 = per-slot serial). P1 fixed-K +
+  timeout, P2 adaptive drain-all, P3 per-dst round-robin. **B0
+  (worker-direct, aggregator OFF) wins by 20× regardless of policy**
+  — aggregator-path batching is iter-12A backlog #11.
+
+## iter-11A blueprint changes summary
+
+- Part I.2 ReadReceiver: forwarder-pool-direct (Phase 1) — owner
+  writes value bytes DIRECTLY into `ReadStagingMatrix[req_host][me]
+  [slot_idx].value_bytes` along with `lookup_epoch` (C13 tag), then
+  publishes `ready_op_id = req_op_id`. Reader polls staging instead
+  of a second `pool_->read`.
+- Part I.3 new region: `ReadStagingMatrix` (~4.4 MiB CXL at H=4) with
+  `ReadStagingSlot` = 1 control cacheline + 1024-B value_bytes per
+  slot. Slot 1:1 with ReadRing slots.
+- Part I.4 read path: 6 logical outcomes (TLS hit, TLS stale, L2 hit,
+  L2 owner-self miss, L2 cross-host miss, not found). C13 epoch
+  validation on the cross-host miss path (reader captures
+  `my_epoch_at_send`; rejects responses where `staging.lookup_epoch
+  < my_epoch_at_send`).
+- Part II.2 R3/R4: full rewrite — R3 captures `my_epoch_at_send`,
+  clears `staging.ready_op_id = 0`, writes request, sfences. R4 polls
+  `ready_op_id` (200 ms timeout — was 5ms for the legacy ack-then-
+  pool path), validates C13, frees ring slot, memcpy from staging.
+  No more `pool_->read` on the cross-host hot path.
+- Part II.5: InvalReceiver remains single-thread (Phase 2's parallel
+  design was reverted in 5664945; iter-12A backlog #4 owns the
+  redesign).
+- Part III.3 failure modes: new `-2` (staging timeout, 200ms) and
+  `-3` (C13 epoch reject) return codes. New bimodal-cell entry (13
+  cells in iter-11A Phase 6 sweep failed gate-12; iter-12A backlog #2
+  is the root cause + targeted fix). Phase 0 SIGSEGV null-guard
+  added at `cxl_probe.h:83`.
+- Part I.3 (KvCacheBucket): a doc comment was added explaining iter-11A
+  Phase 3a's 4→16 entries-per-bucket investigation and revert
+  (seqlock-CAS removed the bucket lock contention that 16 entries
+  was supposed to relieve, but bigger linear scan added +2.4 µs/
+  insert). `kCacheEntriesPerBucket` stays 4. Hot-key replication is
+  iter-12A backlog #5.
