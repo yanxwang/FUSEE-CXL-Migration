@@ -283,15 +283,15 @@ def slide_title(prs):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Slide 2 — Protocol A write path (probe-tag labelled)
+# Slide 2 — Protocol A write path (A1..A14 narrative + latency annotation)
 # ──────────────────────────────────────────────────────────────────────
 def slide_a_write(prs):
     s = _blank_slide(
         prs,
-        'Protocol A — Write path: cross-host  update(K, V)  with peer cached',
-        'Steps labelled by path_decomp probe tag (W1..W12, I1..I8). Greyed "untracked" '
-        'steps = code without PROBE_OP (ring fetch_add, slot wait, ACK spin). '
-        'Same probe tags appear in slide 6 latency table.',
+        'Protocol A — Write path: cross-host  update(K=1024 B, V)  T=64',
+        '14 narrative steps · 3 actors · per-step latency in [µs]  ('
+        'measured = from iter-11A Phase 5 path_decomp KV=512 scaled to KV=1024; '
+        'estimated = derived from CXL primitives)',
         accent=A_DEEP,
     )
 
@@ -303,129 +303,128 @@ def slide_a_write(prs):
     col_w = 2.8
 
     _actor_header(s, X_W,  Y_HEADER, col_w,
-                  'host 0  worker (caller)\nforward_write_direct() — no probes',
+                  'host 0  worker (caller)',
                   DRAM_EDGE, DRAM_BG)
     _actor_header(s, X_WR, Y_HEADER, col_w,
-                  'host 1  WriteReceiver (cpu 65)\nexecute_write_local() — W*/I* probes',
+                  'host 1  WriteReceiver (cpu 65)',
                   A_DEEP, A_LIGHT)
     _actor_header(s, X_IR, Y_HEADER, col_w,
-                  'host 0  InvalReceiver (cpu 69)\ninval_receiver_loop() — I3..I6',
+                  'host 0  InvalReceiver (cpu 69)',
                   A_DEEP, A_LIGHT)
 
     for x in (X_W, X_WR, X_IR):
         _lifeline(s, x, Y_HEADER + 0.55, Y_BOT, GREY)
 
-    # ── 20 events (probe-tagged + untracked) ─────────────────────────
+    # ── 14 steps with per-step latency ───────────────────────────────
     y = 2.05
-    dy = 0.22
+    dy = 0.32
 
-    # untracked: host 0 worker forward_write_direct (combined)
-    _self_step(s, '—', y, X_W,
-               'forward_write_direct: write staging + WriteRing.fetch_add + write Entry',
-               GREY, blocking=False)
+    _self_step(s, 'A1', y, X_W,
+               '[1.1 µs est] write V bytes → ForwardStaging[0][1][slot]  '
+               '(16 CL flush)', A_DEEP); y += dy
+
+    _self_step(s, 'A2', y, X_W,
+               '[1.4 µs est] WriteRing[0][1].tail.fetch_add(1)  CXL atomic',
+               A_DEEP); y += dy
+
+    _self_step(s, 'A3', y, X_W,
+               '[0.1 µs est] write WriteEntry{key, op_kind, value_len, '
+               'staging_off} + flush + sfence', A_DEEP); y += dy
+
+    # A4 worker spin (BLOCKING) — wait for A5-A14 chain to complete on host 1
+    y_a4_start = y
+    _step_arrow(s, 'A4', y, X_W, X_WR,
+                '[~22 µs blocked] worker spin on WriteRing.resp_op_id  '
+                '(5 ms cap)', A_DEEP, blocking=True)
     y += dy
 
-    # worker enters spin — blocking starts
-    y_worker_block_start = y
-    _self_step(s, '—', y, X_W,
-               'worker spin on WriteRing.resp_op_id  (5 ms cap)  ← BLOCKING',
-               GREY, blocking=True)
-    y += dy
+    _self_step(s, 'A5', y, X_WR,
+               '[1.5 µs est] WriteReceiver poll WriteRing.tail; '
+               'reads staging bytes', A_DEEP); y += dy
 
-    # untracked: WriteReceiver picks up
-    _step_arrow(s, '—', y, X_W, X_WR,
-                'WriteReceiver poll observes new tail; reads staging bytes',
-                GREY)
-    y += dy
+    _self_step(s, 'A6', y, X_WR,
+               '[5.0 µs measured] execute_write_local: W1 flush+mfence + '
+               'W2 scan+spinlock + W3 bitmap', A_DEEP); y += dy
 
-    # W1..W4 on WriteReceiver
-    _self_step(s, 'W1', y, X_WR, 'hash + bucket flush + mfence',
-               A_DEEP); y += dy
-    _self_step(s, 'W2', y, X_WR, 'scan 7 slots + DRAM SlotDirectoryEntry spinlock',
-               A_DEEP); y += dy
-    _self_step(s, 'W3', y, X_WR, 're-flush bucket; read sharer_bitmap',
-               A_DEEP); y += dy
-    _self_step(s, 'W4', y, X_WR, 'enter invalidate broadcast loop',
-               A_DEEP); y += dy
+    _self_step(s, 'A7', y, X_WR,
+               '[1.65 µs measured I1] InvalRing[1][0].tail.fetch_add(1)  '
+               'CXL atomic', A_DEEP); y += dy
 
-    # I1..I2 on WriteReceiver (start of send_invalidate_direct)
-    _self_step(s, 'I1', y, X_WR, 'InvalRing[1][0].tail.fetch_add(1)  RMW-CXL',
-               A_DEEP); y += dy
-    _step_arrow(s, 'I2', y, X_WR, X_IR,
-                'write InvalEntry{key, req_op_id} + flush + sfence',
+    _step_arrow(s, 'A8', y, X_WR, X_IR,
+                '[3.7 µs measured I2] write InvalEntry{key} + flush + sfence',
                 A_DEEP)
-    y_wr_block_start = y
+    y_a9_start = y
     y += dy
 
-    # I3..I6 on InvalReceiver
-    _self_step(s, 'I3', y, X_IR, 'poll InvalRing tail; observes new entry',
-               A_DEEP, label_left=True, label_w=2.6); y += dy
-    _self_step(s, 'I4', y, X_IR, 'read req_op_id',
-               A_DEEP, label_left=True, label_w=2.6); y += dy
-    _self_step(s, 'I5', y, X_IR, 'cache_pool_set_stale; bucket_epoch++  (seqlock CAS)',
-               A_DEEP, label_left=True, label_w=3.0, lin=True); y += dy
+    # A9 WriteReceiver spin on InvalRing ACK (BLOCKING)
+    _self_step(s, 'A9', y, X_WR,
+               '[~1.9 µs blocked] WriteReceiver spin on InvalRing.resp_op_id  '
+               '(5 ms cap)', A_DEEP, blocking=True); y += dy
 
-    # I6: InvalReceiver writes ACK back to WriteReceiver
-    _step_arrow(s, 'I6', y, X_IR, X_WR,
-                'write resp_op_id ACK + flush + sfence',
+    _self_step(s, 'A10', y, X_IR,
+               '[1.75 µs measured I3+I4] poll InvalRing tail; read req_op_id',
+               A_DEEP, label_left=True, label_w=2.8); y += dy
+
+    _self_step(s, 'A11', y, X_IR,
+               '[0.03 µs measured I5] cache_pool_set_stale; bucket_epoch++  '
+               '(seqlock CAS)', A_DEEP, label_left=True, label_w=2.9,
+               lin=True); y += dy
+
+    _step_arrow(s, 'A12', y, X_IR, X_WR,
+                '[0.07 µs est] write InvalRing.resp_op_id ACK + flush + sfence',
                 A_DEEP, label_above=False); y += dy
+    _block_span(s, X_WR, y_a9_start - 0.05, y - 0.05)
 
-    # I7..I8 on WriteReceiver
-    _self_step(s, 'I7', y, X_WR, 'spin observes ACK  (end of cross-host blocking)',
-               A_DEEP); y += dy
-    _block_span(s, X_WR, y_wr_block_start - 0.05, y - 0.04)
-    _self_step(s, 'I8', y, X_WR, 'free InvalRing slot (req_op_id = 0)',
-               A_DEEP); y += dy
+    _self_step(s, 'A13', y, X_WR,
+               '[10 µs measured+est] W7 pool_alloc + W8 pool_write(1024B) + '
+               '★ W9 publish_slot_cow ★ + W10 dir + cache_pool_insert + '
+               'bucket_epoch++ + W12 return', A_DEEP, lin=True); y += dy
 
-    # W6: end of broadcast loop
-    _self_step(s, 'W6', y, X_WR, 'end of invalidate broadcast loop',
-               A_DEEP); y += dy
-
-    # W7..W12 on WriteReceiver
-    _self_step(s, 'W7', y, X_WR, 'pool->alloc  (bump.fetch_add CXL atomic)',
-               A_DEEP); y += dy
-    _self_step(s, 'W8', y, X_WR, 'pool->write  (memcpy + per-cacheline flush + sfence)',
-               A_DEEP); y += dy
-    _self_step(s, 'W9', y, X_WR,
-               '★ publish_slot_cow ★ — value flush + key flush + 2× sfence',
-               A_DEEP, lin=True); y += dy
-    _self_step(s, 'W10', y, X_WR,
-               'directory update + cache_pool_insert + bucket_epoch++  ★ lin #2',
-               A_DEEP, lin=True); y += dy
-    _self_step(s, 'W12', y, X_WR, 'return 0 to write_receiver_loop',
-               A_DEEP); y += dy
-
-    # untracked: WriteReceiver writes ACK back; worker spin sees it
-    _step_arrow(s, '—', y, X_WR, X_W,
-                'write WriteRing.resp_op_id ACK + flush; worker spin breaks; free slot',
-                GREY, label_above=False)
+    _step_arrow(s, 'A14', y, X_WR, X_W,
+                '[0.2 µs est] write WriteRing.resp_op_id ACK; worker A4 spin '
+                'breaks; free slot; return 0', A_DEEP, label_above=False)
     y += dy
-    _block_span(s, X_W, y_worker_block_start - 0.05, y - 0.05)
+    _block_span(s, X_W, y_a4_start - 0.05, y - 0.05)
+
+    # Footer note: end-to-end totals
+    fb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                            Inches(0.3), Inches(6.55),
+                            Inches(8.5), Inches(0.32))
+    fb.fill.solid(); fb.fill.fore_color.rgb = LIN_BG
+    fb.line.color.rgb = LIN_EDGE; fb.line.width = Pt(0.75)
+    tf = fb.text_frame
+    tf.margin_left = Pt(8); tf.margin_right = Pt(8)
+    tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run()
+    r.text = ('End-to-end:  with peer-sharer-invalidate (A7-A12 fire)  ≈ 22 µs   |   '
+              'without (~93% of ops at T=64, sharer_bitmap reset by W10) ≈ 16 µs')
+    r.font.size = Pt(10); r.font.bold = True; r.font.color.rgb = A_TXT
 
     # Bottom legend + tally
     _legend_inline(s, 0.3, 6.95,
-                   [('● W1..W12 probe (host 1)', A_DEEP),
-                    ('● I3..I6 probe (host 0)',  A_DEEP),
-                    ('untr — no PROBE_OP', GREY),
-                    ('★ Linearization point', LIN_EDGE)])
+                   [('● A* step', A_DEEP),
+                    ('● Cross-host blocking', BLK_EDGE),
+                    ('★ Linearization point', LIN_EDGE),
+                    ('▌ blocked lifeline', BLK_EDGE)])
     tally_box = s.shapes.add_textbox(Inches(9.0), Inches(6.95), Inches(4.2),
                                      Inches(0.40))
     tf = tally_box.text_frame; tf.margin_top = Pt(3)
     p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
     r = p.add_run()
-    r.text = '17 probed stages · 3 untracked · 2 blocking spans'
+    r.text = '14 steps · 3 actors · 2 blocking points'
     r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = A_TXT
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Slide 3 — Protocol C write path (probe-tag labelled)
+# Slide 3 — Protocol C write path (C0..C6 narrative + latency annotation)
 # ──────────────────────────────────────────────────────────────────────
 def slide_c_write(prs):
     s = _blank_slide(
         prs,
-        'Protocol C — Write path: in-place under cross-host LFM lock',
-        'Steps labelled by DECOMP_REC stage tag (Lock / Scan / Publish / Epoch / Unlock). '
-        'Same probe tags appear in slide 6 latency table. 1 actor · no cross-host messages.',
+        'Protocol C — Write path: in-place  update(K, V=1024 B)  under cross-host LFM lock, T=64',
+        '7 narrative steps · 1 actor · per-step latency in [µs]  '
+        '(measured = iter-2 DECOMP_REC; KV=1024 adds C0 pool alloc+write before C1)',
         accent=C_DEEP,
     )
 
@@ -434,111 +433,111 @@ def slide_c_write(prs):
     X_W   = 2.4
 
     _actor_header(s, X_W, Y_HEADER, 3.2,
-                  'host 0  worker (caller)\ninsert / update / remove — '
-                  'DECOMP_REC probes',
+                  'host 0  worker (caller)\ninsert / update / remove',
                   DRAM_EDGE, DRAM_BG)
     _lifeline(s, X_W, Y_HEADER + 0.55, Y_BOT, GREY)
 
     # CXL state column on the right
     _rect(s, 6.5, Y_HEADER, 6.4, 0.45, CXL_BG, CXL_EDGE,
           'CXL state touched on the write path', fs=11, bold=True, txt_col=C_TXT)
-    _rect(s, 6.7, 2.10, 6.0, 0.55, A_LIGHT, A_DEEP,
+    _rect(s, 6.7, 1.85, 6.0, 0.45, A_LIGHT, A_DEEP,
           'BucketLockEntry  •  shm_mutex_t (LFM) cross-host  •  '
           'write_epoch (cacheline_u64)',
           fs=10, bold=True, txt_col=A_TXT)
-    _rect(s, 6.7, 2.85, 6.0, 0.55, A_LIGHT, A_DEEP,
+    _rect(s, 6.7, 2.40, 6.0, 0.45, A_LIGHT, A_DEEP,
           'CxlKvBucket  •  7 × {key, value} = 112 B = 2 cachelines',
           fs=10, bold=True, txt_col=A_TXT)
-    _rect(s, 6.7, 3.60, 6.0, 0.55, GREY_L, GREY,
-          'KvBlockPool  (optional for value_len > 8 B)',
-          fs=10, bold=False, txt_col=GREY_D)
-    _rect(s, 6.7, 4.35, 6.0, 0.55, GREY_L, GREY,
-          'OpLog  (optional, recovery)',
-          fs=10, bold=False, txt_col=GREY_D)
+    _rect(s, 6.7, 2.95, 6.0, 0.45, A_LIGHT, A_DEEP,
+          'KvBlockPool  •  1024-B blocks (used by KV>8 path)',
+          fs=10, bold=True, txt_col=A_TXT)
 
-    # ── 5 probed stages ──────────────────────────────────────────────
-    y = 2.30
-    dy = 0.45
+    # ── 7 steps with per-step latency ────────────────────────────────
+    y = 3.60
+    dy = 0.40
 
-    # Lock: LFM acquire (cross-host BLOCKING)
-    _step_arrow(s, 'Lock', y, X_W, 6.7,
-                'lock_table_.lock(idx)   LFM acquire  (cross-host blocking spin)',
+    # C0: pool alloc + write (only for KV > 8)
+    _step_arrow(s, 'C0', y, X_W, 6.7,
+                '[2.4 µs est] blockpool->alloc (CXL atomic) + '
+                'blockpool->write(1024 B)', C_DEEP, dashed=True)
+    y += dy
+
+    # C1: LFM acquire (cross-host BLOCKING)
+    _step_arrow(s, 'C1', y, X_W, 6.7,
+                '[25.0 µs measured avg] lock_table_.lock(idx)   '
+                'LFM acquire  (T=64 contention)',
                 C_DEEP, dashed=True, blocking=True)
     y += dy
 
-    # Scan: flush + scan
-    _step_arrow(s, 'Scan', y, X_W, 6.7,
-                'flush_line(slots[0]); flush_line(slots[4]); mfence; scan 7 slots',
+    # C2: flush bucket
+    _step_arrow(s, 'C2', y, X_W, 6.7,
+                '[0.15 µs measured] flush_line(slots[0]); flush_line(slots[4]); '
+                'mfence', C_DEEP, dashed=True)
+    y += dy
+
+    # C3: scan slots
+    _step_arrow(s, 'C3', y, X_W, 6.7,
+                '[1.25 µs measured] scan 7 slots; pick target_slot',
                 C_DEEP, dashed=True)
     y += dy
 
-    # Publish: slot publish
-    _step_arrow(s, 'Pub', y, X_W, 6.7,
-                'slot.value = V; flush; sfence    (INSERT: + key flush + sfence)',
+    # C4: publish slot.value
+    _step_arrow(s, 'C4', y, X_W, 6.7,
+                '[0.02 µs measured] slot.value = blk_off; flush; sfence',
                 C_DEEP, dashed=True)
     y += dy
 
-    # Epoch bump (★ LINEARIZATION POINT ★)
-    _step_arrow(s, 'Epoch', y, X_W, 6.7,
-                '★ atomic_add_fetch(&write_epoch, 1) + flush + sfence ★  '
-                '1.4 µs CXL atomic = peer-visible commit',
+    # C5: epoch bump (★ LINEARIZATION POINT ★)
+    _step_arrow(s, 'C5', y, X_W, 6.7,
+                '[4.07 µs measured] ★ atomic_add_fetch(&write_epoch, 1) + flush '
+                '+ sfence ★  (peer-visible commit)',
                 C_DEEP, dashed=True, lin=True)
     y += dy
 
-    # Unlock
-    _step_arrow(s, 'Unlk', y, X_W, 6.7,
-                'lock_table_.unlock()   LFM release  →  return 0',
+    # C6: unlock
+    _step_arrow(s, 'C6', y, X_W, 6.7,
+                '[0.03 µs measured] lock_table_.unlock()   LFM release  → return 0',
                 C_DEEP, dashed=True)
     y += dy
 
-    # Key callout
-    cb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
-                            Inches(0.3), Inches(5.4),
-                            Inches(5.7), Inches(1.4))
-    cb.fill.solid(); cb.fill.fore_color.rgb = GREY_L
-    cb.line.color.rgb = GREY; cb.line.width = Pt(0.6)
-    tf = cb.text_frame
+    # End-to-end total callout
+    fb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                            Inches(0.3), Inches(6.55),
+                            Inches(8.5), Inches(0.32))
+    fb.fill.solid(); fb.fill.fore_color.rgb = LIN_BG
+    fb.line.color.rgb = LIN_EDGE; fb.line.width = Pt(0.75)
+    tf = fb.text_frame
     tf.margin_left = Pt(8); tf.margin_right = Pt(8)
-    tf.margin_top = Pt(5); tf.margin_bottom = Pt(5)
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    r = p.add_run(); r.text = 'Key features of Protocol C write path:'
-    r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = C_TXT
-    for txt in [
-        '• 1 actor — no senders / receivers / dispatchers',
-        '• 0 cross-host messages — coordination via shared CXL mutex + epoch',
-        '• 1 linearization point — Epoch atomic bump',
-        '• Failure mode: hot-bucket LFM contention scales catastrophically with T',
-    ]:
-        p = tf.add_paragraph()
-        r = p.add_run(); r.text = txt
-        r.font.size = Pt(10); r.font.color.rgb = GREY_D
+    tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run()
+    r.text = ('End-to-end:  KV=1024 T=64 ≈ 33 µs avg  (C1 lock = 76% · C0 + C5 = 19% · '
+              'others < 5%)   |   uncontested T=1 ≈ 6 µs')
+    r.font.size = Pt(10); r.font.bold = True; r.font.color.rgb = C_TXT
 
     # Legend + tally
     _legend_inline(s, 0.3, 6.95,
-                   [('● DECOMP_REC probe', C_DEEP),
-                    ('★ Linearization (Epoch)', LIN_EDGE),
-                    ('● Cross-host blocking (Lock)', BLK_EDGE),
+                   [('╌╌▶  C* step', C_DEEP),
+                    ('★ Linearization (C5 epoch)', LIN_EDGE),
+                    ('● Cross-host blocking (C1 LFM)', BLK_EDGE),
                     ('—', WHITE)])
     tally_box = s.shapes.add_textbox(Inches(9.0), Inches(6.95), Inches(4.2),
                                      Inches(0.40))
     tf = tally_box.text_frame; tf.margin_top = Pt(3)
     p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
     r = p.add_run()
-    r.text = '5 probed stages · 1 actor · 1 blocking point'
+    r.text = '7 steps · 1 actor · 1 blocking point'
     r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = C_TXT
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Slide 4 — Protocol A read path (probe-tag labelled)
+# Slide 4 — Protocol A read path (A1r..A16r narrative + latency annotation)
 # ──────────────────────────────────────────────────────────────────────
 def slide_a_read(prs):
     s = _blank_slide(
         prs,
-        'Protocol A — Read path: TLS L1 → L2 → cross-host forwarder-pool-direct',
-        'Steps labelled by path_decomp probe tag (R0_tls_hit, R1, R2hit, R2miss, R3, R4, R6). '
-        'Greyed "untracked" steps = code without PROBE_OP. '
-        'Same probe tags appear in slide 7 latency table.',
+        'Protocol A — Read path: search(K=1024 B) cross-host miss path, T=64',
+        '16 narrative steps · 4 actors · per-step latency in [µs]  '
+        '(early-exit branches at A2r, A3r short-circuit the path)',
         accent=A_DEEP,
     )
 
@@ -553,15 +552,14 @@ def slide_a_read(prs):
     X_RS  = 12.30
 
     _actor_header(s, X_W,  Y_HEADER, col_w,
-                  'host 0  worker (caller)\nsearch() — R* probes',
-                  DRAM_EDGE, DRAM_BG)
+                  'host 0  worker (caller)', DRAM_EDGE, DRAM_BG)
     _actor_header(s, X_TLS, Y_HEADER, col_w,
                   'TLS L1\n(private DRAM)', DRAM_EDGE, DRAM_BG)
     _actor_header(s, X_L2,  Y_HEADER, col_w,
                   'L2 KvCachePool\n(MAP_SHARED DRAM, seqlock CAS)',
                   DRAM_EDGE, DRAM_BG)
     _actor_header(s, X_RR,  Y_HEADER, col_w,
-                  'host 1  ReadReceiver (cpu 67)\nread_handler — no R* probes',
+                  'host 1  ReadReceiver (cpu 67)',
                   A_DEEP, A_LIGHT)
     _rect(s, X_RS - 0.9, Y_HEADER, 1.8, 0.50, CXL_BG, CXL_EDGE,
           'ReadStaging[0][1]\n(CXL arena)', fs=9, bold=True, txt_col=C_TXT)
@@ -569,146 +567,112 @@ def slide_a_read(prs):
     for x in (X_W, X_TLS, X_L2, X_RR, X_RS):
         _lifeline(s, x, Y_HEADER + 0.55, Y_BOT, GREY)
 
-    # ── events (main path = cross-host miss; early-exit branches noted) ─
+    # ── 16 steps ─────────────────────────────────────────────────────
     y = 1.95
-    dy = 0.22
+    dy = 0.27
 
-    # R1: entry
-    _self_step(s, 'R1', y, X_W, 'enter search(K)  PROBE_OP("R1")', A_DEEP)
-    y += dy
+    _self_step(s, 'A1r', y, X_W,
+               '[0.05 µs est] enter search(K); compute bucket_idx',
+               A_DEEP); y += dy
 
-    # untracked: TLS L1 lookup (no probe unless hit)
-    _step_arrow(s, '—', y, X_W, X_TLS,
-                'tls_lookup: read bucket_epoch; compare observed_epoch',
-                GREY)
-    y += dy
+    _step_arrow(s, 'A2r', y, X_W, X_TLS,
+                '[0.05 µs est] tls_lookup: bucket_epoch.load + compare  '
+                '★ on hit: return ~80 ns (~18% of reads)',
+                A_DEEP, lin=True); y += dy
 
-    # R0_tls_hit: TLS hit early-return branch (annotation)
-    _self_step(s, 'R0_h', y, X_W,
-               '★ if TLS hit + epoch fresh: PROBE_OP("R0_tls_hit") → return ~80 ns ★',
-               A_DEEP, lin=True)
-    y += dy
+    _step_arrow(s, 'A3r', y, X_W, X_L2,
+                '[0.5 µs measured R2hit/miss] cache_pool_lookup: seqlock CAS  '
+                '★ on hit: return ~7 µs (~64% of reads incl memcpy)',
+                A_DEEP, lin=True); y += dy
 
-    # untracked: cache_pool_lookup call
-    _step_arrow(s, '—', y, X_W, X_L2,
-                'else cache_pool_lookup: seqlock CAS read of L2 entry',
-                GREY)
-    y += dy
+    _self_step(s, 'A4r', y, X_W,
+               '[0.1 µs est] L2 miss → my_epoch_at_send = bucket_epoch.load  '
+               '(C13 tag)', A_DEEP); y += dy
 
-    # R2hit: L2 hit early-return (annotation)
-    _self_step(s, 'R2hit', y, X_W,
-               '★ if L2 hit: PROBE_OP("R2hit") → populate TLS → return ~5-7 µs ★',
-               A_DEEP, lin=True)
-    y += dy
+    _step_arrow(s, 'A5r', y, X_W, X_RS,
+                '[0.1 µs est] staging.ready_op_id = 0; flush; sfence  '
+                '(clear prior)', A_DEEP); y += dy
 
-    # R2miss: L2 miss (fall through)
-    _self_step(s, 'R2miss', y, X_W,
-               'L2 miss → forward_read_direct  PROBE_OP("R2miss")',
-               A_DEEP)
-    y += dy
+    _step_arrow(s, 'A6r', y, X_W, X_RR,
+                '[1.4 µs est] ReadRing[0][1].tail.fetch_add(1)  CXL atomic',
+                A_DEEP); y += dy
 
-    # ─── cross-host forward path (entirely "between R3 and R4" — measured
-    # by the single R3 probe interval) ───
-    # untracked: capture my_epoch_at_send
-    _self_step(s, '—', y, X_W,
-               'my_epoch_at_send = bucket_epoch.load(K)   (C13 capture)',
-               GREY)
-    y += dy
+    _step_arrow(s, 'A7r', y, X_W, X_RR,
+                '[0.1 µs est] write ReadEntry{key, req_op_id}; flush; sfence',
+                A_DEEP); y += dy
 
-    # untracked: clear staging.ready_op_id
-    _step_arrow(s, '—', y, X_W, X_RS,
-                'staging.ready_op_id = 0; flush; sfence  (clear prior signal)',
-                GREY)
-    y += dy
+    # A8r worker spin (BLOCKING)
+    y_a8 = y
+    _step_arrow(s, 'A8r', y, X_W, X_RS,
+                '[~14 µs blocked  measured R3] worker spin on '
+                'staging.ready_op_id  (200 ms cap)',
+                A_DEEP, blocking=True); y += dy
 
-    # untracked: ReadRing.tail.fetch_add + write Entry
-    _step_arrow(s, '—', y, X_W, X_RR,
-                'ReadRing[0][1].tail.fetch_add(1) + write Entry + flush + sfence',
-                GREY)
-    y += dy
+    _self_step(s, 'A9r', y, X_RR,
+               '[1.5 µs est] ReadReceiver poll ReadRing.tail; reads ReadEntry',
+               A_DEEP); y += dy
 
-    # R3: PROBE_OP("R3") emitted JUST BEFORE the forward_read call;
-    # R3 mean = whole "spin + ReadReceiver work + memcpy" duration.
-    y_r3_start = y
-    _self_step(s, 'R3', y, X_W,
-               'PROBE_OP("R3") emitted; worker spins on staging.ready_op_id  '
-               '(200 ms cap)  ← measured interval starts here',
-               A_DEEP, blocking=True)
-    y += dy
+    _self_step(s, 'A10r', y, X_RR,
+               '[5 µs est] flush bucket + scan + acquire spinlock + '
+               'sharer_bitmap |= (1<<src)  ★ peer-visible state change',
+               A_DEEP, lin=True); y += dy
 
-    # untracked: ReadReceiver picks up
-    _step_arrow(s, '—', y, X_W, X_RR,
-                'ReadReceiver poll observes new ReadRing tail',
-                GREY)
-    y += dy
+    _self_step(s, 'A11r', y, X_RR,
+               '[5 µs est] pool->read(blk_off, 4) → value_len; '
+               'pool->read(blk_off+4, 1024)',
+               A_DEEP); y += dy
 
-    # untracked: flush + scan bucket
-    _self_step(s, '—', y, X_RR,
-               'flush bucket cachelines; scan 7 slots',
-               GREY)
-    y += dy
+    _step_arrow(s, 'A12r', y, X_RR, X_RS,
+                '[1.0 µs est] write staging.value_bytes + lookup_epoch '
+                '(C13 tag) + status; flush 16 CL', A_DEEP); y += dy
 
-    # untracked: acquire spinlock + sharer_bitmap |= ★ peer-visible state change
-    _self_step(s, '—', y, X_RR,
-               'acquire SlotDirectoryEntry.spinlock; sharer_bitmap |= (1<<src)  '
-               '★ peer-visible state change',
-               GREY, lin=True)
-    y += dy
+    _step_arrow(s, 'A13r', y, X_RR, X_RS,
+                '[0.07 µs est] ★ staging.ready_op_id = req_op_id ★  '
+                '(release-publish)',
+                A_DEEP, lin=True, label_above=False); y += dy
 
-    # untracked: pool->read header + value bytes
-    _self_step(s, '—', y, X_RR,
-               'pool->read(blk_off, 4) → value_len; pool->read(blk_off+4, vlen)',
-               GREY)
-    y += dy
+    _step_arrow(s, 'A14r', y, X_RS, X_W,
+                '[< 0.1 µs est] worker A8r spin observes ready_op_id  → break',
+                A_DEEP, label_above=False); y += dy
+    _block_span(s, X_W, y_a8 - 0.05, y - 0.04)
 
-    # untracked: write staging value_bytes + lookup_epoch + status
-    _step_arrow(s, '—', y, X_RR, X_RS,
-                'write staging.value_bytes + lookup_epoch (C13 tag) + status; flush',
-                GREY)
-    y += dy
+    _self_step(s, 'A15r', y, X_W,
+               '[0.4 µs measured R4] C13 validate: lookup_epoch >= '
+               'my_epoch_at_send; memcpy value_bytes from staging',
+               A_DEEP, lin=True); y += dy
 
-    # untracked: publish staging.ready_op_id ★ release-publish
-    _step_arrow(s, '—', y, X_RR, X_RS,
-                'staging.ready_op_id = req_op_id  ★ release-publish ★',
-                GREY, lin=True, label_above=False)
-    y += dy
+    _self_step(s, 'A16r', y, X_W,
+               '[1.1 µs measured R6+misc] cache_pool_insert (L2); '
+               'tls_insert (L1); return',
+               A_DEEP); y += dy
 
-    # untracked: worker spin breaks
-    _step_arrow(s, '—', y, X_RS, X_W,
-                'worker spin observes ready_op_id  → break',
-                GREY, label_above=False)
-    y += dy
-    _block_span(s, X_W, y_r3_start - 0.05, y - 0.04)
-
-    # R4: PROBE_OP("R4") emitted right after forward_read returns
-    _self_step(s, 'R4', y, X_W,
-               'PROBE_OP("R4") emitted; C13 validate + memcpy from staging  '
-               '← measured interval R3→R4 ≈ 14 µs',
-               A_DEEP)
-    y += dy
-
-    # untracked: cache_pool_insert + tls_insert
-    _self_step(s, '—', y, X_W,
-               'cache_pool_insert (L2 seqlock CAS); tls_insert (L1)',
-               GREY)
-    y += dy
-
-    # R6: final return
-    _self_step(s, 'R6', y, X_W, 'PROBE_OP("R6"); return 0', A_DEEP)
-    y += dy
+    # End-to-end totals
+    fb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                            Inches(0.3), Inches(6.55),
+                            Inches(8.5), Inches(0.32))
+    fb.fill.solid(); fb.fill.fore_color.rgb = LIN_BG
+    fb.line.color.rgb = LIN_EDGE; fb.line.width = Pt(0.75)
+    tf = fb.text_frame
+    tf.margin_left = Pt(8); tf.margin_right = Pt(8)
+    tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run()
+    r.text = ('End-to-end:  TLS hit  ≈ 80 ns (18%)  |  L2 hit  ≈ 7 µs (64%)  |  '
+              'owner-self miss  ≈ 10 µs (17%)  |  cross-host miss  ≈ 22 µs (0.2%)')
+    r.font.size = Pt(10); r.font.bold = True; r.font.color.rgb = A_TXT
 
     # Legend + tally
     _legend_inline(s, 0.3, 6.95,
-                   [('● R*  probe (worker)', A_DEEP),
-                    ('— = no PROBE_OP', GREY),
-                    ('★ Linearization checkpoint', LIN_EDGE),
-                    ('● Cross-host blocking (R3)', BLK_EDGE)])
+                   [('● A*r step', A_DEEP),
+                    ('● Cross-host blocking (A8r)', BLK_EDGE),
+                    ('★ Linearization (A2r, A3r, A10r, A13r, A15r)', LIN_EDGE),
+                    ('—', WHITE)])
     tally_box = s.shapes.add_textbox(Inches(9.0), Inches(6.95), Inches(4.2),
                                      Inches(0.40))
     tf = tally_box.text_frame; tf.margin_top = Pt(3)
     p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
     r = p.add_run()
-    r.text = '5 probed stages · 14 untracked · 1 blocking span'
+    r.text = '16 steps · 4 actors · 1 blocking point'
     r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = A_TXT
 
 
@@ -718,10 +682,9 @@ def slide_a_read(prs):
 def slide_c_read(prs):
     s = _blank_slide(
         prs,
-        'Protocol C — Read path: 1 epoch load + 1 flush + scan  (LRC read-singleshot)',
-        'No DECOMP_REC probe on search() — latency inferred from primitives. '
-        '1 actor · 0 cross-host blocking · no seqlock revalidation '
-        '(LRC: value is committed at SOME instant during scan).',
+        'Protocol C — Read path: search(K=1024 B) under LRC read-singleshot, T=64',
+        '5 narrative steps · 1 actor · per-step latency in [µs]  '
+        '(C inferred from CXL primitives — no search() DECOMP_REC probe)',
         accent=C_DEEP,
     )
 
@@ -737,75 +700,74 @@ def slide_c_read(prs):
     # CXL state
     _rect(s, 6.5, Y_HEADER, 6.4, 0.45, CXL_BG, CXL_EDGE,
           'CXL state read on the search path', fs=11, bold=True, txt_col=C_TXT)
-    _rect(s, 6.7, 2.10, 6.0, 0.55, A_LIGHT, A_DEEP,
+    _rect(s, 6.7, 1.85, 6.0, 0.40, A_LIGHT, A_DEEP,
           'BucketLockEntry.write_epoch (cacheline_u64) — read seqlock tag',
           fs=10, bold=True, txt_col=A_TXT)
-    _rect(s, 6.7, 2.85, 6.0, 0.55, A_LIGHT, A_DEEP,
+    _rect(s, 6.7, 2.35, 6.0, 0.40, A_LIGHT, A_DEEP,
           'CxlKvBucket  •  flush 2 cachelines, scan 7 slots in L1',
           fs=10, bold=True, txt_col=A_TXT)
-    _rect(s, 6.7, 3.60, 6.0, 0.55, C_LIGHT, C_DEEP,
-          'DRAM bucket cache (optional, per-process)  •  cache_buckets_[idx], cache_epoch_[idx]',
+    _rect(s, 6.7, 2.85, 6.0, 0.40, A_LIGHT, A_DEEP,
+          'KvBlockPool  •  1024 B block holding value bytes',
+          fs=10, bold=True, txt_col=A_TXT)
+    _rect(s, 6.7, 3.35, 6.0, 0.40, C_LIGHT, C_DEEP,
+          'DRAM bucket cache (optional, per-process) — cache_buckets_, cache_epoch_',
           fs=10, bold=True, txt_col=C_TXT)
 
-    # ── 4 steps ──────────────────────────────────────────────────────
-    y = 2.40
-    dy = 0.55
+    # ── 5 steps with per-step latency ────────────────────────────────
+    y = 4.00
+    dy = 0.40
 
     _self_step(s, 'C1r', y, X_W,
-               'bucket_idx = fnv1a_u64(K) % B; entry = lock_table_.entry(idx)',
-               C_DEEP)
-    y += dy
+               '[0.015 µs est] bucket_idx = fnv1a_u64(K) % B; '
+               'entry = lock_table_.entry(idx)',
+               C_DEEP); y += dy
 
     _step_arrow(s, 'C2r', y, X_W, 6.7,
-                'load CXL write_epoch  (1 LD-CXL cacheline)  '
-                '★ if == cached_epoch_[idx]: scan DRAM copy + return ★',
-                C_DEEP, dashed=True, lin=True)
-    y += dy
+                '[0.7 µs est] load CXL write_epoch (1 LD-CXL)  '
+                '★ if == cached_epoch_[idx]: scan DRAM copy + return',
+                C_DEEP, dashed=True, lin=True); y += dy
 
     _step_arrow(s, 'C3r', y, X_W, 6.7,
-                'cache miss / cache disabled: flush_line(slots[0]) + flush_line(slots[4]) + mfence',
-                C_DEEP, dashed=True)
-    y += dy
+                '[0.15 µs est] cache miss → flush_line(slots[0]) + '
+                'flush_line(slots[4]) + mfence',
+                C_DEEP, dashed=True); y += dy
 
     _self_step(s, 'C4r', y, X_W,
-               'scan 7 slots in L1 (now fresh from CXL); return value or -1   '
-               '★ NO post-scan revalidation (LRC) ★',
-               C_DEEP, lin=True)
-    y += dy
+               '[0.05 µs est] scan 7 slots in L1; get slot.value (= blk_off)  '
+               '★ NO post-scan revalidation (LRC)',
+               C_DEEP, lin=True); y += dy
 
-    # Key callout box
-    cb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
-                            Inches(0.3), Inches(5.4),
-                            Inches(5.7), Inches(1.4))
-    cb.fill.solid(); cb.fill.fore_color.rgb = GREY_L
-    cb.line.color.rgb = GREY; cb.line.width = Pt(0.6)
-    tf = cb.text_frame
+    _step_arrow(s, 'C5r', y, X_W, 6.7,
+                '[1.0 µs est] blockpool->read(blk_off, 1024)  '
+                '(16 CL × LD-CXL for value bytes)',
+                C_DEEP, dashed=True); y += dy
+
+    # End-to-end totals
+    fb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                            Inches(0.3), Inches(6.55),
+                            Inches(8.5), Inches(0.32))
+    fb.fill.solid(); fb.fill.fore_color.rgb = LIN_BG
+    fb.line.color.rgb = LIN_EDGE; fb.line.width = Pt(0.75)
+    tf = fb.text_frame
     tf.margin_left = Pt(8); tf.margin_right = Pt(8)
-    tf.margin_top = Pt(5); tf.margin_bottom = Pt(5)
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    r = p.add_run(); r.text = 'Key features of Protocol C read path:'
-    r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = C_TXT
-    for txt in [
-        '• Reader takes NO lock — bucket lock only serializes writers',
-        '• Optional DRAM cache hit path: ~700 ns (1 CXL epoch load + DRAM scan)',
-        '• Cache-miss path: ~1 µs (2 flushes + mfence + L1 scan)',
-        '• LRC semantics: returned value committed at SOME instant during scan',
-    ]:
-        p = tf.add_paragraph()
-        r = p.add_run(); r.text = txt
-        r.font.size = Pt(10); r.font.color.rgb = GREY_D
+    tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run()
+    r.text = ('End-to-end:  cache hit + value read  ≈ 1.7 µs  |  '
+              'cache miss + value read  ≈ 1.2 µs  |  '
+              'no cross-host coordination, every read pays roughly the same')
+    r.font.size = Pt(10); r.font.bold = True; r.font.color.rgb = C_TXT
 
     _legend_inline(s, 0.3, 6.95,
-                   [('╌╌▶  Step arrow', C_DEEP),
-                    ('● Linearization checkpoint', LIN_EDGE),
+                   [('╌╌▶  C*r step', C_DEEP),
+                    ('★ Linearization (C2r, C4r)', LIN_EDGE),
                     ('● Cross-host blocking (none!)', BLK_EDGE),
                     ('—', WHITE)])
     tally_box = s.shapes.add_textbox(Inches(9.0), Inches(6.95), Inches(4.2),
                                      Inches(0.40))
     tf = tally_box.text_frame; tf.margin_top = Pt(3)
     p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
-    r = p.add_run(); r.text = '4 steps · 1 actor · 0 blocking points'
+    r = p.add_run(); r.text = '5 steps · 1 actor · 0 blocking points'
     r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = C_TXT
 
 
