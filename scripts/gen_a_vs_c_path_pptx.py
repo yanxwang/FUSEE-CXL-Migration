@@ -677,6 +677,149 @@ def slide_a_read(prs):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Slide 4b — Protocol A read path WITHOUT the TLS L1 layer
+# (Hypothetical "pre-iter-10A Phase 1" view — every read goes through
+#  the shared L2 cache_pool seqlock CAS, paying ~7 µs of MESI-bound
+#  value_bytes memcpy per L2 hit instead of being skipped by the
+#  80-ns TLS hit path.)
+# ──────────────────────────────────────────────────────────────────────
+def slide_a_read_no_tls(prs):
+    s = _blank_slide(
+        prs,
+        'Protocol A — Read path WITHOUT TLS L1 (pre-iter-10A view)',
+        '15 narrative steps · 3 actors · per-step latency in [µs] · '
+        'every read pays the L2 seqlock CAS + ~7 µs value_bytes memcpy '
+        'under T=64 MESI ping-pong (no 80 ns TLS short-circuit)',
+        accent=A_DEEP,
+    )
+
+    Y_HEADER = 1.30
+    Y_BOT    = 6.55
+    col_w = 2.8
+
+    # 3-actor layout (TLS L1 column removed; spread remaining columns)
+    X_W   = 1.60
+    X_L2  = 5.80
+    X_RR  = 9.40
+    X_RS  = 12.30
+
+    _actor_header(s, X_W,  Y_HEADER, col_w,
+                  'host 0  worker (caller)', DRAM_EDGE, DRAM_BG)
+    _actor_header(s, X_L2, Y_HEADER, col_w,
+                  'L2 KvCachePool\n(MAP_SHARED DRAM, seqlock CAS)',
+                  DRAM_EDGE, DRAM_BG)
+    _actor_header(s, X_RR, Y_HEADER, col_w,
+                  'host 1  ReadReceiver (cpu 67)',
+                  A_DEEP, A_LIGHT)
+    _rect(s, X_RS - 0.9, Y_HEADER, 1.8, 0.50, CXL_BG, CXL_EDGE,
+          'ReadStaging[0][1]\n(CXL arena)', fs=9, bold=True, txt_col=C_TXT)
+
+    for x in (X_W, X_L2, X_RR, X_RS):
+        _lifeline(s, x, Y_HEADER + 0.55, Y_BOT, GREY)
+
+    # ── 15 steps ─────────────────────────────────────────────────────
+    y = 2.00
+    dy = 0.28
+
+    _self_step(s, 'A1r', y, X_W,
+               '[0.05 µs est] enter search(K); compute bucket_idx',
+               A_DEEP); y += dy
+
+    _step_arrow(s, 'A2r', y, X_W, X_L2,
+                '[~7 µs measured KV=1024] cache_pool_lookup: seqlock CAS read of L2 entry  '
+                '★ on hit: return (~82% of reads, KV memcpy under MESI ping-pong)',
+                A_DEEP, lin=True); y += dy
+
+    _self_step(s, 'A3r', y, X_W,
+               '[0.1 µs est] L2 miss → my_epoch_at_send = bucket_epoch.load  '
+               '(C13 tag)', A_DEEP); y += dy
+
+    _step_arrow(s, 'A4r', y, X_W, X_RS,
+                '[0.1 µs est] staging.ready_op_id = 0; flush; sfence  '
+                '(clear prior)', A_DEEP); y += dy
+
+    _step_arrow(s, 'A5r', y, X_W, X_RR,
+                '[1.4 µs est] ReadRing[0][1].tail.fetch_add(1)  CXL atomic',
+                A_DEEP); y += dy
+
+    _step_arrow(s, 'A6r', y, X_W, X_RR,
+                '[0.1 µs est] write ReadEntry{key, req_op_id}; flush; sfence',
+                A_DEEP); y += dy
+
+    y_a7 = y
+    _step_arrow(s, 'A7r', y, X_W, X_RS,
+                '[~14 µs blocked measured R3] worker spin on '
+                'staging.ready_op_id  (200 ms cap)',
+                A_DEEP, blocking=True); y += dy
+
+    _self_step(s, 'A8r', y, X_RR,
+               '[1.5 µs est] ReadReceiver poll ReadRing.tail; reads ReadEntry',
+               A_DEEP); y += dy
+
+    _self_step(s, 'A9r', y, X_RR,
+               '[5 µs est] flush bucket + scan + acquire spinlock + '
+               'sharer_bitmap |= (1<<src)  ★ peer-visible state change',
+               A_DEEP, lin=True); y += dy
+
+    _self_step(s, 'A10r', y, X_RR,
+               '[5 µs est] pool->read(blk_off, 4) → value_len; '
+               'pool->read(blk_off+4, 1024)', A_DEEP); y += dy
+
+    _step_arrow(s, 'A11r', y, X_RR, X_RS,
+                '[1.0 µs est] write staging.value_bytes + lookup_epoch (C13) '
+                '+ status; flush 16 CL', A_DEEP); y += dy
+
+    _step_arrow(s, 'A12r', y, X_RR, X_RS,
+                '[0.07 µs est] ★ staging.ready_op_id = req_op_id ★  '
+                '(release-publish)', A_DEEP, lin=True,
+                label_above=False); y += dy
+
+    _step_arrow(s, 'A13r', y, X_RS, X_W,
+                '[< 0.1 µs est] worker A7r spin observes ready_op_id  → break',
+                A_DEEP, label_above=False); y += dy
+    _block_span(s, X_W, y_a7 - 0.05, y - 0.04)
+
+    _self_step(s, 'A14r', y, X_W,
+               '[0.4 µs measured R4] C13 validate: lookup_epoch >= '
+               'my_epoch_at_send; memcpy value_bytes from staging',
+               A_DEEP, lin=True); y += dy
+
+    _self_step(s, 'A15r', y, X_W,
+               '[1.0 µs measured R6+misc] cache_pool_insert (L2 only — '
+               'no TLS L1 to populate); return',
+               A_DEEP); y += dy
+
+    # End-to-end totals (without TLS, every read pays L2 cost)
+    fb = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                            Inches(0.3), Inches(6.55),
+                            Inches(8.5), Inches(0.32))
+    fb.fill.solid(); fb.fill.fore_color.rgb = LIN_BG
+    fb.line.color.rgb = LIN_EDGE; fb.line.width = Pt(0.75)
+    tf = fb.text_frame
+    tf.margin_left = Pt(8); tf.margin_right = Pt(8)
+    tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run()
+    r.text = ('End-to-end:  L2 hit ≈ 7 µs (82%, no TLS short-circuit)  |  '
+              'owner-self miss ≈ 10 µs (17%)  |  cross-host miss ≈ 22 µs (0.2%)')
+    r.font.size = Pt(10); r.font.bold = True; r.font.color.rgb = A_TXT
+
+    # Legend + tally
+    _legend_inline(s, 0.3, 6.95,
+                   [('● A*r step', A_DEEP),
+                    ('● Cross-host blocking (A7r)', BLK_EDGE),
+                    ('★ Linearization (A2r, A9r, A12r, A14r)', LIN_EDGE),
+                    ('—', WHITE)])
+    tally_box = s.shapes.add_textbox(Inches(9.0), Inches(6.95), Inches(4.2),
+                                     Inches(0.40))
+    tf = tally_box.text_frame; tf.margin_top = Pt(3)
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
+    r = p.add_run()
+    r.text = '15 steps · 3 actors · 1 blocking point  (NO TLS)'
+    r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = A_TXT
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Slide 5 — Protocol C read path
 # ──────────────────────────────────────────────────────────────────────
 def slide_c_read(prs):
@@ -1040,6 +1183,178 @@ def slide_read_latency_table(prs):
 # ──────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────
+def slide_protocol_stage_table(prs):
+    """4-row (A write / A read / C write / C read) × per-stage table.
+
+    Each cell shows the step tag + latency. Cell shading marks:
+      yellow = linearization point
+      red    = dominant cost stage / cross-host blocking
+    """
+    s = _blank_slide(
+        prs,
+        'Protocol A vs C — stages × latency (T=64 KV=1024 workload-A)',
+        'Each row = one read/write path; each column = the n-th stage of that path. '
+        'Yellow = linearization point · Red = dominant cost / blocking',
+    )
+
+    # Row data — list of (label, accent_colour, [(tag, lat_us_string, highlight)])
+    # highlight: 'lin' (yellow), 'dom' (red dominant), 'blk' (red blocking),
+    # None (no highlight). Empty list slots padded so all rows have same
+    # column count.
+
+    # A write — 14 stages
+    a_write = [
+        ('A1',   '1.1',           None),
+        ('A2',   '1.4',           None),
+        ('A3',   '0.1',           None),
+        ('A4',   '~22 spin',      'blk'),
+        ('A5',   '1.5',           None),
+        ('A6',   '5.0',           None),
+        ('A7',   '1.65',          None),
+        ('A8',   '3.7',           None),
+        ('A9',   '~1.9 spin',     'blk'),
+        ('A10',  '1.75',          None),
+        ('A11',  '0.03',          'lin'),
+        ('A12',  '0.07',          None),
+        ('A13',  '10  ★W9 ★W10',  'dom'),
+        ('A14',  '0.2',           None),
+        None, None,  # pad to 16
+    ]
+
+    # A read — 16 stages (with TLS)
+    a_read = [
+        ('A1r',  '0.05',          None),
+        ('A2r',  '0.05  ★TLS',    'lin'),
+        ('A3r',  '0.5  ★L2',      'lin'),
+        ('A4r',  '0.1',           None),
+        ('A5r',  '0.1',           None),
+        ('A6r',  '1.4',           None),
+        ('A7r',  '0.1',           None),
+        ('A8r',  '~14 spin',      'blk'),
+        ('A9r',  '1.5',           None),
+        ('A10r', '5  ★bmap',      'lin'),
+        ('A11r', '5',             None),
+        ('A12r', '1.0',           None),
+        ('A13r', '0.07  ★pub',    'lin'),
+        ('A14r', '<0.1',          None),
+        ('A15r', '0.4  ★C13',     'lin'),
+        ('A16r', '1.1',           None),
+    ]
+
+    # C write — 7 stages (with C0 pool path)
+    c_write = [
+        ('C0',   '2.4',           None),
+        ('C1',   '25.0',          'dom'),
+        ('C2',   '0.15',          None),
+        ('C3',   '1.25',          None),
+        ('C4',   '0.02',          None),
+        ('C5',   '4.07  ★epoch',  'lin'),
+        ('C6',   '0.03',          None),
+        None, None, None, None, None, None, None, None, None,  # pad to 16
+    ]
+
+    # C read — 5 stages
+    c_read = [
+        ('C1r',  '0.015',         None),
+        ('C2r',  '0.7  ★epoch',   'lin'),
+        ('C3r',  '0.15',          None),
+        ('C4r',  '0.05  ★LRC',    'lin'),
+        ('C5r',  '1.0',           None),
+        None, None, None, None, None, None, None, None, None, None, None,
+    ]
+
+    rows = [
+        ('Protocol A — write', '~22 µs', A_DEEP, A_LIGHT, a_write),
+        ('Protocol A — read',  '~7 µs (L2 hit)', A_DEEP, A_LIGHT, a_read),
+        ('Protocol C — write', '~33 µs', C_DEEP, C_LIGHT, c_write),
+        ('Protocol C — read',  '~1.7 µs',        C_DEEP, C_LIGHT, c_read),
+    ]
+
+    # Layout
+    NCOLS_STAGES = 16
+    header_w = 1.55
+    total_w = 12.95
+    stage_w = (total_w - header_w - 1.0) / NCOLS_STAGES  # leave room for end-to-end col
+    end_w = 1.0
+    table_left = 0.30
+    table_top = 1.30
+
+    header_h = 0.40
+    row_h = 1.10
+
+    # Header row
+    _rect(s, table_left, table_top, header_w, header_h, GREY_L, GREY,
+          'Path', fs=10, bold=True, txt_col=GREY_D, rounded=False)
+    for i in range(NCOLS_STAGES):
+        _rect(s, table_left + header_w + i * stage_w, table_top,
+              stage_w, header_h, GREY_L, GREY,
+              f"#{i + 1}", fs=9, bold=True, txt_col=GREY_D, rounded=False)
+    _rect(s, table_left + header_w + NCOLS_STAGES * stage_w, table_top,
+          end_w, header_h, GREY_L, GREY,
+          'End-to-end', fs=9, bold=True, txt_col=GREY_D, rounded=False)
+
+    # Data rows
+    for r_idx, (label, e2e, accent, light_bg, cells) in enumerate(rows):
+        y = table_top + header_h + r_idx * row_h
+
+        # Row label column
+        _rect(s, table_left, y, header_w, row_h, light_bg, accent,
+              label, fs=10, bold=True, txt_col=accent, rounded=False)
+
+        # Stage cells
+        for c_idx in range(NCOLS_STAGES):
+            x = table_left + header_w + c_idx * stage_w
+            cell = cells[c_idx] if c_idx < len(cells) else None
+            if cell is None:
+                # Empty cell
+                _rect(s, x, y, stage_w, row_h, WHITE, GREY,
+                      '', fs=8, rounded=False)
+                continue
+            tag, lat, hl = cell
+            if hl == 'lin':
+                bg = LIN_BG; edge = LIN_EDGE
+            elif hl == 'dom' or hl == 'blk':
+                bg = BLK_BG; edge = BLK_EDGE
+            else:
+                bg = WHITE; edge = GREY
+
+            cell_shape = s.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(x), Inches(y), Inches(stage_w), Inches(row_h))
+            cell_shape.fill.solid(); cell_shape.fill.fore_color.rgb = bg
+            cell_shape.line.color.rgb = edge
+            cell_shape.line.width = Pt(0.75 if hl in (None,) else 1.5)
+            tf = cell_shape.text_frame
+            tf.margin_left = Pt(2); tf.margin_right = Pt(2)
+            tf.margin_top = Pt(3); tf.margin_bottom = Pt(3)
+            tf.word_wrap = True
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = tf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+            r = p.add_run()
+            r.text = tag
+            r.font.size = Pt(9); r.font.bold = True
+            r.font.color.rgb = accent if hl is None else GREY_D
+            p2 = tf.add_paragraph(); p2.alignment = PP_ALIGN.CENTER
+            r2 = p2.add_run()
+            r2.text = f"\n{lat} µs"
+            r2.font.size = Pt(7.5); r2.font.color.rgb = GREY_D
+            if hl in ('dom', 'blk'):
+                r2.font.bold = True
+
+        # End-to-end column
+        x = table_left + header_w + NCOLS_STAGES * stage_w
+        _rect(s, x, y, end_w, row_h, light_bg, accent,
+              e2e, fs=10, bold=True, txt_col=accent, rounded=False)
+
+    # Legend
+    leg_y = table_top + header_h + 4 * row_h + 0.25
+    _legend_inline(s, table_left, leg_y,
+                   [('★ Linearization point', LIN_EDGE),
+                    ('★ Dominant cost / blocking', BLK_EDGE),
+                    ('A write: W10 cache_pool_insert MESI', A_DEEP),
+                    ('C write: C1 LFM 25 µs 76%', C_DEEP)])
+
+
 def main():
     out = os.path.join(os.path.dirname(__file__), '..',
                        'docs', 'protocol_a_vs_c_path_comparison.pptx')
@@ -1049,9 +1364,11 @@ def main():
     slide_a_write(prs)
     slide_c_write(prs)
     slide_a_read(prs)
+    slide_a_read_no_tls(prs)
     slide_c_read(prs)
     slide_write_latency_table(prs)
     slide_read_latency_table(prs)
+    slide_protocol_stage_table(prs)
     prs.save(out)
     print('wrote', out)
 
