@@ -77,37 +77,47 @@ def best_per_workload(rows):
 
 
 def plot_thpt(best, out_path):
-    """Vertical bar chart: x=workload, y=throughput (Mops/s)."""
-    fig, ax = plt.subplots(figsize=(8.5, 4.5))
+    """Vertical bar chart: x=workload, y=throughput (Mops/s).
+
+    Project Style B: single-class data → uniform mid-grey bars
+    (STYLE_B[1]) with project edge colour. Target line in
+    STYLE_B_TARGET grey-dashed. Values annotated above each bar.
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
     wls = WORKLOADS  # fixed order a,b,c,d,f
     values = [best[wl]["agg_mops"] for wl in wls]
-    colours = [COLORS[wl] for wl in wls]
-    labels = [wl.replace("workload", "") for wl in wls]  # a / b / c / d / f
+    labels = [wl.replace("workload", "") for wl in wls]
 
     x_pos = list(range(len(wls)))
-    bars = ax.bar(x_pos, values, color=colours,
-                  edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW)
+    ax.bar(x_pos, values, color=STYLE_B[1])  # uniform mid-grey
+
     ax.set_xticks(x_pos)
     ax.set_xticklabels(labels, fontsize=12)
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("aggregate throughput (Mops/s)")
-    ax.set_title("iter-11A — best throughput per YCSB workload  (T=64, 2 hosts)",
-                 pad=10)
+    ax.set_title(
+        "iter-11A — best throughput per YCSB workload  (T=64, 2 hosts)")
 
-    # 20 Mops/s target reference line
+    # Project standard polish: edges + headroom + y-grid
+    bar_with_headroom(ax, headroom=1.25)
+
+    # 20 Mops/s target reference line (after headroom so it doesn't
+    # over-shrink the y limit when below the bars).
     ax.axhline(y=TARGET_MOPS, color=STYLE_B_TARGET, linestyle="--",
                linewidth=1.4, label=f"target {TARGET_MOPS:.0f} Mops/s")
+    # Re-apply headroom in case target line sits above bars.
+    cur_ymax = ax.get_ylim()[1]
+    needed_ymax = max(values + [TARGET_MOPS]) * 1.25
+    if needed_ymax > cur_ymax:
+        ax.set_ylim(0, needed_ymax)
 
     # Bar-top value annotations
-    ymax = max(values + [TARGET_MOPS]) * 1.18
-    ax.set_ylim(0, ymax)
+    ymax = ax.get_ylim()[1]
     for x, v in zip(x_pos, values):
-        ax.text(x, v + ymax * 0.015, f"{v:.2f}",
+        ax.text(x, v + ymax * 0.012, f"{v:.2f}",
                 va="bottom", ha="center", fontsize=11, fontweight="bold",
-                color="#222222")
+                color=STYLE_B_EDGE)
 
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_axisbelow(True)
     ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
@@ -116,8 +126,13 @@ def plot_thpt(best, out_path):
 
 
 def plot_lat(best, out_path):
-    """Vertical grouped bar chart: x=workload, y=latency (write_avg + read_avg µs)."""
-    fig, ax = plt.subplots(figsize=(8.5, 4.5))
+    """Vertical grouped bar chart: x=workload, y=latency.
+
+    Project Style B: 2-class ordered (read < write in focality) →
+    STYLE_B[1] mid-grey for read (less focal), STYLE_B[2] accent
+    red for write (focal — Protocol A write path dominates cost).
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
     wls = WORKLOADS
     labels = [wl.replace("workload", "") for wl in wls]
     bar_w = 0.36
@@ -125,48 +140,43 @@ def plot_lat(best, out_path):
     w_vals = [best[wl]["w_avg_us"] for wl in wls]
     r_vals = [best[wl]["r_avg_us"] for wl in wls]
 
-    WRITE_C = "#c44e52"  # red — write
-    READ_C  = "#4c72b0"  # blue — read
+    # Project Style B 2-class: focal accent + neutral grey
+    WRITE_C = STYLE_B[2]   # #c44e52 accent red (focal)
+    READ_C  = STYLE_B[1]   # #969696 mid grey  (less focal)
 
     x_centre = list(range(len(wls)))
     x_write  = [x - bar_w / 2.0 for x in x_centre]
     x_read   = [x + bar_w / 2.0 for x in x_centre]
 
-    bars_w = ax.bar(x_write, w_vals, width=bar_w, color=WRITE_C,
-                    edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
-                    label="write avg")
-    bars_r = ax.bar(x_read,  r_vals, width=bar_w, color=READ_C,
-                    edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
-                    label="read avg")
+    ax.bar(x_write, w_vals, width=bar_w, color=WRITE_C, label="write avg")
+    ax.bar(x_read,  r_vals, width=bar_w, color=READ_C,  label="read avg")
 
     ax.set_xticks(x_centre)
     ax.set_xticklabels(labels, fontsize=12)
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("per-op latency (µs)")
-    ax.set_title("iter-11A — latency at the best-throughput cell  "
-                 "(T=64, 2 hosts)", pad=10)
+    ax.set_title(
+        "iter-11A — latency at the best-throughput cell  (T=64, 2 hosts)")
 
-    ymax = max(w_vals + r_vals) * 1.22
-    ax.set_ylim(0, ymax)
+    # Project standard polish
+    bar_with_headroom(ax, headroom=1.25)
+    ymax = ax.get_ylim()[1]
 
     # Bar-top annotations
     for x, v in zip(x_write, w_vals):
         if v > 0:
-            ax.text(x, v + ymax * 0.015, f"{v:.1f}",
+            ax.text(x, v + ymax * 0.012, f"{v:.1f}",
                     va="bottom", ha="center", fontsize=9.5,
-                    fontweight="bold", color=WRITE_C)
+                    fontweight="bold", color=STYLE_B_EDGE)
         else:
-            # workload-c: no writes — short inline annotation above the column
             ax.text(x, ymax * 0.02, "no\nwrites",
                     va="bottom", ha="center", fontsize=8.5,
-                    fontstyle="italic", color="#888888")
+                    fontstyle="italic", color=STYLE_B_TARGET)
     for x, v in zip(x_read, r_vals):
-        ax.text(x, v + ymax * 0.015, f"{v:.1f}",
+        ax.text(x, v + ymax * 0.012, f"{v:.1f}",
                 va="bottom", ha="center", fontsize=9.5,
-                fontweight="bold", color=READ_C)
+                fontweight="bold", color=STYLE_B_EDGE)
 
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_axisbelow(True)
     ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
