@@ -2,11 +2,20 @@
 """iter-11A plot generator — scaling_ycsb_spec §6 fulfillment.
 
 Reads <out>/SUMMARY.log produced by iter11A_sweep.sh and emits:
-  - A_thpt_<wl>_kv<sz>.png    (one per workload × KV, cache=on by default)
-  - A_thpt_<wl>_kv<sz>_off.png (cache=off variant)
-  - extra/A_kv_size_compare_<wl>.png (KV-size overlay per workload)
-  - extra/A_target_<wl>_kv<sz>.png   (throughput vs 20 Mops/s bar gap)
-  - extra/A_scaling_efficiency.png   (peak/single-T ratio per workload)
+  Throughput plots:
+    A_thpt_<wl>_kv<sz>.png        (one per workload × KV, cache=on)
+    A_thpt_<wl>_kv<sz>_off.png    (cache=off variant)
+  Latency plots:
+    A_lat_<wl>_kv<sz>_write.png   (write avg/p50/p99 vs T)
+    A_lat_<wl>_kv<sz>_read.png    (read  avg/p50/p99 vs T)
+                                  (cache=on by default; cache=off mirrored
+                                   into _off suffix)
+  Extras:
+    extra/A_kv_size_compare_<wl>_<cache>.png   (KV-size overlay per wl)
+    extra/A_target_per_workload.png            (best-cell vs 20 Mops/s)
+    extra/A_scaling_efficiency.png             (peak/T=1 ratio)
+    extra/A_lat_pct_compare_<wl>_<kv>_<cache>.png
+                                  (write+read p50/p99 overlay per cell)
 
 Line format includes first_op_ns_* fields added in iter-10A/iter-11A.
 """
@@ -22,13 +31,17 @@ LINE = re.compile(
     r"YCSB opt=A cache=(\d+) num_hosts=\d+ threads=(\d+) threads_eff=\d+ "
     r"rep=\d+ load_ops=\d+ load_thpt=\d+ "
     r"trans_ops=\d+ trans_wall_max=[\d\.]+ trans_agg_thpt=(\d+) "
-    r"w_avg_ns=\d+ w_p50_ns=\d+ w_p99_ns=(\d+) "
-    r"r_avg_ns=\d+ r_p50_ns=\d+ r_p99_ns=(\d+).*"
+    r"w_avg_ns=(\d+) w_p50_ns=(\d+) w_p99_ns=(\d+) "
+    r"r_avg_ns=(\d+) r_p50_ns=(\d+) r_p99_ns=(\d+).*"
     r"# (\w+)_optA_t\d+_cache(on|off)_rep\d+_kv(\d+)$"
 )
 
 TARGET_MOPS = 20.0
 T_VALUES = [1, 2, 4, 8, 16, 32, 64]
+
+# Workloads that have NO writes (cannot produce a write-latency plot).
+# workload-c is 100% reads. Other workloads have some writes.
+NO_WRITE_WL = {"workloadc"}
 
 
 def parse(path):
@@ -41,12 +54,19 @@ def parse(path):
             m = LINE.match(line)
             if not m:
                 continue
-            cache_int, T, agg, w_p99, r_p99, wl, cache_str, kv = m.groups()
+            (cache_int, T, agg,
+             w_avg, w_p50, w_p99,
+             r_avg, r_p50, r_p99,
+             wl, cache_str, kv) = m.groups()
             rows.append({
                 "wl": wl, "T": int(T), "cache": cache_str,
                 "kv": int(kv),
                 "agg_mops": int(agg) / 1e6,
+                "w_avg_us": int(w_avg) / 1000.0,
+                "w_p50_us": int(w_p50) / 1000.0,
                 "w_p99_us": int(w_p99) / 1000.0,
+                "r_avg_us": int(r_avg) / 1000.0,
+                "r_p50_us": int(r_p50) / 1000.0,
                 "r_p99_us": int(r_p99) / 1000.0,
             })
     return rows
@@ -204,6 +224,116 @@ def plot_scaling_efficiency(rows, outdir):
     print(f"wrote {out}")
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Latency plots (per scaling_ycsb_spec §6 primary set)
+# ──────────────────────────────────────────────────────────────────────
+def plot_lat(rows, outdir, op_kind, cache="on"):
+    """Per (workload, KV) latency plot showing avg / p50 / p99 vs T.
+
+    op_kind in {"write", "read"}. workload-c skipped for write
+    (no writes in YCSB-C).
+    """
+    suffix = "" if cache == "on" else "_off"
+    avg_key = "w_avg_us" if op_kind == "write" else "r_avg_us"
+    p50_key = "w_p50_us" if op_kind == "write" else "r_p50_us"
+    p99_key = "w_p99_us" if op_kind == "write" else "r_p99_us"
+    by_key = {}
+    for r in rows:
+        if r["cache"] != cache:
+            continue
+        if op_kind == "write" and r["wl"] in NO_WRITE_WL:
+            continue
+        by_key.setdefault((r["wl"], r["kv"]), []).append(r)
+
+    for (wl, kv), runs in sorted(by_key.items()):
+        runs.sort(key=lambda r: r["T"])
+        Ts = [r["T"] for r in runs]
+        avgs = [r[avg_key] for r in runs]
+        p50s = [r[p50_key] for r in runs]
+        p99s = [r[p99_key] for r in runs]
+
+        # Skip if all values 0 (i.e. workload has no ops of this kind)
+        if max(avgs + p50s + p99s) < 0.01:
+            continue
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(Ts, avgs, "-o", color="#4878d0", linewidth=1.8,
+                markersize=6, label=f"{op_kind} avg")
+        ax.plot(Ts, p50s, "--s", color="#6acc64", linewidth=1.5,
+                markersize=5, label=f"{op_kind} p50")
+        ax.plot(Ts, p99s, ":^", color="#c44e52", linewidth=1.5,
+                markersize=6, label=f"{op_kind} p99")
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.set_xticks(Ts if Ts else T_VALUES)
+        ax.set_xticklabels([str(t) for t in (Ts if Ts else T_VALUES)])
+        ax.set_xlabel("# clients per host")
+        ax.set_ylabel(f"per-op {op_kind} latency (µs, log)")
+        ax.set_title(
+            f"{wl} — Protocol A — KV={kv} cache={cache} — {op_kind} latency "
+            f"[iter-11A]", pad=10)
+        ax.legend(loc="upper left", fontsize=9)
+        ax.grid(True, which="both", alpha=0.3)
+        out = outdir / f"A_lat_{wl}_kv{kv}_{op_kind}{suffix}.png"
+        fig.tight_layout()
+        fig.savefig(out, dpi=110)
+        plt.close(fig)
+        print(f"wrote {out}")
+
+
+def plot_lat_compare(rows, outdir, cache="on"):
+    """One plot per workload×kv overlaying write+read p50+p99 on the same
+    axes, so the supervisor can compare at-a-glance which op kind dominates
+    tail latency."""
+    suffix = "" if cache == "on" else "_off"
+    by_key = {}
+    for r in rows:
+        if r["cache"] != cache:
+            continue
+        by_key.setdefault((r["wl"], r["kv"]), []).append(r)
+    extra = outdir / "extra"
+    extra.mkdir(exist_ok=True)
+    for (wl, kv), runs in sorted(by_key.items()):
+        runs.sort(key=lambda r: r["T"])
+        Ts = [r["T"] for r in runs]
+        has_w = wl not in NO_WRITE_WL
+        fig, ax = plt.subplots(figsize=(6, 4))
+        plotted = False
+        if has_w:
+            ax.plot(Ts, [r["w_p50_us"] for r in runs], "--s",
+                    color="#1f6bd1", linewidth=1.5, markersize=4,
+                    label="write p50")
+            ax.plot(Ts, [r["w_p99_us"] for r in runs], "-^",
+                    color="#0a3b8e", linewidth=1.8, markersize=5,
+                    label="write p99")
+            plotted = True
+        ax.plot(Ts, [r["r_p50_us"] for r in runs], "--s",
+                color="#e66100", linewidth=1.5, markersize=4,
+                label="read p50")
+        ax.plot(Ts, [r["r_p99_us"] for r in runs], "-^",
+                color="#8c3200", linewidth=1.8, markersize=5,
+                label="read p99")
+        plotted = True
+        if not plotted:
+            plt.close(fig); continue
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.set_xticks(Ts if Ts else T_VALUES)
+        ax.set_xticklabels([str(t) for t in (Ts if Ts else T_VALUES)])
+        ax.set_xlabel("# clients per host")
+        ax.set_ylabel("per-op latency (µs, log)")
+        ax.set_title(
+            f"{wl} — KV={kv} cache={cache} — write vs read p50/p99 "
+            "[iter-11A]", pad=10)
+        ax.legend(loc="upper left", fontsize=8, ncol=2)
+        ax.grid(True, which="both", alpha=0.3)
+        out = extra / f"A_lat_pct_compare_{wl}_kv{kv}{suffix}.png"
+        fig.tight_layout()
+        fig.savefig(out, dpi=110)
+        plt.close(fig)
+        print(f"wrote {out}")
+
+
 def main():
     outdir = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     rows = parse(outdir / "SUMMARY.log")
@@ -211,12 +341,20 @@ def main():
         print("no parsable rows", file=sys.stderr)
         sys.exit(1)
     print(f"parsed {len(rows)} rows")
+    # Throughput plots
     plot_thpt(rows, outdir, cache="on")
     plot_thpt(rows, outdir, cache="off")
     plot_kv_compare(rows, outdir, cache="on")
     plot_kv_compare(rows, outdir, cache="off")
     plot_target_gap(rows, outdir)
     plot_scaling_efficiency(rows, outdir)
+    # Latency plots
+    plot_lat(rows, outdir, "write", cache="on")
+    plot_lat(rows, outdir, "write", cache="off")
+    plot_lat(rows, outdir, "read",  cache="on")
+    plot_lat(rows, outdir, "read",  cache="off")
+    plot_lat_compare(rows, outdir, cache="on")
+    plot_lat_compare(rows, outdir, cache="off")
 
 
 if __name__ == "__main__":
