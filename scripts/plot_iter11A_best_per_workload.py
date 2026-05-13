@@ -66,9 +66,17 @@ def parse(path):
     return rows
 
 
-def best_per_workload(rows):
+def best_per_workload(rows, kv=None):
+    """Return the best-throughput cell per workload.
+
+    If kv is given, restrict the search to cells with that KV size
+    (used for KV=1024 stress comparison). Otherwise search across all
+    KV sizes.
+    """
     by_wl = {}
     for r in rows:
+        if kv is not None and r["kv"] != kv:
+            continue
         by_wl.setdefault(r["wl"], []).append(r)
     out = {}
     for wl, runs in by_wl.items():
@@ -79,33 +87,33 @@ def best_per_workload(rows):
 def plot_thpt(best, out_path):
     """Vertical bar chart: x=workload, y=throughput (Mops/s).
 
-    Project Style B: single-class data → uniform mid-grey bars
-    (STYLE_B[1]) with project edge colour. Target line in
-    STYLE_B_TARGET grey-dashed. Values annotated above each bar.
+    Bars are half-width (0.4) with per-workload colour from the
+    project COLORS dict (SEABORN_DEEP — 5-class fallback when the
+    3-tone STYLE_B greyscale doesn't extend). Project Style B
+    edges + headroom + grid applied via bar_with_headroom().
     """
     fig, ax = plt.subplots(figsize=(9, 5))
     wls = WORKLOADS  # fixed order a,b,c,d,f
     values = [best[wl]["agg_mops"] for wl in wls]
+    colours = [COLORS[wl] for wl in wls]
     labels = [wl.replace("workload", "") for wl in wls]
 
     x_pos = list(range(len(wls)))
-    ax.bar(x_pos, values, color=STYLE_B[1])  # uniform mid-grey
+    ax.bar(x_pos, values, color=colours, width=0.4)
 
     ax.set_xticks(x_pos)
     ax.set_xticklabels(labels, fontsize=12)
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("aggregate throughput (Mops/s)")
     ax.set_title(
-        "iter-11A — best throughput per YCSB workload  (T=64, 2 hosts)")
+        "throughput per ycsb workload (1024B, T=64, 2 hosts)")
 
     # Project standard polish: edges + headroom + y-grid
     bar_with_headroom(ax, headroom=1.25)
 
-    # 20 Mops/s target reference line (after headroom so it doesn't
-    # over-shrink the y limit when below the bars).
+    # 20 Mops/s target reference line
     ax.axhline(y=TARGET_MOPS, color=STYLE_B_TARGET, linestyle="--",
                linewidth=1.4, label=f"target {TARGET_MOPS:.0f} Mops/s")
-    # Re-apply headroom in case target line sits above bars.
     cur_ymax = ax.get_ylim()[1]
     needed_ymax = max(values + [TARGET_MOPS]) * 1.25
     if needed_ymax > cur_ymax:
@@ -156,7 +164,7 @@ def plot_lat(best, out_path):
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("per-op latency (µs)")
     ax.set_title(
-        "iter-11A — latency at the best-throughput cell  (T=64, 2 hosts)")
+        "latency per ycsb workload (1024B, T=64, 2 hosts)")
 
     # Project standard polish
     bar_with_headroom(ax, headroom=1.25)
@@ -191,7 +199,9 @@ def main():
     if not rows:
         print(f"no parsable rows in {sweep_dir}/SUMMARY.log", file=sys.stderr)
         sys.exit(1)
-    best = best_per_workload(rows)
+    # Restrict to KV=1024 for fair stress comparison across workloads
+    # (titles say 1024B). Pick best (T, cache) per workload.
+    best = best_per_workload(rows, kv=1024)
 
     # Print summary so user can sanity-check
     print("best per workload:")
