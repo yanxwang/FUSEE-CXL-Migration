@@ -87,16 +87,20 @@ def best_per_workload(rows, kv=None):
 def plot_thpt(best, out_path):
     """Vertical bar chart: x=workload, y=throughput (Mops/s).
 
-    Bars are half-width (0.4) with per-workload colour from the
-    project COLORS dict (SEABORN_DEEP — 5-class fallback when the
-    3-tone STYLE_B greyscale doesn't extend). Project Style B
-    edges + headroom + grid applied via bar_with_headroom().
+    Bars are half-width (0.4) with colours rotating through the
+    project STYLE_B palette (accent red / mid grey / white) so
+    adjacent bars are visually distinguished without using the
+    seaborn-deep multi-hue fallback. Project Style B edges +
+    headroom + grid applied via bar_with_headroom().
     """
     fig, ax = plt.subplots(figsize=(9, 5))
     wls = WORKLOADS  # fixed order a,b,c,d,f
     values = [best[wl]["agg_mops"] for wl in wls]
-    colours = [COLORS[wl] for wl in wls]
     labels = [wl.replace("workload", "") for wl in wls]
+
+    # 3-colour rotation from STYLE_B: red, mid-grey, white
+    palette = [STYLE_B[2], STYLE_B[1], "#FFFFFF"]
+    colours = [palette[i % len(palette)] for i in range(len(wls))]
 
     x_pos = list(range(len(wls)))
     ax.bar(x_pos, values, color=colours, width=0.4)
@@ -106,7 +110,7 @@ def plot_thpt(best, out_path):
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("aggregate throughput (Mops/s)")
     ax.set_title(
-        "throughput per ycsb workload (1024B, T=64, 2 hosts)")
+        "Throughput per YCSB Workload (1024B, T=64, 2 Hosts)")
 
     # Project standard polish: edges + headroom + y-grid
     bar_with_headroom(ax, headroom=1.25)
@@ -164,7 +168,7 @@ def plot_lat(best, out_path):
     ax.set_xlabel("YCSB workload")
     ax.set_ylabel("per-op latency (µs)")
     ax.set_title(
-        "latency per ycsb workload (1024B, T=64, 2 hosts)")
+        "Latency per YCSB Workload (1024B, T=64, 2 Hosts)")
 
     # Project standard polish
     bar_with_headroom(ax, headroom=1.25)
