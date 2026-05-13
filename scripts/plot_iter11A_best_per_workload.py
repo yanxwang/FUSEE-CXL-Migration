@@ -77,38 +77,38 @@ def best_per_workload(rows):
 
 
 def plot_thpt(best, out_path):
-    """Horizontal bar chart, single bar per workload."""
+    """Vertical bar chart: x=workload, y=throughput (Mops/s)."""
     fig, ax = plt.subplots(figsize=(8.5, 4.5))
     wls = WORKLOADS  # fixed order a,b,c,d,f
     values = [best[wl]["agg_mops"] for wl in wls]
     colours = [COLORS[wl] for wl in wls]
     labels = [wl.replace("workload", "") for wl in wls]  # a / b / c / d / f
 
-    # y position top-to-bottom in workload order
-    y_pos = list(range(len(wls)))[::-1]
-    bars = ax.barh(y_pos, values, color=colours,
-                   edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW)
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=12)
-    ax.set_xlabel("aggregate throughput (Mops/s)")
+    x_pos = list(range(len(wls)))
+    bars = ax.bar(x_pos, values, color=colours,
+                  edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(labels, fontsize=12)
+    ax.set_xlabel("YCSB workload")
+    ax.set_ylabel("aggregate throughput (Mops/s)")
     ax.set_title("iter-11A — best throughput per YCSB workload  (T=64, 2 hosts)",
                  pad=10)
 
     # 20 Mops/s target reference line
-    ax.axvline(x=TARGET_MOPS, color=STYLE_B_TARGET, linestyle="--",
+    ax.axhline(y=TARGET_MOPS, color=STYLE_B_TARGET, linestyle="--",
                linewidth=1.4, label=f"target {TARGET_MOPS:.0f} Mops/s")
 
-    # Bar-end value annotations
-    xmax = max(values + [TARGET_MOPS]) * 1.18
-    ax.set_xlim(0, xmax)
-    for y, v in zip(y_pos, values):
-        ax.text(v + xmax * 0.01, y, f"{v:.2f} Mops/s",
-                va="center", ha="left", fontsize=11, fontweight="bold",
+    # Bar-top value annotations
+    ymax = max(values + [TARGET_MOPS]) * 1.18
+    ax.set_ylim(0, ymax)
+    for x, v in zip(x_pos, values):
+        ax.text(x, v + ymax * 0.015, f"{v:.2f}",
+                va="bottom", ha="center", fontsize=11, fontweight="bold",
                 color="#222222")
 
-    ax.grid(axis="x", alpha=0.3)
+    ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
-    ax.legend(loc="lower right", fontsize=10)
+    ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
@@ -116,59 +116,58 @@ def plot_thpt(best, out_path):
 
 
 def plot_lat(best, out_path):
-    """Horizontal grouped bar chart per workload: write_avg + read_avg µs."""
+    """Vertical grouped bar chart: x=workload, y=latency (write_avg + read_avg µs)."""
     fig, ax = plt.subplots(figsize=(8.5, 4.5))
     wls = WORKLOADS
     labels = [wl.replace("workload", "") for wl in wls]
-    bar_h = 0.36
+    bar_w = 0.36
 
-    # workload-c has no writes → write_avg == 0; we still plot the read
-    # bar at its row but suppress the (empty) write bar.
     w_vals = [best[wl]["w_avg_us"] for wl in wls]
     r_vals = [best[wl]["r_avg_us"] for wl in wls]
 
-    # Two-colour palette from plot_style.py SEABORN_DEEP
-    WRITE_C = "#c44e52"  # red — write (focal, since A's write is dominant)
+    WRITE_C = "#c44e52"  # red — write
     READ_C  = "#4c72b0"  # blue — read
 
-    y_centre = list(range(len(wls)))[::-1]
-    y_write  = [y + bar_h / 2.0 for y in y_centre]
-    y_read   = [y - bar_h / 2.0 for y in y_centre]
+    x_centre = list(range(len(wls)))
+    x_write  = [x - bar_w / 2.0 for x in x_centre]
+    x_read   = [x + bar_w / 2.0 for x in x_centre]
 
-    bars_w = ax.barh(y_write, w_vals, height=bar_h, color=WRITE_C,
-                     edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
-                     label="write avg")
-    bars_r = ax.barh(y_read,  r_vals, height=bar_h, color=READ_C,
-                     edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
-                     label="read avg")
+    bars_w = ax.bar(x_write, w_vals, width=bar_w, color=WRITE_C,
+                    edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
+                    label="write avg")
+    bars_r = ax.bar(x_read,  r_vals, width=bar_w, color=READ_C,
+                    edgecolor=STYLE_B_EDGE, linewidth=STYLE_B_EDGE_LW,
+                    label="read avg")
 
-    ax.set_yticks(y_centre)
-    ax.set_yticklabels(labels, fontsize=12)
-    ax.set_xlabel("per-op latency (µs)")
+    ax.set_xticks(x_centre)
+    ax.set_xticklabels(labels, fontsize=12)
+    ax.set_xlabel("YCSB workload")
+    ax.set_ylabel("per-op latency (µs)")
     ax.set_title("iter-11A — latency at the best-throughput cell  "
                  "(T=64, 2 hosts)", pad=10)
 
-    xmax = max(w_vals + r_vals) * 1.18
-    ax.set_xlim(0, xmax)
+    ymax = max(w_vals + r_vals) * 1.22
+    ax.set_ylim(0, ymax)
 
-    # Bar-end annotations
-    for y, v in zip(y_write, w_vals):
+    # Bar-top annotations
+    for x, v in zip(x_write, w_vals):
         if v > 0:
-            ax.text(v + xmax * 0.01, y, f"{v:.1f} µs",
-                    va="center", ha="left", fontsize=9.5,
+            ax.text(x, v + ymax * 0.015, f"{v:.1f}",
+                    va="bottom", ha="center", fontsize=9.5,
                     fontweight="bold", color=WRITE_C)
         else:
-            ax.text(0.1, y, "no writes (workload-c)",
-                    va="center", ha="left", fontsize=9, fontstyle="italic",
-                    color="#888888")
-    for y, v in zip(y_read, r_vals):
-        ax.text(v + xmax * 0.01, y, f"{v:.1f} µs",
-                va="center", ha="left", fontsize=9.5,
+            # workload-c: no writes — short inline annotation above the column
+            ax.text(x, ymax * 0.02, "no\nwrites",
+                    va="bottom", ha="center", fontsize=8.5,
+                    fontstyle="italic", color="#888888")
+    for x, v in zip(x_read, r_vals):
+        ax.text(x, v + ymax * 0.015, f"{v:.1f}",
+                va="bottom", ha="center", fontsize=9.5,
                 fontweight="bold", color=READ_C)
 
-    ax.grid(axis="x", alpha=0.3)
+    ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
-    ax.legend(loc="lower right", fontsize=10)
+    ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
