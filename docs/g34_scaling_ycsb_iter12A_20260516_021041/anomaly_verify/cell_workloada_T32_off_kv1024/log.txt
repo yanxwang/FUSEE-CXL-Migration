@@ -1,0 +1,13 @@
+[repro] cell=workloada_T32_off_kv1024 reps=5 out=docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloada_T32_off_kv1024
+[rep 1] thpt=7.713668 Mops/s w_avg=16.566us r_avg=9.632us wall=0.006481s
+[rep 2] thpt=9.066183 Mops/s w_avg=14.806us r_avg=8.713us wall=0.005515s
+[rep 3] thpt=9.004141 Mops/s w_avg=14.753us r_avg=8.639us wall=0.005552s
+[rep 4] thpt=8.762705 Mops/s w_avg=14.719us r_avg=8.508us wall=0.005706s
+[rep 5] thpt=0.001496 Mops/s w_avg=17.566us r_avg=9.778us wall=33.408322s
+[repro] done. summary: docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloada_T32_off_kv1024/workloada_T32_off_kv1024_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.006481	7.713668	16.566	9.632
+2	0.005515	9.066183	14.806	8.713
+3	0.005552	9.004141	14.753	8.639
+4	0.005706	8.762705	14.719	8.508
+5	33.408322	0.001496	17.566	9.778

@@ -1,0 +1,12 @@
+[sweep] total runs planned: 210
+[sweep] 20/210 done (0 fails); elapsed 82s
+[sweep] 40/210 done (0 fails); elapsed 150s
+[sweep] 60/210 done (1 fails); elapsed 340s
+[sweep] 80/210 done (2 fails); elapsed 528s
+[sweep] 100/210 done (3 fails); elapsed 811s
+[sweep] 120/210 done (5 fails); elapsed 1115s
+[sweep] 140/210 done (7 fails); elapsed 1419s
+[sweep] 160/210 done (7 fails); elapsed 1489s
+[sweep] 180/210 done (7 fails); elapsed 1565s
+[sweep] 200/210 done (7 fails); elapsed 1646s
+[sweep] DONE 210 runs, 7 fails, total 1687s

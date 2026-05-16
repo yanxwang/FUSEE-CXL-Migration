@@ -1,0 +1,17 @@
+[verify] cell workloada T=4 on kv=1024 med=1.2903 max=1.4106 -> OK
+[verify] cell workloada T=8 on kv=1024 med=2.6654 max=2.8558 -> OK
+[verify] cell workloada T=32 off kv=1024 med=8.7627 max=9.0662 -> OK
+[verify] cell workloada T=64 off kv=1024 med=0.0958 max=13.9860 -> BIMODAL
+[verify] cell workloadb T=4 on kv=256 med=1.7660 max=1.7862 -> OK
+[verify] cell workloadb T=4 on kv=1024 med=0.3188 max=1.7439 -> BIMODAL
+[verify] cell workloadb T=2 off kv=256 med=0.9202 max=0.9286 -> OK
+[verify] cell workloadb T=4 off kv=256 med=1.7394 max=1.7828 -> OK
+[verify] cell workloadb T=64 off kv=1024 med=10.1792 max=11.3404 -> OK
+[verify] cell workloadc T=32 on kv=256 med=6.7916 max=7.6173 -> OK
+[verify] cell workloadd T=4 on kv=256 med=1.1933 max=1.2863 -> OK
+[verify] cell workloadd T=4 off kv=256 med=0.0590 max=1.3074 -> BIMODAL
+[verify] cell workloadd T=4 off kv=512 med=1.3995 max=1.4058 -> OK
+[verify] cell workloadd T=4 off kv=1024 med=1.2444 max=1.2764 -> OK
+[verify] cell workloadf T=64 off kv=256 med=12.8667 max=15.1607 -> OK
+## total=15 BIMODAL=3 FULL_COLLAPSE=0 OK=12
+[verify] done. summary: docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/SUMMARY.log

@@ -1,0 +1,13 @@
+[repro] cell=workloadb_T4_on_kv1024 reps=5 out=docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T4_on_kv1024
+[rep 1] thpt=1.589319 Mops/s w_avg=10.209us r_avg=3.536us wall=0.031460s
+[rep 2] TIMEOUT (no YCSB line in docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T4_on_kv1024/workloadb_T4_on_kv1024_rep2_h0.log)
+[rep 3] thpt=0.318842 Mops/s w_avg=9.456us r_avg=3.356us wall=0.156817s
+[rep 4] TIMEOUT (no YCSB line in docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T4_on_kv1024/workloadb_T4_on_kv1024_rep4_h0.log)
+[rep 5] thpt=1.743922 Mops/s w_avg=9.792us r_avg=3.439us wall=0.028671s
+[repro] done. summary: docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T4_on_kv1024/workloadb_T4_on_kv1024_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.031460	1.589319	10.209	3.536
+2	TIMEOUT	0.000000	0.000	0.000
+3	0.156817	0.318842	9.456	3.356
+4	TIMEOUT	0.000000	0.000	0.000
+5	0.028671	1.743922	9.792	3.439

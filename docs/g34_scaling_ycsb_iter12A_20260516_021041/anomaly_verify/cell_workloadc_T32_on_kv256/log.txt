@@ -1,0 +1,13 @@
+[repro] cell=workloadc_T32_on_kv256 reps=5 out=docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadc_T32_on_kv256
+[rep 1] thpt=7.617306 Mops/s w_avg=0.000us r_avg=7.751us wall=0.006564s
+[rep 2] thpt=6.791632 Mops/s w_avg=0.000us r_avg=7.778us wall=0.007362s
+[rep 3] thpt=6.652474 Mops/s w_avg=0.000us r_avg=8.745us wall=0.007516s
+[rep 4] thpt=6.592827 Mops/s w_avg=0.000us r_avg=8.612us wall=0.007583s
+[rep 5] thpt=7.324934 Mops/s w_avg=0.000us r_avg=7.842us wall=0.006825s
+[repro] done. summary: docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadc_T32_on_kv256/workloadc_T32_on_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.006564	7.617306	0.000	7.751
+2	0.007362	6.791632	0.000	7.778
+3	0.007516	6.652474	0.000	8.745
+4	0.007583	6.592827	0.000	8.612
+5	0.006825	7.324934	0.000	7.842

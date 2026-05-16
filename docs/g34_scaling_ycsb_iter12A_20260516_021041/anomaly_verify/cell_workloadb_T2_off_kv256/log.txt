@@ -1,0 +1,13 @@
+[repro] cell=workloadb_T2_off_kv256 reps=5 out=docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T2_off_kv256
+[rep 1] thpt=0.928625 Mops/s w_avg=7.676us r_avg=2.433us wall=0.053843s
+[rep 2] thpt=0.563647 Mops/s w_avg=66.839us r_avg=2.375us wall=0.088707s
+[rep 3] thpt=0.925685 Mops/s w_avg=7.723us r_avg=2.451us wall=0.054013s
+[rep 4] thpt=0.920183 Mops/s w_avg=7.826us r_avg=2.434us wall=0.054337s
+[rep 5] thpt=0.487016 Mops/s w_avg=78.863us r_avg=2.395us wall=0.102666s
+[repro] done. summary: docs/g34_scaling_ycsb_iter12A_20260516_021041/anomaly_verify/cell_workloadb_T2_off_kv256/workloadb_T2_off_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.053843	0.928625	7.676	2.433
+2	0.088707	0.563647	66.839	2.375
+3	0.054013	0.925685	7.723	2.451
+4	0.054337	0.920183	7.826	2.434
+5	0.102666	0.487016	78.863	2.395
