@@ -1,0 +1,15 @@
+[bisect a27dfda] checking out (was on feat/cxl-migration)...
+[bisect a27dfda] rsync src/ + rebuild on g3 + g4...
+[a27dfda rep 1] thpt=11.0717 r_avg=9.821us w_avg=0.000us wall=0.004516s
+[a27dfda rep 2] thpt=11.7069 r_avg=9.353us w_avg=0.000us wall=0.004270s
+[a27dfda rep 3] thpt=10.8814 r_avg=9.806us w_avg=0.000us wall=0.004594s
+[a27dfda rep 4] thpt=10.7596 r_avg=9.744us w_avg=0.000us wall=0.004647s
+[a27dfda rep 5] thpt=11.0644 r_avg=9.388us w_avg=0.000us wall=0.004518s
+[bisect a27dfda] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,11.0717,0.000,9.821,0.004516
+2,11.7069,0.000,9.353,0.004270
+3,10.8814,0.000,9.806,0.004594
+4,10.7596,0.000,9.744,0.004647
+5,11.0644,0.000,9.388,0.004518
+[bisect] restored to feat/cxl-migration

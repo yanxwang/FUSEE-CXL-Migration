@@ -1,0 +1,6 @@
+commit,subject,median_thpt_mops,median_r_avg_us,median_w_avg_us
+a27dfda,[iter11A-P1][G6][I9][C13][AP16] Phase 1: forwarder-pool-dire,11.0644,9.744,0.000
+455379e,[iter11A-P2][G6][I9][C14][AP16] Phase 2: parallel inval drai,11.2765,9.586,0.000
+5664945,[iter11A-P2revert+P3+P4][G6][I9] Revert Phase 2 parallel inv,11.1532,9.350,0.000
+3469388,[iter11A-P5][G6][I9][AP16] Phase 5: 10-cell path_decomp delt,11.1161,9.738,0.000
+e4c682b,[iter11A-P6][G6][I9][AP16] Phase 6: 210-cell sweep + anomaly,10.6746,9.422,0.000

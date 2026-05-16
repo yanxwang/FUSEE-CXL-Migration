@@ -1,0 +1,91 @@
+=== Phase 2 R3 bisect on 5 iter-11A commits ===
+[bisect-all] === commit a27dfda — [iter11A-P1][G6][I9][C13][AP16] Phase 1: forwarder-pool-dire ===
+[bisect a27dfda] checking out (was on feat/cxl-migration)...
+[bisect a27dfda] rsync src/ + rebuild on g3 + g4...
+[a27dfda rep 1] thpt=11.0717 r_avg=9.821us w_avg=0.000us wall=0.004516s
+[a27dfda rep 2] thpt=11.7069 r_avg=9.353us w_avg=0.000us wall=0.004270s
+[a27dfda rep 3] thpt=10.8814 r_avg=9.806us w_avg=0.000us wall=0.004594s
+[a27dfda rep 4] thpt=10.7596 r_avg=9.744us w_avg=0.000us wall=0.004647s
+[a27dfda rep 5] thpt=11.0644 r_avg=9.388us w_avg=0.000us wall=0.004518s
+[bisect a27dfda] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,11.0717,0.000,9.821,0.004516
+2,11.7069,0.000,9.353,0.004270
+3,10.8814,0.000,9.806,0.004594
+4,10.7596,0.000,9.744,0.004647
+5,11.0644,0.000,9.388,0.004518
+[bisect] restored to feat/cxl-migration
+[bisect-all] === commit 455379e — [iter11A-P2][G6][I9][C14][AP16] Phase 2: parallel inval drai ===
+[bisect 455379e] checking out (was on feat/cxl-migration)...
+[bisect 455379e] rsync src/ + rebuild on g3 + g4...
+[455379e rep 1] thpt=11.2765 r_avg=9.586us w_avg=0.000us wall=0.004434s
+[455379e rep 2] thpt=11.7813 r_avg=9.492us w_avg=0.000us wall=0.004244s
+[455379e rep 3] thpt=10.4102 r_avg=9.739us w_avg=0.000us wall=0.004802s
+[455379e rep 4] thpt=11.0254 r_avg=9.801us w_avg=0.000us wall=0.004534s
+[455379e rep 5] thpt=11.4155 r_avg=9.019us w_avg=0.000us wall=0.004380s
+[bisect 455379e] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,11.2765,0.000,9.586,0.004434
+2,11.7813,0.000,9.492,0.004244
+3,10.4102,0.000,9.739,0.004802
+4,11.0254,0.000,9.801,0.004534
+5,11.4155,0.000,9.019,0.004380
+[bisect] restored to feat/cxl-migration
+[bisect-all] === commit 5664945 — [iter11A-P2revert+P3+P4][G6][I9] Revert Phase 2 parallel inv ===
+[bisect 5664945] checking out (was on feat/cxl-migration)...
+[bisect 5664945] rsync src/ + rebuild on g3 + g4...
+[5664945 rep 1] thpt=11.1532 r_avg=9.244us w_avg=0.000us wall=0.004482s
+[5664945 rep 2] thpt=10.7619 r_avg=9.253us w_avg=0.000us wall=0.004645s
+[5664945 rep 3] thpt=11.4129 r_avg=9.695us w_avg=0.000us wall=0.004380s
+[5664945 rep 4] thpt=11.1062 r_avg=10.031us w_avg=0.000us wall=0.004501s
+[5664945 rep 5] thpt=11.7343 r_avg=9.350us w_avg=0.000us wall=0.004261s
+[bisect 5664945] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,11.1532,0.000,9.244,0.004482
+2,10.7619,0.000,9.253,0.004645
+3,11.4129,0.000,9.695,0.004380
+4,11.1062,0.000,10.031,0.004501
+5,11.7343,0.000,9.350,0.004261
+[bisect] restored to feat/cxl-migration
+[bisect-all] === commit 3469388 — [iter11A-P5][G6][I9][AP16] Phase 5: 10-cell path_decomp delt ===
+[bisect 3469388] checking out (was on feat/cxl-migration)...
+[bisect 3469388] rsync src/ + rebuild on g3 + g4...
+[3469388 rep 1] thpt=11.2638 r_avg=9.738us w_avg=0.000us wall=0.004439s
+[3469388 rep 2] thpt=10.9361 r_avg=10.205us w_avg=0.000us wall=0.004571s
+[3469388 rep 3] thpt=12.1095 r_avg=8.995us w_avg=0.000us wall=0.004128s
+[3469388 rep 4] thpt=11.1161 r_avg=9.642us w_avg=0.000us wall=0.004498s
+[3469388 rep 5] thpt=10.7991 r_avg=10.005us w_avg=0.000us wall=0.004629s
+[bisect 3469388] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,11.2638,0.000,9.738,0.004439
+2,10.9361,0.000,10.205,0.004571
+3,12.1095,0.000,8.995,0.004128
+4,11.1161,0.000,9.642,0.004498
+5,10.7991,0.000,10.005,0.004629
+[bisect] restored to feat/cxl-migration
+[bisect-all] === commit e4c682b — [iter11A-P6][G6][I9][AP16] Phase 6: 210-cell sweep + anomaly ===
+[bisect e4c682b] checking out (was on feat/cxl-migration)...
+[bisect e4c682b] rsync src/ + rebuild on g3 + g4...
+[e4c682b rep 1] thpt=0.0016 r_avg=9.511us w_avg=0.000us wall=32.200816s
+[e4c682b rep 2] thpt=10.6746 r_avg=9.002us w_avg=0.000us wall=0.004684s
+[e4c682b rep 3] thpt=11.4705 r_avg=9.422us w_avg=0.000us wall=0.004358s
+[e4c682b rep 4] thpt=11.0693 r_avg=10.326us w_avg=0.000us wall=0.004516s
+[e4c682b rep 5] thpt=0.0016 r_avg=9.175us w_avg=0.000us wall=32.000785s
+[bisect e4c682b] result:
+rep,thpt_mops,w_avg_us,r_avg_us,wall_s
+1,0.0016,0.000,9.511,32.200816
+2,10.6746,0.000,9.002,0.004684
+3,11.4705,0.000,9.422,0.004358
+4,11.0693,0.000,10.326,0.004516
+5,0.0016,0.000,9.175,32.000785
+[bisect] restored to feat/cxl-migration
+Already on 'feat/cxl-migration'
+Your branch is ahead of 'origin/feat/cxl-migration' by 177 commits.
+  (use "git push" to publish your local commits)
+=== bisect summary ===
+commit,subject,median_thpt_mops,median_r_avg_us,median_w_avg_us
+a27dfda,[iter11A-P1][G6][I9][C13][AP16] Phase 1: forwarder-pool-dire,11.0644,9.744,0.000
+455379e,[iter11A-P2][G6][I9][C14][AP16] Phase 2: parallel inval drai,11.2765,9.586,0.000
+5664945,[iter11A-P2revert+P3+P4][G6][I9] Revert Phase 2 parallel inv,11.1532,9.350,0.000
+3469388,[iter11A-P5][G6][I9][AP16] Phase 5: 10-cell path_decomp delt,11.1161,9.738,0.000
+e4c682b,[iter11A-P6][G6][I9][AP16] Phase 6: 210-cell sweep + anomaly,10.6746,9.422,0.000
