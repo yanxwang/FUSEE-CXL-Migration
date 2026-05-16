@@ -1,0 +1,15 @@
+=== Phase 1.6 post-fix verify — 20 reps on reference cell ===
+[repro] cell=workloada_T4_off_kv512 reps=20 out=docs/iter12A_diagnostic/phase_1_6_postfix_verify
+[rep 1] thpt=1.365485 Mops/s w_avg=9.025us r_avg=4.020us wall=0.036617s
+[rep 2] thpt=0.000589 Mops/s w_avg=8.735us r_avg=3.965us wall=84.781782s
+[rep 3] thpt=1.574257 Mops/s w_avg=7.877us r_avg=3.689us wall=0.031761s
+[rep 4] thpt=1.552457 Mops/s w_avg=7.972us r_avg=3.271us wall=0.032206s
+[rep 5] thpt=1.572475 Mops/s w_avg=7.829us r_avg=3.257us wall=0.031797s
+[rep 6] thpt=1.527930 Mops/s w_avg=8.117us r_avg=3.323us wall=0.032724s
+[rep 7] thpt=0.350162 Mops/s w_avg=62.201us r_avg=3.263us wall=0.142790s
+[rep 8] thpt=1.573465 Mops/s w_avg=7.854us r_avg=3.231us wall=0.031776s
+[rep 9] thpt=0.349951 Mops/s w_avg=62.168us r_avg=3.228us wall=0.142876s
+[rep 10] thpt=1.575696 Mops/s w_avg=7.910us r_avg=3.256us wall=0.031731s
+[rep 11] thpt=0.349929 Mops/s w_avg=62.164us r_avg=3.225us wall=0.142885s
+[rep 12] TIMEOUT (no YCSB line in docs/iter12A_diagnostic/phase_1_6_postfix_verify/workloada_T4_off_kv512_rep12_h0.log)
+[rep 13] thpt=1.573267 Mops/s w_avg=7.892us r_avg=3.286us wall=0.031781s

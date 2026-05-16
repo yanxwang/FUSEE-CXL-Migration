@@ -1,0 +1,20 @@
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=30216)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=30192)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=30217)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=30218)
+[A:thread] WriteReceiver pid=30192 tid=140061791221440 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=30192 tid=140061782828736 pinned cpu=67 (host_id=0)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:thread] InvalReceiver pid=30192 tid=140061774436032 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=30192 tid=140061766043328 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=30192 tid=140061757650624 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=30192 tid=140061749257920 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+YCSB opt=A cache=0 num_hosts=2 threads=4 threads_eff=4 rep=14 load_ops=50000 load_thpt=237441 trans_ops=50000 trans_wall_max=0.032528 trans_agg_thpt=1537089 w_avg_ns=7912 w_p50_ns=5260 w_p99_ns=20441 r_avg_ns=3305 r_p50_ns=490 r_p99_ns=15956 first_op_ns_max=37235 first_op_ns_avg=16114 ops_to_first_ns_max=163395 ops_to_first_ns_avg=73655 # workloada_optA_t4_cacheoff_rep14
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.042 MB /root/iter12A_perf_14.data (373 samples) ]

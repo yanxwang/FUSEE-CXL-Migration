@@ -1,0 +1,132 @@
+=== Phase 0.C cell 1/3: workloada T=4 cache=off kv=512 (reference, cross-iter) ===
+[repro] cell=workloada_T4_off_kv512 reps=20 out=docs/iter12A_diagnostic/phase_0c_baseline
+[rep 1] thpt=1.323346 Mops/s w_avg=9.087us r_avg=4.004us wall=0.037783s
+[rep 2] thpt=1.320724 Mops/s w_avg=9.152us r_avg=4.025us wall=0.037857s
+[rep 3] TIMEOUT (no YCSB line in docs/iter12A_diagnostic/phase_0c_baseline/workloada_T4_off_kv512_rep3_h0.log)
+[rep 4] thpt=1.439801 Mops/s w_avg=8.444us r_avg=3.710us wall=0.034726s
+[rep 5] thpt=0.005876 Mops/s w_avg=7.783us r_avg=3.526us wall=8.507994s
+[rep 6] thpt=1.537846 Mops/s w_avg=7.881us r_avg=3.239us wall=0.032512s
+[rep 7] thpt=0.005876 Mops/s w_avg=8.011us r_avg=3.323us wall=8.508810s
+[rep 8] thpt=1.537988 Mops/s w_avg=7.889us r_avg=3.247us wall=0.032509s
+[rep 9] thpt=0.349020 Mops/s w_avg=33.032us r_avg=3.257us wall=0.143258s
+[rep 10] thpt=0.005876 Mops/s w_avg=7.865us r_avg=3.239us wall=8.508341s
+[rep 11] thpt=0.005794 Mops/s w_avg=42.380us r_avg=3.180us wall=8.628326s
+[rep 12] thpt=1.538035 Mops/s w_avg=7.927us r_avg=3.277us wall=0.032509s
+[rep 13] TIMEOUT (no YCSB line in docs/iter12A_diagnostic/phase_0c_baseline/workloada_T4_off_kv512_rep13_h0.log)
+[rep 14] thpt=0.005876 Mops/s w_avg=7.862us r_avg=3.204us wall=8.508368s
+[rep 15] thpt=0.005876 Mops/s w_avg=7.840us r_avg=3.229us wall=8.508497s
+[rep 16] thpt=1.526344 Mops/s w_avg=8.026us r_avg=3.315us wall=0.032758s
+[rep 17] thpt=1.534118 Mops/s w_avg=7.994us r_avg=3.331us wall=0.032592s
+[rep 18] thpt=0.005825 Mops/s w_avg=30.868us r_avg=3.200us wall=8.583476s
+[rep 19] thpt=0.005774 Mops/s w_avg=50.094us r_avg=3.217us wall=8.658319s
+[rep 20] thpt=1.401738 Mops/s w_avg=8.707us r_avg=3.454us wall=0.035669s
+[repro] done. summary: docs/iter12A_diagnostic/phase_0c_baseline/workloada_T4_off_kv512_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.037783	1.323346	9.087	4.004
+2	0.037857	1.320724	9.152	4.025
+3	TIMEOUT	0.000000	0.000	0.000
+4	0.034726	1.439801	8.444	3.710
+5	8.507994	0.005876	7.783	3.526
+6	0.032512	1.537846	7.881	3.239
+7	8.508810	0.005876	8.011	3.323
+8	0.032509	1.537988	7.889	3.247
+9	0.143258	0.349020	33.032	3.257
+10	8.508341	0.005876	7.865	3.239
+11	8.628326	0.005794	42.380	3.180
+12	0.032509	1.538035	7.927	3.277
+13	TIMEOUT	0.000000	0.000	0.000
+14	8.508368	0.005876	7.862	3.204
+15	8.508497	0.005876	7.840	3.229
+16	0.032758	1.526344	8.026	3.315
+17	0.032592	1.534118	7.994	3.331
+18	8.583476	0.005825	30.868	3.200
+19	8.658319	0.005774	50.094	3.217
+20	0.035669	1.401738	8.707	3.454
+=== Phase 0.C cell 2/3: workloada T=64 cache=off kv=256 ===
+[repro] cell=workloada_T64_off_kv256 reps=20 out=docs/iter12A_diagnostic/phase_0c_baseline
+[rep 1] thpt=13.217023 Mops/s w_avg=16.899us r_avg=9.703us wall=0.003783s
+[rep 2] thpt=14.188422 Mops/s w_avg=16.021us r_avg=9.283us wall=0.003524s
+[rep 3] thpt=0.095757 Mops/s w_avg=16.647us r_avg=8.623us wall=0.522153s
+[rep 4] thpt=0.002403 Mops/s w_avg=15.215us r_avg=8.707us wall=20.801530s
+[rep 5] thpt=13.612850 Mops/s w_avg=16.834us r_avg=9.839us wall=0.003673s
+[rep 6] thpt=13.698630 Mops/s w_avg=17.119us r_avg=9.830us wall=0.003649s
+[rep 7] thpt=0.095758 Mops/s w_avg=15.241us r_avg=9.101us wall=0.522145s
+[rep 8] thpt=0.002403 Mops/s w_avg=16.763us r_avg=9.339us wall=20.801524s
+[rep 9] thpt=13.709898 Mops/s w_avg=17.978us r_avg=10.364us wall=0.003647s
+[rep 10] thpt=14.013452 Mops/s w_avg=16.914us r_avg=9.924us wall=0.003568s
+[rep 11] thpt=14.005602 Mops/s w_avg=17.548us r_avg=10.027us wall=0.003569s
+[rep 12] thpt=13.861935 Mops/s w_avg=17.003us r_avg=9.592us wall=0.003606s
+[rep 13] thpt=13.854253 Mops/s w_avg=17.471us r_avg=10.256us wall=0.003608s
+[rep 14] thpt=14.384349 Mops/s w_avg=16.668us r_avg=9.700us wall=0.003476s
+[rep 15] thpt=13.531799 Mops/s w_avg=18.356us r_avg=10.226us wall=0.003694s
+[rep 16] thpt=13.679890 Mops/s w_avg=16.684us r_avg=10.142us wall=0.003655s
+[rep 17] thpt=14.585764 Mops/s w_avg=16.582us r_avg=10.158us wall=0.003427s
+[rep 18] thpt=12.315270 Mops/s w_avg=18.077us r_avg=11.218us wall=0.004060s
+[rep 19] thpt=0.095782 Mops/s w_avg=19.157us r_avg=11.566us wall=0.522016s
+[rep 20] thpt=12.843565 Mops/s w_avg=17.043us r_avg=10.129us wall=0.003893s
+[repro] done. summary: docs/iter12A_diagnostic/phase_0c_baseline/workloada_T64_off_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.003783	13.217023	16.899	9.703
+2	0.003524	14.188422	16.021	9.283
+3	0.522153	0.095757	16.647	8.623
+4	20.801530	0.002403	15.215	8.707
+5	0.003673	13.612850	16.834	9.839
+6	0.003649	13.698630	17.119	9.830
+7	0.522145	0.095758	15.241	9.101
+8	20.801524	0.002403	16.763	9.339
+9	0.003647	13.709898	17.978	10.364
+10	0.003568	14.013452	16.914	9.924
+11	0.003569	14.005602	17.548	10.027
+12	0.003606	13.861935	17.003	9.592
+13	0.003608	13.854253	17.471	10.256
+14	0.003476	14.384349	16.668	9.700
+15	0.003694	13.531799	18.356	10.226
+16	0.003655	13.679890	16.684	10.142
+17	0.003427	14.585764	16.582	10.158
+18	0.004060	12.315270	18.077	11.218
+19	0.522016	0.095782	19.157	11.566
+20	0.003893	12.843565	17.043	10.129
+=== Phase 0.C cell 3/3: workloadd T=4 cache=on kv=256 ===
+[repro] cell=workloadd_T4_on_kv256 reps=20 out=docs/iter12A_diagnostic/phase_0c_baseline
+[rep 1] thpt=1.296109 Mops/s w_avg=10.265us r_avg=6.142us wall=0.038576s
+[rep 2] thpt=1.271585 Mops/s w_avg=10.336us r_avg=6.099us wall=0.039320s
+[rep 3] thpt=1.261002 Mops/s w_avg=10.392us r_avg=6.215us wall=0.039650s
+[rep 4] thpt=1.374457 Mops/s w_avg=9.841us r_avg=5.890us wall=0.036377s
+[rep 5] thpt=1.367989 Mops/s w_avg=10.100us r_avg=5.354us wall=0.036550s
+[rep 6] thpt=1.406984 Mops/s w_avg=9.798us r_avg=5.313us wall=0.035537s
+[rep 7] thpt=0.058992 Mops/s w_avg=9.786us r_avg=5.350us wall=0.847572s
+[rep 8] thpt=1.408411 Mops/s w_avg=9.972us r_avg=5.461us wall=0.035500s
+[rep 9] TIMEOUT (no YCSB line in docs/iter12A_diagnostic/phase_0c_baseline/workloadd_T4_on_kv256_rep9_h0.log)
+[rep 10] thpt=1.407816 Mops/s w_avg=9.635us r_avg=5.262us wall=0.035515s
+[rep 11] thpt=1.413028 Mops/s w_avg=9.869us r_avg=5.420us wall=0.035385s
+[rep 12] thpt=1.411313 Mops/s w_avg=9.790us r_avg=5.319us wall=0.035427s
+[rep 13] thpt=1.256312 Mops/s w_avg=10.458us r_avg=6.131us wall=0.039799s
+[rep 14] thpt=1.262339 Mops/s w_avg=10.556us r_avg=6.269us wall=0.039608s
+[rep 15] thpt=0.058959 Mops/s w_avg=9.831us r_avg=5.949us wall=0.848045s
+[rep 16] thpt=1.259287 Mops/s w_avg=10.355us r_avg=6.150us wall=0.039705s
+[rep 17] thpt=1.258653 Mops/s w_avg=10.342us r_avg=6.218us wall=0.039725s
+[rep 18] thpt=1.309860 Mops/s w_avg=9.940us r_avg=6.203us wall=0.038172s
+[rep 19] thpt=0.058991 Mops/s w_avg=9.884us r_avg=5.291us wall=0.847586s
+[rep 20] thpt=1.412030 Mops/s w_avg=9.836us r_avg=5.240us wall=0.035409s
+[repro] done. summary: docs/iter12A_diagnostic/phase_0c_baseline/workloadd_T4_on_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.038576	1.296109	10.265	6.142
+2	0.039320	1.271585	10.336	6.099
+3	0.039650	1.261002	10.392	6.215
+4	0.036377	1.374457	9.841	5.890
+5	0.036550	1.367989	10.100	5.354
+6	0.035537	1.406984	9.798	5.313
+7	0.847572	0.058992	9.786	5.350
+8	0.035500	1.408411	9.972	5.461
+9	TIMEOUT	0.000000	0.000	0.000
+10	0.035515	1.407816	9.635	5.262
+11	0.035385	1.413028	9.869	5.420
+12	0.035427	1.411313	9.790	5.319
+13	0.039799	1.256312	10.458	6.131
+14	0.039608	1.262339	10.556	6.269
+15	0.848045	0.058959	9.831	5.949
+16	0.039705	1.259287	10.355	6.150
+17	0.039725	1.258653	10.342	6.218
+18	0.038172	1.309860	9.940	6.203
+19	0.847586	0.058991	9.884	5.291
+20	0.035409	1.412030	9.836	5.240

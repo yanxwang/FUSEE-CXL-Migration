@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 372  of event 'cycles:P'
+# Event count (approx.): 11237019859
+#
+# Overhead  Command          Shared Object        Symbol                                                                                                                                                                                                                                                                  
+# ........  ...............  ...................  ........................................................................................................................................................................................................................................................................
+#
+    14.18%  protocol_a_ycsb  protocol_a_ycsb      [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          
+            |--12.13%--(anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          0
+            |          std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+            |          0x48fb894853001400
+            |          
+            |--1.37%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()@plt
+            |          0
+            |          std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+            |          0x48fb894853001400
+            |          
+             --0.68%--std::basic_istream<char, std::char_traits<char> >& std::getline<char, std::char_traits<char>, std::allocator<char> >(std::basic_istream<char, std::char_traits<char> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&, char)@plt
+                       0
+                       std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+                       0x48fb894853001400
+
+     9.67%  protocol_a_ycsb  protocol_a_ycsb      [.] main
+            |
+            ---main
+               __libc_start_call_main
+
+     6.11%  protocol_a_ycsb  libc.so.6            [.] __memchr_evex
+            |          
+            |--5.17%--__memchr_evex
+            |          
+             --0.94%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+
+     4.07%  WriteSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+               0x7fffe4ec8400
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb951e90789
+
+     4.06%  InvalSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+
+     3.99%  ReadSender       protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+               0x7fffe4ec8400
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#2}> > >::~_State_impl()
+               0x90ffffb921e90789
+
+     3.84%  WriteReceiver    protocol_a_ycsb      [.] fusee::CxlKvStoreA::write_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::write_receiver_loop()

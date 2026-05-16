@@ -1,0 +1,44 @@
+BEGIN {
+  printf("BPF_START %ld\n", nsecs);
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA19inval_receiver_loopEv {
+  @inval_recv_iters = count();
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA19write_receiver_loopEv {
+  @write_recv_iters = count();
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA18read_receiver_loopEv {
+  @read_recv_iters = count();
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA22send_invalidate_directEjm {
+  @inval_send_calls = count();
+  @inval_t[tid] = nsecs;
+}
+uretprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA22send_invalidate_directEjm /@inval_t[tid]/ {
+  @inval_lat_us = hist((nsecs - @inval_t[tid]) / 1000);
+  delete(@inval_t[tid]);
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA19forward_read_directEjmPvjPj {
+  @fr_t[tid] = nsecs;
+}
+uretprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA19forward_read_directEjmPvjPj /@fr_t[tid]/ {
+  @forward_read_us = hist((nsecs - @fr_t[tid]) / 1000);
+  delete(@fr_t[tid]);
+}
+uprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA20forward_write_directEjmPKvji {
+  @fw_t[tid] = nsecs;
+}
+uretprobe:/root/FUSEE_CXL/build-cxl/tests/protocol_a_ycsb:_ZN5fusee11CxlKvStoreA20forward_write_directEjmPKvji /@fw_t[tid]/ {
+  @forward_write_us = hist((nsecs - @fw_t[tid]) / 1000);
+  delete(@fw_t[tid]);
+}
+interval:s:1 {
+  printf("HEARTBEAT %ld\n", nsecs);
+  print(@inval_recv_iters);
+  print(@write_recv_iters);
+  print(@read_recv_iters);
+  print(@inval_send_calls);
+}
+END {
+  printf("BPF_END %ld\n", nsecs);
+}

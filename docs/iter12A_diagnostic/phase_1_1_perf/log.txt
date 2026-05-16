@@ -1,0 +1,35 @@
+=== Phase 1.1 perf record (fixed shell wrap) — 16 reps on reference cell ===
+[rep 1] cls=WIN thpt=1.4036 samples=385 top=const&)
+[rep 2] cls=WIN thpt=1.4114 samples=379 top=main
+[rep 3] cls=WIN thpt=1.4024 samples=374 top=main
+[rep 4] cls=WIN thpt=1.4024 samples=378 top=main
+[rep 5] cls=WIN thpt=1.3952 samples=387 top=main
+[rep 6] cls=COLLAPSE thpt=0.0058 samples=6K top=fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+[rep 7] cls=COLLAPSE thpt=0.0059 samples=6K top=fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+[rep 8] cls=TIMEOUT thpt=0.000 samples=61K top=fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+[rep 9] cls=COLLAPSE thpt=0.0058 samples=6K top=fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+[rep 10] cls=WIN thpt=1.5369 samples=374 top=const&)
+[rep 11] cls=WIN thpt=1.5367 samples=371 top=main
+[rep 12] cls=WIN thpt=1.5378 samples=373 top=const&)
+[rep 13] cls=WIN thpt=1.5339 samples=372 top=const&)
+[rep 14] cls=WIN thpt=1.5371 samples=373 top=main
+[rep 15] cls=WIN thpt=1.5387 samples=375 top=const&)
+[rep 16] cls=COLLAPSE thpt=0.0058 samples=6K top=fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+[perf] done. summary: docs/iter12A_diagnostic/phase_1_1_perf/workloada_T4_off_kv512_perf_summary.tsv
+rep	class	wall_s	thpt_mops	w_avg_us	r_avg_us	perf_samples	top_func
+1	WIN	0.035622	1.4036	8.695	3.453	385	const&)
+2	WIN	0.035424	1.4114	8.574	3.414	379	main
+3	WIN	0.035652	1.4024	8.704	3.488	374	main
+4	WIN	0.035653	1.4024	8.749	3.460	378	main
+5	WIN	0.035837	1.3952	8.784	3.539	387	main
+6	COLLAPSE	8.593846	0.0058	35.055	3.378	6K	fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+7	COLLAPSE	8.508673	0.0059	8.487	3.392	6K	fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+8	TIMEOUT	NA	0.000	NA	NA	61K	fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+9	COLLAPSE	8.627984	0.0058	42.393	3.247	6K	fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+10	WIN	0.032533	1.5369	7.897	3.314	374	const&)
+11	WIN	0.032537	1.5367	7.905	3.261	371	main
+12	WIN	0.032515	1.5378	7.974	3.301	373	const&)
+13	WIN	0.032595	1.5339	7.883	3.235	372	const&)
+14	WIN	0.032528	1.5371	7.912	3.305	373	main
+15	WIN	0.032493	1.5387	7.842	3.219	375	const&)
+16	COLLAPSE	8.583160	0.0058	30.813	3.239	6K	fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)

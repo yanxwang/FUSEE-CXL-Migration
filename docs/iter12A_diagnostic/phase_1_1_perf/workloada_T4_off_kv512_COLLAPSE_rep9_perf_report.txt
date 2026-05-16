@@ -1,0 +1,57 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'cycles:P'
+# Event count (approx.): 219238958501
+#
+# Overhead  Command          Shared Object        Symbol                                                                                                                                                                                                                                                              
+# ........  ...............  ...................  ....................................................................................................................................................................................................................................................................
+#
+    15.10%  WriteSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+               0x7ffe76ba6240
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb951e90789
+
+    15.10%  InvalSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+
+    15.07%  ReadSender       protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+               0x7ffe76ba6240
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#2}> > >::~_State_impl()
+               0x90ffffb921e90789
+
+    12.74%  ReadReceiver     protocol_a_ycsb      [.] fusee::CxlKvStoreA::read_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::read_receiver_loop()
+
+    12.72%  InvalReceiver    protocol_a_ycsb      [.] fusee::CxlKvStoreA::inval_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::inval_receiver_loop()
+
+    12.52%  WriteReceiver    protocol_a_ycsb      [.] fusee::CxlKvStoreA::write_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::write_receiver_loop()
+
+    12.22%  protocol_a_ycsb  protocol_a_ycsb      [.] fusee::CxlKvStoreA::forward_write_direct(unsigned int, unsigned long, void const*, unsigned int, int)
+            |          
+             --12.20%--fusee::CxlKvStoreA::forward_write_direct(unsigned int, unsigned long, void const*, unsigned int, int)
+                       |          
+                       |--1.74%--0x4e204664da91ac46
+                       |          
+                       |--0.77%--0x684dbe1804be0ad7
+                       |          
+                        --0.52%--0x7f77e55e651e497e
+
+     0.56%  protocol_a_ycsb  protocol_a_ycsb      [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+
+
+#
+# (Tip: To only collect call graph on one event use perf record -e cpu/cpu-cycles,callgraph=1/,branches ; perf report --show-ref-call-graph)
+#

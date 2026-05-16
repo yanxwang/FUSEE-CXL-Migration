@@ -1,0 +1,27 @@
+=== Phase 1.1 bpftrace probe — 12 reps on reference cell ===
+[rep 1] cls=MID thpt=0.9849 w=9.655 r=4.114 inval_recv=1 write_recv=1 read_recv=1 inval_sends=29
+[rep 2] cls=MID thpt=0.9968 w=9.646 r=4.150 inval_recv=1 write_recv=1 read_recv=1 inval_sends=27
+[rep 3] cls=MID thpt=0.9822 w=9.653 r=4.066 inval_recv=1 write_recv=1 read_recv=1 inval_sends=29
+[rep 4] cls=COLLAPSE thpt=0.4347 w=20.449 r=3.991 inval_recv=1 write_recv=1 read_recv=1 inval_sends=27
+[rep 5] cls=WIN thpt=1.0194 w=8.695 r=3.940 inval_recv=1 write_recv=1 read_recv=1 inval_sends=29
+[rep 6] cls=WIN thpt=1.0175 w=8.688 r=3.381 inval_recv=1 write_recv=1 read_recv=1 inval_sends=44
+[rep 7] cls=WIN thpt=1.0181 w=8.613 r=3.397 inval_recv=1 write_recv=1 read_recv=1 inval_sends=42
+[rep 8] cls=WIN thpt=1.0149 w=8.780 r=3.473 inval_recv=1 write_recv=1 read_recv=1 inval_sends=43
+[rep 9] cls=WIN thpt=1.0199 w=8.703 r=3.437 inval_recv=1 write_recv=1 read_recv=1 inval_sends=45
+[rep 10] cls=WIN thpt=1.0167 w=8.678 r=3.477 inval_recv=1 write_recv=1 read_recv=1 inval_sends=46
+[rep 11] cls=WIN thpt=1.0216 w=8.631 r=3.407 inval_recv=1 write_recv=1 read_recv=1 inval_sends=43
+[rep 12] cls=WIN thpt=1.0200 w=8.747 r=3.461 inval_recv=1 write_recv=1 read_recv=1 inval_sends=44
+[bpftrace] done. summary: docs/iter12A_diagnostic/phase_1_1_bpftrace/workloada_T4_off_kv512_bpftrace_summary.tsv
+rep	class	wall_s	thpt_mops	w_avg_us	r_avg_us	inval_recv	write_recv	read_recv	inval_sends
+1	MID	0.050767	0.9849	9.655	4.114	1	1	1	29
+2	MID	0.050160	0.9968	9.646	4.150	1	1	1	27
+3	MID	0.050906	0.9822	9.653	4.066	1	1	1	29
+4	COLLAPSE	0.115021	0.4347	20.449	3.991	1	1	1	27
+5	WIN	0.049047	1.0194	8.695	3.940	1	1	1	29
+6	WIN	0.049140	1.0175	8.688	3.381	1	1	1	44
+7	WIN	0.049111	1.0181	8.613	3.397	1	1	1	42
+8	WIN	0.049264	1.0149	8.780	3.473	1	1	1	43
+9	WIN	0.049022	1.0199	8.703	3.437	1	1	1	45
+10	WIN	0.049178	1.0167	8.678	3.477	1	1	1	46
+11	WIN	0.048942	1.0216	8.631	3.407	1	1	1	43
+12	WIN	0.049021	1.0200	8.747	3.461	1	1	1	44

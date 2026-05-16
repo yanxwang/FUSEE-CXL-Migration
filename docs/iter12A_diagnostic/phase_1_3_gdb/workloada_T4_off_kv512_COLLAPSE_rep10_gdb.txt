@@ -1,0 +1,418 @@
+GDB_SAMPLING_AT=3.0 pids=33617
+33618
+33619
+33620
+=== PID 33617 (at=3.0) ===
+protocol_a_ycsb
+State:	R (running)
+Tgid:	33617
+Pid:	33617
+PPid:	33616
+Threads:	7
+--- bt:
+[New LWP 33626]
+[New LWP 33625]
+[New LWP 33624]
+[New LWP 33623]
+[New LWP 33622]
+[New LWP 33621]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00005606f9759cf4 in fusee::(anonymous namespace)::generic_spin_wait<fusee::WriteEntry> (e=0x7f113e086040, op_id=72057594037928222, out_status=<synthetic pointer>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:74
+74	    if (resp == op_id) {
+
+Thread 7 (Thread 0x7f1133eff6c0 (LWP 33621) "WriteReceiver"):
+#0  fusee::CxlKvStoreA::write_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1632
+#1  0x00005606f975be2b in operator() (__closure=0x5607091f3558) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:395
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f3550) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f11336fe6c0 (LWP 33622) "ReadReceiver"):
+#0  fusee::CxlKvStoreA::read_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1669
+#1  0x00005606f975c15b in operator() (__closure=0x5607091f1628) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:428
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1620) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f1132efd6c0 (LWP 33623) "InvalReceiver"):
+#0  fusee::CxlKvStoreA::inval_receiver_loop (this=0x7ffcf5b6b300) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1333
+#1  0x00005606f975ae9b in operator() (__closure=0x5607091f1798) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1300
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1790) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f11326fc6c0 (LWP 33624) "WriteSender"):
+#0  0x00005606f975d282 in fusee::CxlKvStoreA::sender_loop_dispatch<0> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:981
+#1  0x00005606f975c852 in fusee::CxlKvStoreA::write_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1041
+#2  operator() (__closure=0x5607091f1908) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1067
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1900) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7f1131efb6c0 (LWP 33625) "ReadSender"):
+#0  0x00005606f975d77a in fusee::CxlKvStoreA::sender_loop_dispatch<1> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:992
+#1  0x00005606f975c8f2 in fusee::CxlKvStoreA::read_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1044
+#2  operator() (__closure=0x5607091f1a78) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1076
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1a70) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f11316fa6c0 (LWP 33626) "InvalSender"):
+#0  0x00005606f975dbba in fusee::CxlKvStoreA::sender_loop_dispatch<2> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:992
+#1  0x00005606f975c992 in fusee::CxlKvStoreA::inval_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1047
+#2  operator() (__closure=0x5607091f1be8) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1085
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1be0) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f113f04f780 (LWP 33617) "protocol_a_ycsb"):
+#0  0x00005606f9759cf4 in fusee::(anonymous namespace)::generic_spin_wait<fusee::WriteEntry> (e=0x7f113e086040, op_id=72057594037928222, out_status=<synthetic pointer>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:74
+#1  fusee::CxlKvStoreA::forward_write_direct (this=<optimized out>, owner=1, key=<optimized out>, value=<optimized out>, value_len=<optimized out>, op_kind=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1182
+#2  0x00005606f9757c93 in main ()
+[Inferior 1 (process 33617) detached]
+=== PID 33618 (at=3.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33618
+Pid:	33618
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33618 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33619 (at=3.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33619
+Pid:	33619
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33619 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33620 (at=3.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33620
+Pid:	33620
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33620 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+--- END SAMPLE at=3.0 ---
+GDB_SAMPLING_AT=5.0 pids=33617
+33618
+33619
+33620
+=== PID 33617 (at=5.0) ===
+protocol_a_ycsb
+State:	R (running)
+Tgid:	33617
+Pid:	33617
+PPid:	33616
+Threads:	7
+--- bt:
+[New LWP 33626]
+[New LWP 33625]
+[New LWP 33624]
+[New LWP 33623]
+[New LWP 33622]
+[New LWP 33621]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+std::__atomic_base<unsigned long>::load (this=0x7f113e088900, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+499		__glibcxx_assert(__b != memory_order_acq_rel);
+
+Thread 7 (Thread 0x7f1133eff6c0 (LWP 33621) "WriteReceiver"):
+#0  std::__atomic_base<unsigned long>::load (this=0x7f113e09d2c0, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+#1  fusee::CxlKvStoreA::write_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1631
+#2  0x00005606f975be2b in operator() (__closure=0x5607091f3558) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:395
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f3550) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f11336fe6c0 (LWP 33622) "ReadReceiver"):
+#0  fusee::CxlKvStoreA::read_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1669
+#1  0x00005606f975c15b in operator() (__closure=0x5607091f1628) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:428
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1620) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f1132efd6c0 (LWP 33623) "InvalReceiver"):
+#0  fusee::CxlKvStoreA::inval_receiver_loop (this=0x7ffcf5b6b300) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1333
+#1  0x00005606f975ae9b in operator() (__closure=0x5607091f1798) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1300
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1790) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f11326fc6c0 (LWP 33624) "WriteSender"):
+#0  0x00005606f975d245 in fusee::CxlKvStoreA::sender_loop_dispatch<0> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:974
+#1  0x00005606f975c852 in fusee::CxlKvStoreA::write_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1041
+#2  operator() (__closure=0x5607091f1908) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1067
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1900) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7f1131efb6c0 (LWP 33625) "ReadSender"):
+#0  0x00005606f975d675 in std::__atomic_base<bool>::load (this=0x7ffcf5b6b391, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+#1  std::atomic<bool>::load (this=0x7ffcf5b6b391, __m=std::memory_order_acquire) at /usr/include/c++/14/atomic:117
+#2  fusee::CxlKvStoreA::sender_loop_dispatch<1> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:974
+#3  0x00005606f975c8f2 in fusee::CxlKvStoreA::read_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1044
+#4  operator() (__closure=0x5607091f1a78) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1076
+#5  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#6  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#7  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:301
+#8  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:308
+#9  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1a70) at /usr/include/c++/14/bits/std_thread.h:253
+#10 0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#11 0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#12 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f11316fa6c0 (LWP 33626) "InvalSender"):
+#0  0x00005606f975dab5 in std::__atomic_base<bool>::load (this=0x7ffcf5b6b392, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+#1  std::atomic<bool>::load (this=0x7ffcf5b6b392, __m=std::memory_order_acquire) at /usr/include/c++/14/atomic:117
+#2  fusee::CxlKvStoreA::sender_loop_dispatch<2> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:974
+#3  0x00005606f975c992 in fusee::CxlKvStoreA::inval_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1047
+#4  operator() (__closure=0x5607091f1be8) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1085
+#5  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#6  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#7  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:301
+#8  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:308
+#9  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1be0) at /usr/include/c++/14/bits/std_thread.h:253
+#10 0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#11 0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#12 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f113f04f780 (LWP 33617) "protocol_a_ycsb"):
+#0  std::__atomic_base<unsigned long>::load (this=0x7f113e088900, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+#1  fusee::(anonymous namespace)::generic_spin_wait<fusee::WriteEntry> (e=0x7f113e0888c0, op_id=72057594037928559, out_status=<synthetic pointer>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:73
+#2  fusee::CxlKvStoreA::forward_write_direct (this=<optimized out>, owner=1, key=<optimized out>, value=<optimized out>, value_len=<optimized out>, op_kind=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1182
+#3  0x00005606f9757c93 in main ()
+[Inferior 1 (process 33617) detached]
+=== PID 33618 (at=5.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33618
+Pid:	33618
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33618 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33619 (at=5.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33619
+Pid:	33619
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33619 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33620 (at=5.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33620
+Pid:	33620
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33620 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+--- END SAMPLE at=5.0 ---
+GDB_SAMPLING_AT=7.0 pids=33617
+33618
+33619
+33620
+=== PID 33617 (at=7.0) ===
+protocol_a_ycsb
+State:	R (running)
+Tgid:	33617
+Pid:	33617
+PPid:	33616
+Threads:	7
+--- bt:
+[New LWP 33626]
+[New LWP 33625]
+[New LWP 33624]
+[New LWP 33623]
+[New LWP 33622]
+[New LWP 33621]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00005606f9759cf4 in fusee::(anonymous namespace)::generic_spin_wait<fusee::WriteEntry> (e=0x7f113e08b8c0, op_id=72057594037928911, out_status=<synthetic pointer>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:74
+74	    if (resp == op_id) {
+
+Thread 7 (Thread 0x7f1133eff6c0 (LWP 33621) "WriteReceiver"):
+#0  std::__atomic_base<unsigned long>::load (this=0x7f113e09d2c0, __m=std::memory_order_acquire) at /usr/include/c++/14/bits/atomic_base.h:499
+#1  fusee::CxlKvStoreA::write_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1631
+#2  0x00005606f975be2b in operator() (__closure=0x5607091f3558) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:395
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f3558) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f3550) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f11336fe6c0 (LWP 33622) "ReadReceiver"):
+#0  fusee::CxlKvStoreA::read_receiver_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1669
+#1  0x00005606f975c15b in operator() (__closure=0x5607091f1628) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:428
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1628) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1620) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f1132efd6c0 (LWP 33623) "InvalReceiver"):
+#0  fusee::CxlKvStoreA::inval_receiver_loop (this=0x7ffcf5b6b300) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1333
+#1  0x00005606f975ae9b in operator() (__closure=0x5607091f1798) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1300
+#2  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#3  std::__invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#4  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:301
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > >::operator() (this=0x5607091f1798) at /usr/include/c++/14/bits/std_thread.h:308
+#6  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1790) at /usr/include/c++/14/bits/std_thread.h:253
+#7  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#8  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f11326fc6c0 (LWP 33624) "WriteSender"):
+#0  0x00005606f975d34a in fusee::CxlKvStoreA::sender_loop_dispatch<0> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:992
+#1  0x00005606f975c852 in fusee::CxlKvStoreA::write_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1041
+#2  operator() (__closure=0x5607091f1908) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1067
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1908) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1900) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7f1131efb6c0 (LWP 33625) "ReadSender"):
+#0  0x00005606f975d77a in fusee::CxlKvStoreA::sender_loop_dispatch<1> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:992
+#1  0x00005606f975c8f2 in fusee::CxlKvStoreA::read_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1044
+#2  operator() (__closure=0x5607091f1a78) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1076
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1a78) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1a70) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f11316fa6c0 (LWP 33626) "InvalSender"):
+#0  0x00005606f975dbba in fusee::CxlKvStoreA::sender_loop_dispatch<2> (this=0x7ffcf5b6b300, stop_flag=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:992
+#1  0x00005606f975c992 in fusee::CxlKvStoreA::inval_sender_loop (this=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1047
+#2  operator() (__closure=0x5607091f1be8) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1085
+#3  std::__invoke_impl<void, fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__f=...) at /usr/include/c++/14/bits/invoke.h:61
+#4  std::__invoke<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > (__fn=...) at /usr/include/c++/14/bits/invoke.h:96
+#5  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::_M_invoke<0> (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:301
+#6  std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > >::operator() (this=0x5607091f1be8) at /usr/include/c++/14/bits/std_thread.h:308
+#7  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::<lambda()> > > >::_M_run(void) (this=0x5607091f1be0) at /usr/include/c++/14/bits/std_thread.h:253
+#8  0x00007f113f447224 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#9  0x00007f113f1d6b7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f113f2547b8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f113f04f780 (LWP 33617) "protocol_a_ycsb"):
+#0  0x00005606f9759cf4 in fusee::(anonymous namespace)::generic_spin_wait<fusee::WriteEntry> (e=0x7f113e08b8c0, op_id=72057594037928911, out_status=<synthetic pointer>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:74
+#1  fusee::CxlKvStoreA::forward_write_direct (this=<optimized out>, owner=1, key=<optimized out>, value=<optimized out>, value_len=<optimized out>, op_kind=<optimized out>) at /root/FUSEE_CXL/src/cxl_kv_ops_A.cc:1182
+#2  0x00005606f9757c93 in main ()
+[Inferior 1 (process 33617) detached]
+=== PID 33618 (at=7.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33618
+Pid:	33618
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33618 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33619 (at=7.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33619
+Pid:	33619
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33619 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+=== PID 33620 (at=7.0) ===
+protocol_a_ycsb
+State:	Z (zombie)
+Tgid:	33620
+Pid:	33620
+PPid:	33617
+Threads:	1
+--- bt:
+warning: process 33620 is a zombie - the process has already terminated
+ptrace: Operation not permitted.
+The program is not being run.
+--- END SAMPLE at=7.0 ---

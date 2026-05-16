@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 387  of event 'cycles:P'
+# Event count (approx.): 11451394679
+#
+# Overhead  Command          Shared Object        Symbol                                                                                                                                                                                                                                                              
+# ........  ...............  ...................  ....................................................................................................................................................................................................................................................................
+#
+    10.62%  protocol_a_ycsb  protocol_a_ycsb      [.] main
+            |
+            ---main
+               __libc_start_call_main
+
+     6.70%  protocol_a_ycsb  libc.so.6            [.] __memchr_evex
+            |          
+             --6.03%--__memchr_evex
+
+     6.28%  protocol_a_ycsb  protocol_a_ycsb      [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          
+             --5.66%--(anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                       0
+                       std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+                       0x48fb894853001400
+
+     4.32%  InvalSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+
+     4.26%  ReadSender       protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+               0x7ffc4291ae40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#2}> > >::~_State_impl()
+               0x90ffffb921e90789
+
+     4.25%  WriteSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+               0x7ffc4291ae40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb951e90789
+
+     4.01%  protocol_a_ycsb  libstdc++.so.6.0.33  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+            |          
+            |--2.01%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+            |          
+             --2.00%--memchr@plt
+
+     3.26%  protocol_a_ycsb  protocol_a_ycsb      [.] fusee::cache_pool_insert(fusee::KvCachePool*, unsigned long, unsigned char const*, unsigned int)
+            |
+            ---fusee::cache_pool_insert(fusee::KvCachePool*, unsigned long, unsigned char const*, unsigned int)
+               |          
+               |--2.65%--0
+               |          
+                --0.60%--0x1
+
+     3.03%  ReadReceiver     protocol_a_ycsb      [.] fusee::CxlKvStoreA::read_receiver_loop()

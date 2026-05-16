@@ -1,0 +1,21 @@
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=29825)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=29824)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=29826)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=29827)
+[A:thread] WriteReceiver pid=29824 tid=140261180044992 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=29824 tid=140261171652288 pinned cpu=67 (host_id=0)
+[A:thread] InvalReceiver pid=29824 tid=140261163259584 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=29824 tid=140261154866880 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=29824 tid=140261146474176 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=29824 tid=140261138081472 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A] inval timeout #1 (key=5f418ebce277232f tpos=0)
+YCSB opt=A cache=0 num_hosts=2 threads=4 threads_eff=4 rep=9 load_ops=50000 load_thpt=237958 trans_ops=50000 trans_wall_max=8.627984 trans_agg_thpt=5795 w_avg_ns=42393 w_p50_ns=5325 w_p99_ns=5010268 r_avg_ns=3247 r_p50_ns=519 r_p99_ns=15074 first_op_ns_max=50112 first_op_ns_avg=18077 ops_to_first_ns_max=454786 ops_to_first_ns_avg=122842 # workloada_optA_t4_cacheoff_rep9
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.451 MB /root/iter12A_perf_9.data (6329 samples) ]

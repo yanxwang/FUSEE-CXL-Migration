@@ -1,0 +1,17 @@
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=35215)
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=35232)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=35233)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=35234)
+[A:thread] WriteReceiver pid=35215 tid=140288474478272 pinned cpu=65 (host_id=0)
+[A:thread] ReadReceiver pid=35215 tid=140288466085568 pinned cpu=67 (host_id=0)
+[A:thread] InvalReceiver pid=35215 tid=140288457692864 pinned cpu=69 (host_id=0)
+[A:thread] WriteSender pid=35215 tid=140288449300160 pinned cpu=64 (host_id=0)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] InvalSender pid=35215 tid=140288432514752 pinned cpu=68 (host_id=0)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=0
+[A:thread] ReadSender pid=35215 tid=140288440907456 pinned cpu=66 (host_id=0)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=0
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)

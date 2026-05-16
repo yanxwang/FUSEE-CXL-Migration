@@ -1,0 +1,57 @@
+=== Phase 1.3 gdb (multi-sample at 3/5/7s) — 16 reps ===
+[rep 1] cls=WIN thpt=1.5366 pids_captured=0
+0 distinct_top_funcs=0
+[rep 2] cls=WIN thpt=1.5402 pids_captured=0
+0 distinct_top_funcs=0
+[rep 3] cls=WIN thpt=1.5407 pids_captured=0
+0 distinct_top_funcs=0
+[rep 4] cls=WIN thpt=1.5354 pids_captured=0
+0 distinct_top_funcs=0
+[rep 5] cls=MID thpt=0.3489 pids_captured=0
+0 distinct_top_funcs=0
+[rep 6] cls=WIN thpt=1.5400 pids_captured=0
+0 distinct_top_funcs=0
+[rep 7] cls=WIN thpt=1.4205 pids_captured=0
+0 distinct_top_funcs=0
+[rep 8] cls=WIN thpt=1.4246 pids_captured=0
+0 distinct_top_funcs=0
+[rep 9] cls=WIN thpt=1.4096 pids_captured=0
+0 distinct_top_funcs=0
+[rep 10] cls=COLLAPSE thpt=0.0054 pids_captured=12 distinct_top_funcs=8
+[rep 11] cls=COLLAPSE thpt=0.0054 pids_captured=12 distinct_top_funcs=5
+[rep 12] cls=WIN thpt=1.5369 pids_captured=0
+0 distinct_top_funcs=0
+[rep 13] cls=TIMEOUT thpt=0.000 pids_captured=12 distinct_top_funcs=5
+[rep 14] cls=TIMEOUT thpt=0.000 pids_captured=12 distinct_top_funcs=5
+[rep 15] cls=TIMEOUT thpt=0.000 pids_captured=12 distinct_top_funcs=5
+[rep 16] cls=WIN thpt=1.4610 pids_captured=0
+0 distinct_top_funcs=0
+[gdb] done. summary: docs/iter12A_diagnostic/phase_1_3_gdb/workloada_T4_off_kv512_gdb_summary.tsv
+rep	class	wall_s	thpt_mops	worker_pids	distinct_top_funcs
+1	WIN	0.032540	1.5366	0
+0	0
+2	WIN	0.032463	1.5402	0
+0	0
+3	WIN	0.032452	1.5407	0
+0	0
+4	WIN	0.032564	1.5354	0
+0	0
+5	MID	0.143309	0.3489	0
+0	0
+6	WIN	0.032466	1.5400	0
+0	0
+7	WIN	0.035198	1.4205	0
+0	0
+8	WIN	0.035096	1.4246	0
+0	0
+9	WIN	0.035471	1.4096	0
+0	0
+10	COLLAPSE	9.275382	0.0054	12	8
+11	COLLAPSE	9.178214	0.0054	12	5
+12	WIN	0.032534	1.5369	0
+0	0
+13	TIMEOUT	NA	0.000	12	5
+14	TIMEOUT	NA	0.000	12	5
+15	TIMEOUT	NA	0.000	12	5
+16	WIN	0.034221	1.4610	0
+0	0

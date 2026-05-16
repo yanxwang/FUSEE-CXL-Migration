@@ -1,0 +1,66 @@
+Attaching 12 probes...
+BPF_START 5515806721839
+HEARTBEAT 5516806946108
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+HEARTBEAT 5517806882032
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+HEARTBEAT 5518806882860
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+/root/iter12A_p1_1_probe.bt:32:23-56: WARNING: File exists
+Additional Info - helper: map_update_elem, retcode: -17
+  @forward_write_us = hist((nsecs - @fw_t[tid]) / 1000);
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/iter12A_p1_1_probe.bt:32:23-56: WARNING: File exists
+Additional Info - helper: map_update_elem, retcode: -17
+  @forward_write_us = hist((nsecs - @fw_t[tid]) / 1000);
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/root/iter12A_p1_1_probe.bt:32:23-56: WARNING: File exists
+Additional Info - helper: map_update_elem, retcode: -17
+  @forward_write_us = hist((nsecs - @fw_t[tid]) / 1000);
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HEARTBEAT 5519806900393
+@inval_recv_iters: 1
+@write_recv_iters: 1
+@read_recv_iters: 1
+@inval_send_calls: 29
+BPF_END 5521924494222
+
+
+@forward_read_us:
+[8, 16)             1317 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)              11 |                                                    |
+[32, 64)               1 |                                                    |
+[64, 128)              1 |                                                    |
+[128, 256)             0 |                                                    |
+[256, 512)             1 |                                                    |
+
+@forward_write_us:
+[2, 4)              5076 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)                 2 |                                                    |
+[8, 16)             1559 |@@@@@@@@@@@@@@@                                     |
+[16, 32)             138 |@                                                   |
+[32, 64)               1 |                                                    |
+[64, 128)              0 |                                                    |
+[128, 256)             0 |                                                    |
+[256, 512)             1 |                                                    |
+
+
+
+@inval_lat_us:
+[4, 8)                 5 |@@@@@@@@@@                                          |
+[8, 16)               24 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@inval_recv_iters: 1
+@inval_send_calls: 29
+
+@read_recv_iters: 1
+@write_recv_iters: 1

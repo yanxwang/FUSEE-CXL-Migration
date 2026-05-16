@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 374  of event 'cycles:P'
+# Event count (approx.): 11300412587
+#
+# Overhead  Command          Shared Object        Symbol                                                                                                                                                                                                                                                              
+# ........  ...............  ...................  ....................................................................................................................................................................................................................................................................
+#
+    10.93%  protocol_a_ycsb  protocol_a_ycsb      [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          
+            |--9.83%--(anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          0
+            |          std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+            |          0x48fb894853001400
+            |          
+             --1.02%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()@plt
+                       0
+                       std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+                       0x48fb894853001400
+
+    10.00%  protocol_a_ycsb  protocol_a_ycsb      [.] main
+            |
+            ---main
+               __libc_start_call_main
+
+     6.25%  protocol_a_ycsb  libc.so.6            [.] __memchr_evex
+            |          
+            |--4.40%--__memchr_evex
+            |          
+             --1.17%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+
+     4.67%  protocol_a_ycsb  [kernel.kallsyms]    [k] __lock_acquire
+            |          
+             --4.33%--__lock_acquire
+                       lock_acquire
+                       |          
+                       |--1.36%--get_mem_cgroup_from_mm
+                       |          __mem_cgroup_charge
+                       |          shmem_alloc_and_add_folio
+                       |          shmem_get_folio_gfp
+                       |          shmem_fault
+                       |          __do_fault
+                       |          do_fault
+                       |          __handle_mm_fault
+                       |          handle_mm_fault
+                       |          do_user_addr_fault
+                       |          exc_page_fault
+                       |          asm_exc_page_fault
+                       |          |          
+                       |          |--0.68%--pthread_spin_unlock@@GLIBC_2.34
+                       |          |          0
+                       |          |          
+                       |           --0.68%--fusee::cache_pool_init(fusee::KvCachePool*, void*, unsigned int)
+                       |                     0
+                       |          
+                        --0.68%--seqcount_lockdep_reader_access.constprop.0
+                                  ktime_get_coarse_real_ts64_mg

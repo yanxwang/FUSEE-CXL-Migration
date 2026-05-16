@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 371  of event 'cycles:P'
+# Event count (approx.): 11271153557
+#
+# Overhead  Command          Shared Object        Symbol                                                                                                                                                                                                                                                              
+# ........  ...............  ...................  ....................................................................................................................................................................................................................................................................
+#
+     9.48%  protocol_a_ycsb  protocol_a_ycsb      [.] main
+            |
+            ---main
+               __libc_start_call_main
+
+     9.46%  protocol_a_ycsb  protocol_a_ycsb      [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          
+             --8.78%--(anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                       0
+                       std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+                       0x48fb894853001400
+
+     7.66%  protocol_a_ycsb  libc.so.6            [.] __memchr_evex
+            |          
+            |--5.28%--__memchr_evex
+            |          
+            |--1.36%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+            |          
+             --1.02%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_not_of(char const*, unsigned long, unsigned long) const
+
+     4.26%  protocol_a_ycsb  libstdc++.so.6.0.33  [.] std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+            |          
+             --3.87%--std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_first_of(char const*, unsigned long, unsigned long) const
+
+     4.25%  WriteSender      protocol_a_ycsb      [.] void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+               0x7ffdbbbed400
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb951e90789
+
+     4.08%  protocol_a_ycsb  [kernel.kallsyms]    [k] __lock_acquire
+            |
+            ---__lock_acquire
+               lock_acquire
+               |          
+               |--0.68%--get_mem_cgroup_from_mm
+               |          __mem_cgroup_charge
+               |          shmem_alloc_and_add_folio
+               |          shmem_get_folio_gfp
+               |          shmem_fault
+               |          __do_fault
+               |          do_fault
+               |          __handle_mm_fault
+               |          handle_mm_fault
+               |          do_user_addr_fault
+               |          exc_page_fault
+               |          asm_exc_page_fault
+               |          

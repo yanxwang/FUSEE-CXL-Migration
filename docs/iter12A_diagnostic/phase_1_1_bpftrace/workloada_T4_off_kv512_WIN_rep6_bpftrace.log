@@ -1,0 +1,49 @@
+Attaching 12 probes...
+BPF_START 5555237835397
+HEARTBEAT 5556238047963
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+HEARTBEAT 5557238046502
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+HEARTBEAT 5558238012728
+@inval_recv_iters: 0
+@write_recv_iters: 0
+@read_recv_iters: 0
+@inval_send_calls: 0
+HEARTBEAT 5559238011637
+@inval_recv_iters: 1
+@write_recv_iters: 1
+@read_recv_iters: 1
+@inval_send_calls: 44
+BPF_END 5561384483968
+
+
+@forward_read_us:
+[8, 16)             1612 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[16, 32)               3 |                                                    |
+[32, 64)               1 |                                                    |
+
+@forward_write_us:
+[2, 4)              5079 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[4, 8)                 2 |                                                    |
+[8, 16)             1693 |@@@@@@@@@@@@@@@@@                                   |
+[16, 32)               1 |                                                    |
+[32, 64)               3 |                                                    |
+[64, 128)              2 |                                                    |
+
+
+
+@inval_lat_us:
+[4, 8)                13 |@@@@@@@@@@@@@@@@@@@@@                               |
+[8, 16)               31 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@inval_recv_iters: 1
+@inval_send_calls: 44
+
+@read_recv_iters: 1
+@write_recv_iters: 1

@@ -1,0 +1,44 @@
+=== Phase 1.6 v2: 5ms timeout + 4096-iter receiver budget — 20 reps (relaunch) ===
+[repro] cell=workloada_T4_off_kv512 reps=20 out=docs/iter12A_diagnostic/phase_1_6_postfix_verify_v2
+[rep 1] thpt=0.424805 Mops/s w_avg=32.979us r_avg=3.235us wall=0.117701s
+[rep 2] thpt=1.572376 Mops/s w_avg=7.972us r_avg=3.315us wall=0.031798s
+[rep 3] thpt=0.350668 Mops/s w_avg=33.096us r_avg=3.149us wall=0.142584s
+[rep 4] thpt=0.350385 Mops/s w_avg=33.122us r_avg=3.214us wall=0.142699s
+[rep 5] thpt=1.570746 Mops/s w_avg=7.891us r_avg=3.283us wall=0.031831s
+[rep 6] thpt=1.566072 Mops/s w_avg=7.819us r_avg=3.298us wall=0.031927s
+[rep 7] thpt=0.005876 Mops/s w_avg=7.849us r_avg=3.238us wall=8.508063s
+[rep 8] thpt=1.564259 Mops/s w_avg=7.856us r_avg=3.267us wall=0.031963s
+[rep 9] thpt=1.570845 Mops/s w_avg=7.819us r_avg=3.260us wall=0.031829s
+[rep 10] thpt=1.573118 Mops/s w_avg=7.863us r_avg=3.253us wall=0.031784s
+[rep 11] thpt=1.549618 Mops/s w_avg=8.061us r_avg=3.347us wall=0.032266s
+[rep 12] thpt=1.569908 Mops/s w_avg=7.851us r_avg=3.244us wall=0.031849s
+[rep 13] thpt=1.564749 Mops/s w_avg=7.852us r_avg=3.270us wall=0.031954s
+[rep 14] thpt=1.563281 Mops/s w_avg=7.903us r_avg=3.250us wall=0.031984s
+[rep 15] thpt=1.569612 Mops/s w_avg=7.908us r_avg=3.330us wall=0.031855s
+[rep 16] thpt=1.556032 Mops/s w_avg=7.939us r_avg=3.280us wall=0.032132s
+[rep 17] thpt=1.567054 Mops/s w_avg=7.921us r_avg=3.225us wall=0.031907s
+[rep 18] thpt=0.350451 Mops/s w_avg=33.035us r_avg=3.185us wall=0.142672s
+[rep 19] thpt=1.566366 Mops/s w_avg=7.809us r_avg=3.224us wall=0.031920s
+[rep 20] thpt=1.573415 Mops/s w_avg=7.843us r_avg=3.227us wall=0.031778s
+[repro] done. summary: docs/iter12A_diagnostic/phase_1_6_postfix_verify_v2/workloada_T4_off_kv512_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.117701	0.424805	32.979	3.235
+2	0.031798	1.572376	7.972	3.315
+3	0.142584	0.350668	33.096	3.149
+4	0.142699	0.350385	33.122	3.214
+5	0.031831	1.570746	7.891	3.283
+6	0.031927	1.566072	7.819	3.298
+7	8.508063	0.005876	7.849	3.238
+8	0.031963	1.564259	7.856	3.267
+9	0.031829	1.570845	7.819	3.260
+10	0.031784	1.573118	7.863	3.253
+11	0.032266	1.549618	8.061	3.347
+12	0.031849	1.569908	7.851	3.244
+13	0.031954	1.564749	7.852	3.270
+14	0.031984	1.563281	7.903	3.250
+15	0.031855	1.569612	7.908	3.330
+16	0.032132	1.556032	7.939	3.280
+17	0.031907	1.567054	7.921	3.225
+18	0.142672	0.350451	33.035	3.185
+19	0.031920	1.566366	7.809	3.224
+20	0.031778	1.573415	7.843	3.227
