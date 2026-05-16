@@ -1,0 +1,13 @@
+[repro] cell=workloadf_T64_on_kv512 reps=5 out=docs/iter12A_p1_7_5rep_verify/cell_workloadf_T64_on_kv512
+[rep 1] thpt=13.119916 Mops/s w_avg=17.329us r_avg=9.726us wall=0.003810s
+[rep 2] thpt=0.124306 Mops/s w_avg=16.401us r_avg=8.928us wall=0.402233s
+[rep 3] thpt=6.253126 Mops/s w_avg=30.679us r_avg=8.250us wall=0.007995s
+[rep 4] thpt=0.124308 Mops/s w_avg=16.535us r_avg=9.197us wall=0.402226s
+[rep 5] thpt=12.275963 Mops/s w_avg=16.755us r_avg=8.777us wall=0.004072s
+[repro] done. summary: docs/iter12A_p1_7_5rep_verify/cell_workloadf_T64_on_kv512/workloadf_T64_on_kv512_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.003810	13.119916	17.329	9.726
+2	0.402233	0.124306	16.401	8.928
+3	0.007995	6.253126	30.679	8.250
+4	0.402226	0.124308	16.535	9.197
+5	0.004072	12.275963	16.755	8.777

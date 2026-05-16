@@ -1,0 +1,1 @@
+YCSB opt=A cache=1 num_hosts=2 threads=4 threads_eff=4 rep=1 load_ops=10000 load_thpt=213749 trans_ops=10000 trans_wall_max=0.006968 trans_agg_thpt=1435132 w_avg_ns=12001 w_p50_ns=13651 w_p99_ns=23834 r_avg_ns=5511 r_p50_ns=7161 r_p99_ns=17327 first_op_ns_max=87848 first_op_ns_avg=27090 ops_to_first_ns_max=381228 ops_to_first_ns_avg=121347 # workloadf_optA_t4_cacheon_rep1

@@ -63,6 +63,13 @@ inline uint8_t key_fingerprint(uint64_t key) {
 // iter-8A Phase 5 timeout cap kept (5 ms): empirical 500× healthy p99
 // budget — guarantees a runaway ring stall doesn't balloon trans_wall
 // per-cell to tens of seconds.
+//
+// iter-12A bimodal fix: kBudgetUs kept at 5 ms. Empirical: bumping to
+// 50 ms made the rare pathological-gap case 10× WORSE in wall time
+// (84 s vs 8.5 s) without reducing the timeout-rate fraction. The
+// fix that actually helps is the receiver-side gap-tolerance budget
+// at cxl_kv_ops_A.cc:1340 / 1638 / 1675 (set to ~2.8 ms to match
+// 5 ms worker timeout with headroom).
 template <typename Entry>
 inline int generic_spin_wait(Entry *e, uint64_t op_id, int *out_status) {
   const uint64_t kBudgetUs = 5000;
@@ -1337,7 +1344,21 @@ void CxlKvStoreA::inval_receiver_loop() {
         flush_line((void *)e);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
-        if (op_id == 0) break;
+        // iter-12A bimodal fix: gap-tolerance budget before bailing.
+        // The producer just did fetch_add(tail) on this ring; if it
+        // hasn't yet written req_op_id, that's a brief publish gap
+        // (CPU 0 OS jitter, CXL store visibility window). Spinning in
+        // place is far cheaper than letting the producer's
+        // generic_spin_wait time out on its side.
+        if (op_id == 0) {
+          for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
+            __builtin_ia32_pause();
+            flush_line((void *)e);
+            full_fence();
+            op_id = e->req_op_id.load(std::memory_order_acquire);
+          }
+          if (op_id == 0) break;
+        }
         PROBE_OP("I4", op_id);
         cache_pool_set_stale(cache_, e->key);
         PROBE_OP("I5", op_id);
@@ -1635,7 +1656,17 @@ void CxlKvStoreA::write_receiver_loop() {
         flush_line((void *)&e->req_op_id);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
-        if (op_id == 0) break;
+        // iter-12A bimodal fix: gap-tolerance budget before bailing.
+        // See note in inval_receiver_loop for rationale.
+        if (op_id == 0) {
+          for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
+            __builtin_ia32_pause();
+            flush_line((void *)&e->req_op_id);
+            full_fence();
+            op_id = e->req_op_id.load(std::memory_order_acquire);
+          }
+          if (op_id == 0) break;
+        }
         // Pull the rest of cacheline 1 (key, op_kind, value_len,
         // staging_off, staging_gen) — they're on the same line as
         // req_op_id, the flush above already fetched them.
@@ -1672,7 +1703,17 @@ void CxlKvStoreA::read_receiver_loop() {
         flush_line((void *)&e->req_op_id);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
-        if (op_id == 0) break;
+        // iter-12A bimodal fix: gap-tolerance budget before bailing.
+        // See note in inval_receiver_loop for rationale.
+        if (op_id == 0) {
+          for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
+            __builtin_ia32_pause();
+            flush_line((void *)&e->req_op_id);
+            full_fence();
+            op_id = e->req_op_id.load(std::memory_order_acquire);
+          }
+          if (op_id == 0) break;
+        }
         // iter-11A Phase 1: pass slot_idx so read_handler can deposit
         // value bytes directly into rs_[src][me][slot_idx].
         read_handler(e, src, slot);

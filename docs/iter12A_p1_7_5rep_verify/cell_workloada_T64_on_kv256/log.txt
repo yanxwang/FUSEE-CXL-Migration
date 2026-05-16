@@ -1,0 +1,13 @@
+[repro] cell=workloada_T64_on_kv256 reps=5 out=docs/iter12A_p1_7_5rep_verify/cell_workloada_T64_on_kv256
+[rep 1] thpt=12.444001 Mops/s w_avg=17.932us r_avg=10.806us wall=0.004017s
+[rep 2] thpt=14.598540 Mops/s w_avg=17.041us r_avg=10.362us wall=0.003424s
+[rep 3] thpt=0.095775 Mops/s w_avg=16.516us r_avg=10.093us wall=0.522053s
+[rep 4] thpt=14.371945 Mops/s w_avg=16.268us r_avg=9.902us wall=0.003478s
+[rep 5] thpt=15.698587 Mops/s w_avg=15.046us r_avg=9.684us wall=0.003185s
+[repro] done. summary: docs/iter12A_p1_7_5rep_verify/cell_workloada_T64_on_kv256/workloada_T64_on_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.004017	12.444001	17.932	10.806
+2	0.003424	14.598540	17.041	10.362
+3	0.522053	0.095775	16.516	10.093
+4	0.003478	14.371945	16.268	9.902
+5	0.003185	15.698587	15.046	9.684

@@ -1,0 +1,15 @@
+[verify] cell workloada T=16 on kv=256 med=4.7050 max=4.7259 -> OK
+[verify] cell workloada T=64 on kv=256 med=14.3719 max=15.6986 -> OK
+[verify] cell workloada T=16 off kv=256 med=5.9794 max=6.3131 -> OK
+[verify] cell workloada T=64 off kv=256 med=13.8083 max=14.6628 -> OK
+[verify] cell workloada T=32 off kv=512 med=9.1525 max=9.4464 -> OK
+[verify] cell workloada T=64 off kv=512 med=13.8619 max=14.7102 -> OK
+[verify] cell workloadb T=8 off kv=256 med=1.9795 max=3.2897 -> OK
+[verify] cell workloadf T=64 on kv=512 med=6.2531 max=13.1199 -> OK
+[verify] cell workloada T=4 off kv=256 med=1.6117 max=1.6171 -> OK
+[verify] cell workloadd T=4 on kv=256 med=1.4205 max=1.4231 -> OK
+[verify] cell workloadd T=8 on kv=256 med=2.9170 max=2.9240 -> OK
+[verify] cell workloadd T=16 on kv=256 med=4.5273 max=4.5521 -> OK
+[verify] cell workloada T=4 off kv=512 med=1.5721 max=1.5884 -> OK
+## total=13 BIMODAL=0 FULL_COLLAPSE=0 OK=13
+[verify] done. summary: docs/iter12A_p1_7_5rep_verify/SUMMARY.log

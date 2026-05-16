@@ -1,0 +1,13 @@
+[repro] cell=workloadd_T16_on_kv256 reps=5 out=docs/iter12A_p1_7_5rep_verify/cell_workloadd_T16_on_kv256
+[rep 1] thpt=4.527345 Mops/s w_avg=14.368us r_avg=8.510us wall=0.011043s
+[rep 2] thpt=4.552075 Mops/s w_avg=14.569us r_avg=8.697us wall=0.010983s
+[rep 3] thpt=4.539676 Mops/s w_avg=14.527us r_avg=8.609us wall=0.011013s
+[rep 4] thpt=4.205921 Mops/s w_avg=16.385us r_avg=9.490us wall=0.011887s
+[rep 5] thpt=0.224885 Mops/s w_avg=13.025us r_avg=7.682us wall=0.222335s
+[repro] done. summary: docs/iter12A_p1_7_5rep_verify/cell_workloadd_T16_on_kv256/workloadd_T16_on_kv256_summary.tsv
+rep	wall_s	thpt_mops	w_avg_us	r_avg_us
+1	0.011043	4.527345	14.368	8.510
+2	0.010983	4.552075	14.569	8.697
+3	0.011013	4.539676	14.527	8.609
+4	0.011887	4.205921	16.385	9.490
+5	0.222335	0.224885	13.025	7.682
