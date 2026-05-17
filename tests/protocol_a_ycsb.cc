@@ -206,11 +206,13 @@ int main(int argc, char **argv) {
   // STAGING/RCU/HAZARD builds).
   std::size_t rcu_bytes = rcu_domain_bytes();
   std::size_t haz_bytes = hazard_domain_bytes();
+  // iter-13A Phase 2 W3: reservation ring (always laid out).
+  std::size_t rsv_bytes = reservation_ring_matrix_bytes();
   std::size_t stats_bytes = sizeof(WorkerStats) * 2 * kMaxClients;
   std::size_t header_bytes = 4096;
   std::size_t total = header_bytes + bucket_bytes + pool_bytes
                     + wr_bytes + rr_bytes + ir_bytes + fs_bytes + rs_bytes
-                    + rcu_bytes + haz_bytes
+                    + rcu_bytes + haz_bytes + rsv_bytes
                     + stats_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
@@ -236,8 +238,9 @@ int main(int argc, char **argv) {
   void *rs_mem = reinterpret_cast<char *>(fs_mem) + fs_bytes;  // iter-11A Phase 1
   void *rcu_mem = reinterpret_cast<char *>(rs_mem) + rs_bytes;  // iter-13A
   void *haz_mem = reinterpret_cast<char *>(rcu_mem) + rcu_bytes;  // iter-13A
+  void *rsv_mem = reinterpret_cast<char *>(haz_mem) + haz_bytes;  // iter-13A W3
   WorkerStats *stats = reinterpret_cast<WorkerStats *>(
-      reinterpret_cast<char *>(haz_mem) + haz_bytes);
+      reinterpret_cast<char *>(rsv_mem) + rsv_bytes);
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -372,6 +375,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "primary enable_read_guard failed\n"); return 1;
       }
     }
+    // iter-13A Phase 2 W3: wire reservation ring + spawn handler thread.
+    {
+      ReservationRingMatrix *rsv_d =
+          reinterpret_cast<ReservationRingMatrix *>(rsv_mem);
+      if (store.enable_reservation_ring(rsv_d, /*init=*/true, /*spawn=*/true) != 0) {
+        fprintf(stderr, "primary enable_reservation_ring failed\n"); return 1;
+      }
+    }
     if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_senders failed\n"); return 1;
     }
@@ -431,6 +442,14 @@ int main(int argc, char **argv) {
         HazardDomain *haz_d = reinterpret_cast<HazardDomain *>(haz_mem);
         if (store.enable_read_guard(rcu_d, haz_d, /*init=*/false) != 0) {
           fprintf(stderr, "[h1 primary] enable_read_guard failed\n"); return 1;
+        }
+      }
+      // iter-13A Phase 2 W3: host 1 primary also wires reservation ring.
+      {
+        ReservationRingMatrix *rsv_d =
+            reinterpret_cast<ReservationRingMatrix *>(rsv_mem);
+        if (store.enable_reservation_ring(rsv_d, /*init=*/false, /*spawn=*/true) != 0) {
+          fprintf(stderr, "[h1 primary] enable_reservation_ring failed\n"); return 1;
         }
       }
       if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {

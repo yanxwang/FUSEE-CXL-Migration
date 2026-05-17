@@ -29,6 +29,7 @@
 #include "cxl_op_aggregator.h"
 #include "cxl_read_guard.h"
 #include "cxl_read_ring.h"
+#include "cxl_reservation_ring.h"
 #include "cxl_sharding.h"
 #include "cxl_tls_cache.h"
 #include "cxl_write_ring.h"
@@ -95,6 +96,15 @@ class CxlKvStoreA {
   // (iter-12A Phase 5 stale-cache lesson).
   int enable_read_guard(RcuDomain *rcu, HazardDomain *haz, bool init_region);
 
+  // iter-13A Phase 2 W3: wire reservation ring + spawn handler thread.
+  // Always laid out in CXL (regardless of FUSEE_WRITE_ALLOC build flag)
+  // for cross-build layout stability. spawn_handler=true on primary
+  // clients; false on non-primary children. Handler is a dedicated
+  // CPU-pinned thread (cpu 70).
+  int enable_reservation_ring(ReservationRingMatrix *rsv, bool init_region,
+                              bool spawn_handler);
+  void stop_reservation_handler();
+
   // iter-9A Phase 2.C — wire the per-worker DRAM aggregator + 3 named
   // CPU-pinned sender threads. `ar` lives in DRAM (MAP_SHARED|
   // MAP_ANONYMOUS pre-fork); senders are spawned on the primary
@@ -142,6 +152,7 @@ class CxlKvStoreA {
     stop_write_receiver();
     stop_read_receiver();
     stop_inval_receiver();
+    stop_reservation_handler();  // iter-13A Phase 2 W3
   }
   // Legacy aliases — iter-9A renamed responder→write_receiver,
   // dispatcher→inval_receiver. Kept here so test code compiled
@@ -197,6 +208,15 @@ class CxlKvStoreA {
   // directory spinlock, broadcasts OP_INVALIDATE to non-self sharers,
   // CoW publish to CXL, updates directory, updates own cache.
   // value=nullptr + value_len=0 is the DELETE convention.
+  // iter-13A Phase 2 W1: receiver fast-path when worker has already
+  // alloc+written the value into owner's CXL pool (RESERVED build).
+  // Skips pool_->alloc + pool_->write + cache_pool_insert; just publishes
+  // the slot pointer + bumps bucket epoch via cache_pool_evict (so
+  // subsequent readers see miss → forward_read fresh). Caller passes
+  // the pre-allocated blk_off + value_len.
+  int execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
+                                   uint32_t value_len, int op_kind);
+
   int execute_write_local(uint64_t key, const void *value,
                           uint32_t value_len, int op_kind);
 
@@ -248,6 +268,11 @@ class CxlKvStoreA {
   // iter-13A Phase 1: cross-host read pointer protection (RCU + Hazard).
   RcuDomain             *rcu_ = nullptr;
   HazardDomain          *haz_ = nullptr;
+  // iter-13A Phase 2 W3: reservation ring + handler thread.
+  ReservationRingMatrix *rsv_ = nullptr;
+  std::thread            rsv_handler_;
+  std::atomic<bool>      rsv_handler_stop_{false};
+  void                   reservation_handler_loop();
 
   // iter-9A Phase 2.C: aggregator + 3 sender threads.
   AggregatorRegion *aggr_ = nullptr;

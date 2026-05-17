@@ -164,6 +164,93 @@ int CxlKvStoreA::attach(void *bucket_base, uint32_t num_buckets,
   return 0;
 }
 
+// iter-13A Phase 2 W1: receiver fast-path for direct-pool-write. The
+// worker (peer host) has already alloc'd a block in our reserved-for-it
+// sub-segment and pool->write'd the value bytes. We just need to:
+//   1. (mirror execute_write_local) lock the bucket, send invalidates
+//      to sharers (UPDATE/DELETE), publish slot pointer (CoW).
+//   2. Evict any cache_pool entry for this key (bumps bucket_epoch);
+//      next reader will forward_read and pull fresh from pool.
+//
+// Skipped (vs execute_write_local):
+//   - pool_->alloc()        (worker did it)
+//   - pool_->write()        (worker did it)
+//   - cache_pool_insert()   (would require pool_->read to fetch value;
+//                            defeats the optimization. We evict instead;
+//                            next read forwards to us, we read pool to
+//                            respond — but pool->read fetches into owner
+//                            DRAM ONCE per write event, vs the legacy
+//                            path's 2 copies. Net win.)
+//   - TLS cache update      (TLS is per-thread; receiver thread is not a
+//                            worker thread; TLS irrelevant here.)
+int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
+                                              uint32_t value_len, int op_kind) {
+  if (key == kEmptyKey) return -1;
+  if (op_kind == kOpKindDelete) {
+    // DELETE shouldn't reach this path — worker doesn't alloc on delete.
+    // Fall back to regular delete.
+    return execute_write_local(key, nullptr, 0, kOpKindDelete);
+  }
+  if (blk_off == 0 || value_len == 0) return -1;
+  if (pool_ && value_len + 4 > pool_->block_size()) return -5;
+  uint32_t b = bucket_idx(key);
+  CxlKvBucket *bucket = &buckets_[b];
+  flush_line(bucket);
+  flush_line((char *)bucket + 64);
+  full_fence();
+
+  int match = -1, empty = -1;
+  for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
+    if (bucket->slots[s].key == key) { match = s; break; }
+    if (bucket->slots[s].key == kEmptyKey && empty < 0) empty = s;
+  }
+
+  int target_slot;
+  if (op_kind == kOpKindInsert) {
+    if (match >= 0) return -2;
+    if (empty < 0) return -3;
+    target_slot = empty;
+  } else /* UPDATE */ {
+    if (match < 0) return -1;
+    target_slot = match;
+  }
+
+  SlotDirectoryEntry *de =
+      slot_directory_entry(dir_, b, (uint32_t)target_slot);
+  slot_directory_lock(de);
+  flush_line(bucket);
+  full_fence();
+  CxlKvSlot *slot = &bucket->slots[target_slot];
+
+  // Sharer invalidate (same as execute_write_local Step 4).
+  uint8_t bitmap = de->sharer_bitmap;
+  if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
+    for (int h = 0; h < num_hosts_; h++) {
+      if (h == host_id_) continue;
+      if ((bitmap & (1u << h)) == 0) continue;
+      send_invalidate((uint32_t)h, key);
+    }
+  }
+
+  // CoW publish with worker's pre-allocated blk_off.
+  uint8_t fp = key_fingerprint(key);
+  uint8_t sc = kSizeClassBlock256;
+  uint64_t encoded = cxl_slot_pack(blk_off, sc, fp);
+  publish_slot_cow(slot, key, encoded);
+
+  // Directory state.
+  de->version++;
+  de->state = kDirStateShared;
+  de->sharer_bitmap = (uint8_t)(1u << (uint32_t)host_id_);
+  slot_directory_unlock(de);
+
+  // iter-13A W1: evict cache_pool entry (bumps bucket_epoch, forces next
+  // reader to forward_read and pull fresh value from pool). We do NOT
+  // call cache_pool_insert because we don't have value bytes here.
+  cache_pool_evict(cache_, key);
+  return 0;
+}
+
 // Owner-self write. Called by local insert/update/remove and by
 // responder on behalf of a remote forwarder. Steps follow spec §V.
 //
@@ -1185,8 +1272,103 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   // hasn't ack'd / released this slot.
   PROBE_OP("P5W_SF", op_id);
 
-  // Copy value bytes into the staging arena slot first (op_kind=DELETE
-  // skips this — value_len == 0).
+  // iter-13A Phase 2: select write-path based on FUSEE_WRITE_ALLOC.
+  uint64_t direct_blk_off = 0;
+  bool direct_used = false;
+#if FUSEE_WRITE_ALLOC == FUSEE_WRITE_ALLOC_RESERVED
+  // W1: bump-allocate from owner's reserved-for-me sub-segment (local DRAM).
+  if (value && value_len > 0 && op_kind != kOpKindDelete && pool_) {
+    direct_blk_off = pool_->alloc_peer((int)owner);
+  }
+#elif FUSEE_WRITE_ALLOC == FUSEE_WRITE_ALLOC_BATCHED
+  // W3: per-(thread, owner) DRAM queue; refill via ReservationRing.
+  if (value && value_len > 0 && op_kind != kOpKindDelete && rsv_ && pool_) {
+    static thread_local uint64_t q_blk_offs[kReservMaxHosts][kReservMaxBatchK];
+    static thread_local uint32_t q_next_idx[kReservMaxHosts] = {0};
+    static thread_local uint32_t q_filled[kReservMaxHosts] = {0};
+    // Read batch size K from env once per thread.
+    static thread_local uint32_t batch_k = 0;
+    if (batch_k == 0) {
+      const char *e_k = getenv("FUSEE_BATCH_K");
+      batch_k = (e_k && atoi(e_k) > 0) ? (uint32_t)atoi(e_k) : 128;
+      if (batch_k > kReservMaxBatchK) batch_k = kReservMaxBatchK;
+    }
+    if (q_next_idx[owner] >= q_filled[owner]) {
+      // Queue empty: send reservation request, wait, copy K blk_offs.
+      uint64_t r_my_op = my_op | 0x8000000000000000ULL;  // mark as reserve req
+      uint64_t r_tpos = rsv_->tails[host_id_][owner].fetch_add(1,
+                            std::memory_order_acq_rel);
+      flush_line(&rsv_->tails[host_id_][owner]);
+      store_fence();
+      uint32_t r_slot = (uint32_t)(r_tpos % kReservRingDepth);
+      ReservationEntry *re = reservation_entry(rsv_, host_id_, (int)owner,
+                                                (int)r_slot);
+      // Wait for slot free.
+      for (;;) {
+        flush_line(&re->req_op_id);
+        full_fence();
+        if (re->req_op_id.load(std::memory_order_acquire) == 0) break;
+        __builtin_ia32_pause();
+      }
+      re->batch_k = batch_k;
+      re->filled_count = 0;
+      re->status = 0;
+      re->resp_op_id.store(0, std::memory_order_relaxed);
+      std::atomic_thread_fence(std::memory_order_release);
+      re->req_op_id.store(r_my_op, std::memory_order_release);
+      flush_line(&re->req_op_id);
+      store_fence();
+      // Spin on resp_op_id.
+      for (;;) {
+        flush_line(&re->resp_op_id);
+        full_fence();
+        if (re->resp_op_id.load(std::memory_order_acquire) == r_my_op) break;
+        __builtin_ia32_pause();
+      }
+      // Pull K blk_offs from response. Flush response cachelines first.
+      flush_line(&re->filled_count);
+      for (uint32_t off = 0; off < batch_k * 8; off += 64) {
+        flush_line((char *)re->blk_offs + off);
+      }
+      full_fence();
+      uint32_t got = re->filled_count;
+      for (uint32_t i = 0; i < got; i++) q_blk_offs[owner][i] = re->blk_offs[i];
+      q_filled[owner] = got;
+      q_next_idx[owner] = 0;
+      // Free request slot.
+      re->req_op_id.store(0, std::memory_order_release);
+      flush_line(&re->req_op_id);
+      store_fence();
+    }
+    if (q_next_idx[owner] < q_filled[owner]) {
+      direct_blk_off = q_blk_offs[owner][q_next_idx[owner]++];
+    }
+  }
+#endif
+#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
+  if (direct_blk_off != 0) {
+    // Direct path: write value bytes into the pool (header + value).
+    uint8_t hdr_buf[4];
+    std::memcpy(hdr_buf, &value_len, 4);
+    pool_->write(direct_blk_off, hdr_buf, 4);
+    pool_->write(direct_blk_off + 4, value, value_len);
+    direct_used = true;
+  }
+  if (!direct_used) {
+    // Fallback STAGING.
+    if (value && value_len > 0) {
+      uint8_t *staging =
+          forward_staging_bytes(fs_, host_id_, (int)owner, (int)slot_idx);
+      std::memcpy(staging, value, value_len);
+      for (uint32_t off = 0; off < value_len; off += 64) {
+        flush_line((void *)(staging + off));
+      }
+      store_fence();
+    }
+  }
+#else
+  // STAGING (default): copy value bytes into the staging arena slot
+  // (op_kind=DELETE skips this — value_len == 0).
   if (value && value_len > 0) {
     uint8_t *staging =
         forward_staging_bytes(fs_, host_id_, (int)owner, (int)slot_idx);
@@ -1196,13 +1378,27 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
     }
     store_fence();
   }
+#endif
 
   // Fill control message (cacheline 1).
   e->key = key;
   e->op_kind = (uint8_t)op_kind;
   e->value_len = value_len;
+#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
+  // iter-13A Phase 2 W1/W3: reuse staging_off field to carry blk_off in
+  // direct-pool-write mode. staging_gen=0 signals "use blk_off"; =1
+  // signals "fallback to staging_off as slot index" (staging copy used).
+  if (direct_used) {
+    e->staging_off = direct_blk_off;
+    e->staging_gen = 0;
+  } else {
+    e->staging_off = slot_idx;
+    e->staging_gen = 1;
+  }
+#else
   e->staging_off = slot_idx;          // sanity check; receiver asserts
   e->staging_gen = 0;                 // reserved (iter-10A pool-gen)
+#endif
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
@@ -1319,6 +1515,97 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
       }
     }
     __builtin_ia32_pause();
+  }
+}
+
+int CxlKvStoreA::enable_reservation_ring(ReservationRingMatrix *rsv,
+                                         bool init_region,
+                                         bool spawn_handler) {
+  if (!rsv) return -1;
+  rsv_ = rsv;
+  // iter-12A Phase 5 always-memset-flush pattern.
+  std::memset(rsv, 0, reservation_ring_matrix_bytes());
+  flush_region(rsv, reservation_ring_matrix_bytes());
+  store_fence();
+  (void)init_region;
+  if (spawn_handler) {
+    rsv_handler_stop_.store(false, std::memory_order_relaxed);
+    rsv_handler_ = std::thread([this]() {
+      pthread_setname_np(pthread_self(), "ReservHandler");
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(70, &cs);
+      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+      fprintf(stderr,
+        "[A:thread] ReservHandler pid=%d tid=%lu pinned cpu=70 (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), host_id_);
+      this->reservation_handler_loop();
+    });
+  }
+  return 0;
+}
+
+void CxlKvStoreA::stop_reservation_handler() {
+  if (!rsv_handler_.joinable()) return;
+  rsv_handler_stop_.store(true, std::memory_order_release);
+  rsv_handler_.join();
+}
+
+// iter-13A Phase 2 W3: handler loop on owner side. For each reservation
+// request (from peer P), call pool_->alloc K times, return blk_offs in
+// the same entry, publish resp_op_id.
+void CxlKvStoreA::reservation_handler_loop() {
+  while (!rsv_handler_stop_.load(std::memory_order_acquire)) {
+    bool did_work = false;
+    for (int src = 0; src < num_hosts_; src++) {
+      if (src == host_id_) continue;
+      // Tail tracks the producer (peer) head; consumer (us) scans tail-head.
+      flush_line(&rsv_->tails[src][host_id_]);
+      full_fence();
+      uint64_t tail = rsv_->tails[src][host_id_].load(std::memory_order_acquire);
+      // Simple per-(src,me) head counter in DRAM (only this thread reads).
+      static thread_local uint64_t local_heads[kReservMaxHosts][kReservMaxHosts] = {{0}};
+      uint64_t head = local_heads[src][host_id_];
+      while (head < tail) {
+        uint32_t slot = (uint32_t)(head % kReservRingDepth);
+        ReservationEntry *e = reservation_entry(rsv_, src, host_id_, (int)slot);
+        flush_line((void *)&e->req_op_id);
+        full_fence();
+        uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
+        // gap-tolerance (per iter-12A Phase 5.1 pattern)
+        if (op_id == 0) {
+          for (int g = 0; g < 4096 && op_id == 0; g++) {
+            __builtin_ia32_pause();
+            flush_line((void *)&e->req_op_id);
+            full_fence();
+            op_id = e->req_op_id.load(std::memory_order_acquire);
+          }
+          if (op_id == 0) break;
+        }
+        uint32_t K = e->batch_k;
+        if (K > kReservMaxBatchK) K = kReservMaxBatchK;
+        uint32_t filled = 0;
+        for (uint32_t k = 0; k < K; k++) {
+          uint64_t bo = pool_ ? pool_->alloc_local() : 0;
+          if (bo == 0) break;
+          e->blk_offs[k] = bo;
+          filled++;
+        }
+        e->filled_count = filled;
+        e->status = (filled == K) ? 0 : -1;
+        // Flush blk_offs payload before publishing resp_op_id.
+        for (uint32_t off = 0; off < filled * 8; off += 64) {
+          flush_line((char *)e->blk_offs + off);
+        }
+        flush_line(&e->status);
+        store_fence();
+        e->resp_op_id.store(op_id, std::memory_order_release);
+        flush_line((void *)&e->resp_op_id);
+        store_fence();
+        head++;
+        did_work = true;
+      }
+      local_heads[src][host_id_] = head;
+    }
+    if (!did_work) __builtin_ia32_pause();
   }
 }
 
@@ -1639,11 +1926,7 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
 }
 
 void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
-  // C2 staging contract: read forwarder's value bytes from
-  // ForwardStaging[src][me][slot_idx]. slot_idx is encoded in
-  // staging_off (sanity check: must equal e - ring->entries[0]).
   uint32_t value_len = e->value_len;
-  uint32_t slot_idx = (uint32_t)e->staging_off;
   if (e->op_kind == kOpKindDelete) {
     e->status = execute_write_local(e->key, nullptr, 0, kOpKindDelete);
     return;
@@ -1652,6 +1935,35 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
     e->status = -5;
     return;
   }
+#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
+  // iter-13A Phase 2 W1/W3: if worker took the direct-pool path
+  // (staging_gen==0), the blk_off is already in owner's CXL pool — we
+  // just need to wire it into the bucket without re-allocating or
+  // copying. If worker fell back to staging (staging_gen==1), use the
+  // legacy path below.
+  if (e->staging_gen == 0) {
+    // Direct-pool path: blk_off in e->staging_off; skip pool->alloc and
+    // pool->write. Need a code path that just updates bucket->slots[i].value
+    // = encode(blk_off, vlen, fingerprint). The simplest hook is to add a
+    // variant of execute_write_local that takes pre-allocated blk_off.
+    uint64_t blk_off = e->staging_off;
+    // Flush the pool bytes the worker wrote (worker did flush_line already,
+    // but we re-flush owner-side to evict any stale cached lines and force
+    // re-fetch from CXL — iter-12A Phase 5 stale-cache pattern).
+    pool_->read(blk_off, nullptr, 0);  // no-op cache invalidate via flush
+    full_fence();
+    // Call into execute_write_local with the special "pre-allocated"
+    // signal — implemented as a new internal helper:
+    e->status = execute_write_local_with_blk(e->key, blk_off, value_len,
+                                              (int)e->op_kind);
+    return;
+  }
+  // staging_gen == 1: fallback path, fall through to STAGING below.
+#endif
+  // STAGING (default and fallback): read worker's value bytes from
+  // ForwardStaging[src][me][slot_idx], call execute_write_local which
+  // allocates a fresh block and copies into it.
+  uint32_t slot_idx = (uint32_t)e->staging_off;
   uint8_t *staging =
       forward_staging_bytes(fs_, src, host_id_, (int)slot_idx);
   for (uint32_t off = 0; off < value_len; off += 64) {

@@ -25,6 +25,14 @@ std::size_t CxlKvBlockPool::bytes_for(uint32_t num_blocks_per_host,
   return align_up(hdr + cursors, 64) + align_up(segs, 64);
 }
 
+int CxlKvBlockPool::peer_index_in_owner(int peer_id, int owner_id) {
+  // peers of owner = {0..N-1} \ {owner}, sorted ascending.
+  // peer's index = number of non-owner ids less than peer_id.
+  int idx = peer_id;
+  if (peer_id > owner_id) idx--;
+  return idx;
+}
+
 int CxlKvBlockPool::attach(void *base, std::size_t bytes,
                            uint32_t num_blocks_per_host, uint32_t block_size,
                            int host_id, int num_hosts, bool init_region) {
@@ -40,6 +48,24 @@ int CxlKvBlockPool::attach(void *base, std::size_t bytes,
   num_blocks_per_host_ = num_blocks_per_host;
   host_id_ = host_id;
   num_hosts_ = num_hosts;
+
+  // iter-13A Phase 2 W1: partition each host's segment into
+  //   [private_blocks_][peer_0_reserved][peer_1_reserved]...
+  // Private = (1 - kPeerReserveFrac) of segment. Peer reserve total =
+  // remainder split equally among (num_hosts - 1) peers.
+  uint32_t reserve_blocks_total = static_cast<uint32_t>(
+      static_cast<float>(num_blocks_per_host) * kPeerReserveFrac);
+  private_blocks_ = num_blocks_per_host - reserve_blocks_total;
+  if (num_hosts > 1) {
+    peer_blocks_per_peer_ = reserve_blocks_total / (num_hosts - 1);
+  } else {
+    peer_blocks_per_peer_ = 0;
+  }
+
+  for (int i = 0; i < kMaxPoolHosts; ++i) {
+    peer_bumps_[i].store(0, std::memory_order_relaxed);
+    peer_exhausts_[i].store(0, std::memory_order_relaxed);
+  }
 
   Header *hdr = reinterpret_cast<Header *>(base_);
   cursors_ = reinterpret_cast<HostCursor *>(base_ + sizeof(Header));
@@ -70,17 +96,51 @@ int CxlKvBlockPool::attach(void *base, std::size_t bytes,
   return 0;
 }
 
-uint64_t CxlKvBlockPool::alloc() {
+uint64_t CxlKvBlockPool::alloc() { return alloc_local(); }
+
+uint64_t CxlKvBlockPool::alloc_local() {
   if (!base_) return 0;
   uint64_t idx = cursors_[host_id_].bump.fetch_add(1, std::memory_order_acq_rel);
-  if (idx >= num_blocks_per_host_) {
-    // Exhausted; back off the cursor (best-effort) and return 0.
-    cursors_[host_id_].bump.store(num_blocks_per_host_,
+  if (idx >= private_blocks_) {
+    // Exhausted private region; back off the cursor (best-effort).
+    cursors_[host_id_].bump.store(private_blocks_,
                                    std::memory_order_release);
     return 0;
   }
   uint64_t off = static_cast<uint64_t>(seg_base_ - base_) +
                  idx * static_cast<uint64_t>(block_size_);
+  return off;
+}
+
+uint64_t CxlKvBlockPool::alloc_peer(int owner_host) {
+  if (!base_ || owner_host < 0 || owner_host >= num_hosts_ ||
+      owner_host == host_id_ || peer_blocks_per_peer_ == 0) {
+    return 0;
+  }
+  // DRAM-local bump: peer_bumps_[owner_host] tracks my next index INTO
+  // owner_host's reserved-for-me sub-segment.
+  uint64_t idx = peer_bumps_[owner_host].fetch_add(1,
+                                                    std::memory_order_acq_rel);
+  if (idx >= peer_blocks_per_peer_) {
+    peer_bumps_[owner_host].store(peer_blocks_per_peer_,
+                                   std::memory_order_release);
+    peer_exhausts_[owner_host].fetch_add(1, std::memory_order_relaxed);
+    return 0;
+  }
+  // Compute absolute offset into pool:
+  //   owner_segment_base = header + owner_host * num_blocks_per_host_ * block_size
+  //   owner_private_end  = owner_segment_base + private_blocks_ * block_size
+  //   my_peer_index = peer_index_in_owner(host_id_, owner_host)
+  //   my_region_base = owner_private_end + my_peer_index * peer_blocks_per_peer_ * block_size
+  //   blk_off = my_region_base + idx * block_size
+  uint64_t owner_seg_base = header_bytes_ +
+      static_cast<uint64_t>(owner_host) * num_blocks_per_host_ * block_size_;
+  uint64_t my_peer_region_offset =
+      static_cast<uint64_t>(private_blocks_) * block_size_ +
+      static_cast<uint64_t>(peer_index_in_owner(host_id_, owner_host)) *
+          peer_blocks_per_peer_ * block_size_;
+  uint64_t off = owner_seg_base + my_peer_region_offset +
+                 idx * block_size_;
   return off;
 }
 

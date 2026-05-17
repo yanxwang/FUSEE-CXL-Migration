@@ -50,6 +50,27 @@ namespace fusee {
 #define FUSEE_READ_GUARD_RCU     1
 #define FUSEE_READ_GUARD_HAZARD  2
 
+// iter-13A Phase 2: write-path data-copy elimination selector.
+//   FUSEE_WRITE_ALLOC == 0  STAGING  (default — current behavior: worker
+//                                     memcpy into forward_staging, receiver
+//                                     copies into pool)
+//   FUSEE_WRITE_ALLOC == 1  RESERVED (W1: per-host reserved segments in
+//                                     blockpool; worker bumps local DRAM
+//                                     cursor + writes direct to peer's
+//                                     reserved sub-segment; sends blk_off
+//                                     in WriteRing; receiver only updates
+//                                     bucket pointer)
+//   FUSEE_WRITE_ALLOC == 2  BATCHED  (W3: per-worker DRAM queue of pre-
+//                                     reserved blk_offs; refill via
+//                                     RESERVE_REQUEST to owner)
+#ifndef FUSEE_WRITE_ALLOC
+#define FUSEE_WRITE_ALLOC 0
+#endif
+
+#define FUSEE_WRITE_ALLOC_STAGING  0
+#define FUSEE_WRITE_ALLOC_RESERVED 1
+#define FUSEE_WRITE_ALLOC_BATCHED  2
+
 // Hard limits (must agree across all build configs — both RCU and
 // HAZARD domains are always laid out in CXL even if disabled, so the
 // offsets between the build flavors stay aligned).

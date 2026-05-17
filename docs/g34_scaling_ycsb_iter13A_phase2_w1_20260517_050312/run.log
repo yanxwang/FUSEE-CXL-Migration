@@ -1,0 +1,17 @@
+# iter-13A Phase 2.5 sweep — W1 build (HAZARD read + RESERVED write)
+# total_runs=210 reps=1 max_ops=200000
+# started=2026-05-17T05:03:13-05:00
+# commit=b1e028e520dddd088106a6484c76d11867b3be62
+[sweep] 20/210 done (0 fails); elapsed 75s; eta 712s
+[sweep] 40/210 done (0 fails); elapsed 150s; eta 637s
+[sweep] 60/210 done (0 fails); elapsed 223s; eta 557s
+[sweep] 80/210 done (0 fails); elapsed 296s; eta 481s
+[sweep] 100/210 done (0 fails); elapsed 368s; eta 404s
+[sweep] 120/210 done (0 fails); elapsed 439s; eta 329s
+[sweep] 140/210 done (0 fails); elapsed 511s; eta 255s
+[sweep] 160/210 done (0 fails); elapsed 582s; eta 181s
+[sweep] 180/210 done (0 fails); elapsed 663s; eta 110s
+[sweep] 200/210 done (0 fails); elapsed 749s; eta 37s
+# finished=2026-05-17T05:16:25-05:00
+# ok=210  fail=0  total=210
+# elapsed=792s
