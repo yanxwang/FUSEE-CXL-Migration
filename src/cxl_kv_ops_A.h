@@ -27,6 +27,7 @@
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
 #include "cxl_op_aggregator.h"
+#include "cxl_read_guard.h"
 #include "cxl_read_ring.h"
 #include "cxl_sharding.h"
 #include "cxl_tls_cache.h"
@@ -84,6 +85,15 @@ class CxlKvStoreA {
   // execute_write_local needs them all wired).
   int enable_invalidate(InvalRingMatrix *ir, bool init_region,
                         bool spawn_dispatcher);
+
+  // iter-13A Phase 1: wire both RCU + Hazard CXL domains. Both are
+  // ALWAYS laid out in CXL (regardless of FUSEE_READ_GUARD build flag)
+  // to keep cross-build CXL offsets stable. At runtime, only the
+  // domain matching the build's FUSEE_READ_GUARD is touched on the
+  // hot path; the other sits idle. `init_region` follows the same
+  // "always memset+flush" pattern as enable_write_ring etc.
+  // (iter-12A Phase 5 stale-cache lesson).
+  int enable_read_guard(RcuDomain *rcu, HazardDomain *haz, bool init_region);
 
   // iter-9A Phase 2.C — wire the per-worker DRAM aggregator + 3 named
   // CPU-pinned sender threads. `ar` lives in DRAM (MAP_SHARED|
@@ -235,6 +245,9 @@ class CxlKvStoreA {
   ForwardStagingMatrix  *fs_ = nullptr;
   ReadStagingMatrix     *rs_ = nullptr;  // iter-11A Phase 1
   InvalRingMatrix       *ir_ = nullptr;
+  // iter-13A Phase 1: cross-host read pointer protection (RCU + Hazard).
+  RcuDomain             *rcu_ = nullptr;
+  HazardDomain          *haz_ = nullptr;
 
   // iter-9A Phase 2.C: aggregator + 3 sender threads.
   AggregatorRegion *aggr_ = nullptr;

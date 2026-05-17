@@ -1,0 +1,22 @@
+# iter-13A Phase 1.5 sweep — HAZARD read-guard build
+# workloads=workloada workloadb workloadc workloadd workloadf
+# threads=1 2 4 8 16 32 64
+# cache_modes=on off
+# kv_sizes=256 512 1024
+# reps=1  max_ops=200000  timeout=600s
+# total_runs=210
+# started=2026-05-17T03:25:41-05:00
+# commit=ffbbcc61c577d4142e13488cff281f407cede2a2
+[sweep] 20/210 done (0 fails); elapsed 74s; eta 703s
+[sweep] 40/210 done (0 fails); elapsed 149s; eta 633s
+[sweep] 60/210 done (0 fails); elapsed 222s; eta 555s
+[sweep] 80/210 done (0 fails); elapsed 294s; eta 477s
+[sweep] 100/210 done (0 fails); elapsed 365s; eta 401s
+[sweep] 120/210 done (0 fails); elapsed 437s; eta 327s
+[sweep] 140/210 done (0 fails); elapsed 509s; eta 254s
+[sweep] 160/210 done (0 fails); elapsed 580s; eta 181s
+[sweep] 180/210 done (0 fails); elapsed 661s; eta 110s
+[sweep] 200/210 done (0 fails); elapsed 748s; eta 37s
+# finished=2026-05-17T03:38:52-05:00
+# ok=210  fail=0  total=210
+# elapsed=791s

@@ -1,0 +1,22 @@
+# iter-13A hash-diff battery, build=build-cxl-hazard
+workloada_kv8 : PASS
+workloada_kv256 : PASS
+workloada_kv512 : PASS
+workloada_kv1024 : PASS
+workloadb_kv8 : PASS
+workloadb_kv256 : PASS
+workloadb_kv512 : PASS
+workloadb_kv1024 : PASS
+workloadc_kv8 : PASS
+workloadc_kv256 : PASS
+workloadc_kv512 : PASS
+workloadc_kv1024 : PASS
+workloadd_kv8 : PASS
+workloadd_kv256 : PASS
+workloadd_kv512 : PASS
+workloadd_kv1024 : PASS
+workloadf_kv8 : PASS
+workloadf_kv256 : PASS
+workloadf_kv512 : PASS
+workloadf_kv1024 : PASS
+## 20 PASS / 0 FAIL of 20 ##

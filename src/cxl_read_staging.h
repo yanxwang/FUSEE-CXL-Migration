@@ -52,8 +52,13 @@ struct alignas(64) ReadStagingSlot {
   uint64_t key;                         // echoed for sanity check
   uint32_t value_size;                  // 0 = miss / not yet written
   int32_t  status;                      // 0 = ok; -1 = key-not-found
-  uint8_t  _pad_ctl[64 - 8 - 8 - 8 - 4 - 4];
-  // Cachelines 1-16 — payload bytes.
+  // iter-13A Phase 1: carries blk_off (CXL pool offset) for RCU/HAZARD
+  // direct-pool-read builds. For inline-8B fallback (kSizeClassInline),
+  // this field carries the inlined 8 bytes directly. STAGING build
+  // sets it (for cross-build CXL layout compatibility) but doesn't read.
+  uint64_t resp_blk_off;
+  uint8_t  _pad_ctl[64 - 8 - 8 - 8 - 4 - 4 - 8];
+  // Cachelines 1-16 — payload bytes (only used by STAGING build).
   uint8_t value_bytes[kReadStagingSlotBytes];
 };
 static_assert(sizeof(ReadStagingSlot) == 64 + kReadStagingSlotBytes,

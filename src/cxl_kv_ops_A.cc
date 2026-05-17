@@ -1322,6 +1322,22 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   }
 }
 
+int CxlKvStoreA::enable_read_guard(RcuDomain *rcu, HazardDomain *haz,
+                                   bool init_region) {
+  if (!rcu || !haz) return -1;
+  rcu_ = rcu;
+  haz_ = haz;
+  // iter-12A Phase 5.1c pattern: always memset+flush so host 1's stale
+  // dirty cache lines from prior process get invalidated.
+  std::memset(rcu, 0, rcu_domain_bytes());
+  flush_region(rcu, rcu_domain_bytes());
+  std::memset(haz, 0, hazard_domain_bytes());
+  flush_region(haz, hazard_domain_bytes());
+  store_fence();
+  (void)init_region;
+  return 0;
+}
+
 int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
                                    bool spawn_dispatcher) {
   if (!ir) return -1;
@@ -1465,6 +1481,13 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
     __builtin_ia32_pause();
   }
 
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+  // iter-13A Phase 1 (RCU): publish my reader epoch BEFORE sending the
+  // request. Owner cannot reclaim a block I might subsequently observe
+  // by blk_off until rcu_synchronize() past this epoch.
+  if (rcu_) rcu_enter(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
+
   // C13: my_epoch_at_send (bucket epoch reader observed prior to send).
   uint64_t my_epoch_at_send =
       cache_ ? cache_pool_bucket_epoch(cache_, key) : 0;
@@ -1514,6 +1537,9 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   flush_line((void *)&e->req_op_id);
   store_fence();
   if (timed_out) {
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
     if (out_len) *out_len = 0;
     return -2;
   }
@@ -1525,24 +1551,38 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   flush_line(st);
   full_fence();
   if (st->lookup_epoch < my_epoch_at_send) {
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
     if (out_len) *out_len = 0;
     return -3;  // stale snapshot — caller retries
   }
   if (st->status != 0) {
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
     if (out_len) *out_len = 0;
     return st->status;
   }
   uint32_t vlen = st->value_size;
   if (vlen == 0) {
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
     if (out_len) *out_len = 0;
     return 0;
   }
   if (vlen > kReadStagingSlotBytes) {
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
+#endif
     if (out_len) *out_len = 0;
     return -1;
   }
-  // Direct copy from CXL staging (one CXL load of vlen bytes —
-  // saves the legacy resp-then-pool-read second roundtrip).
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
+  // STAGING (default): direct copy from CXL staging — owner placed
+  // value bytes into st->value_bytes in read_handler (1× CXL→DRAM→CXL
+  // extra copy on owner side, but reader does one bulk read here).
   for (uint32_t off = 0; off < vlen; off += 64) {
     flush_line(st->value_bytes + off);
   }
@@ -1551,6 +1591,49 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   if (out_buf && copy_len > 0) {
     std::memcpy(out_buf, st->value_bytes, copy_len);
   }
+#else
+  // RCU / HAZARD: direct pool read. Staging only carries control fields
+  // (blk_off, vlen, lookup_epoch, status) — no value bytes copy on owner.
+  // st->resp_blk_off was populated by read_handler with the actual pool
+  // blk_off (high bit signals inline-8B fallback; see read_handler for
+  // the encoding shared with the legacy path).
+  // ABA note: current pool is bump-only (free_lazy is a stub), so the
+  // blk_off captured here cannot be re-allocated to a different key
+  // during this read. iter-14A+ freelist GC will need a generation tag
+  // in the encoded slot value (use the high bits of cxl_slot_pack).
+  uint64_t blk_off = st->resp_blk_off;
+  int tid = (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0);
+  (void)tid;
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_HAZARD
+  // Hazard: publish blk_off to my hazard slot BEFORE the pool read.
+  // (Re-validation against the bucket isn't possible here — reader
+  // doesn't share the bucket with owner. ABA protection deferred to
+  // iter-14A per RAP §V_CORRECTNESS Attack 5 defense.)
+  if (haz_) hazard_protect(haz_, host_id_, tid, blk_off);
+#endif
+  if (blk_off == 0 || pool_ == nullptr) {
+    // Inline-8B fallback: value was packed into st->resp_blk_off itself
+    // by read_handler (see kSizeClassInline branch). Copy directly.
+    uint64_t encoded = st->resp_blk_off;
+    uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+    if (out_buf && copy_len > 0) {
+      std::memcpy(out_buf, &encoded, copy_len);
+    }
+  } else {
+    // True pool block: skip 4B header, read vlen value bytes directly
+    // from CXL into out_buf (caller's DRAM).
+    uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
+    if (out_buf && copy_len > 0) {
+      pool_->read(blk_off + 4, out_buf, copy_len);
+    }
+  }
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_HAZARD
+  if (haz_) hazard_release(haz_, host_id_, tid);
+#endif
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
+  if (rcu_) rcu_exit(rcu_, host_id_, tid);
+#endif
+#endif  // FUSEE_READ_GUARD branches
   if (out_len) *out_len = vlen;
   return 0;
 }
@@ -1610,11 +1693,19 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
     st->lookup_epoch = lookup_epoch;
     // Flush control cacheline (excluding ready_op_id, published last).
     flush_line(st);
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
+    // STAGING (default): value bytes already copied into st->value_bytes
+    // by caller; flush them so reader can pull from staging directly.
     if (vlen > 0) {
       for (uint32_t off = 0; off < vlen; off += 64) {
         flush_line(st->value_bytes + off);
       }
     }
+#else
+    // RCU / HAZARD: NO value bytes copy on owner side. Reader pulls
+    // value directly from pool_ via st->resp_blk_off (set by caller).
+    // st->value_bytes is unused in this build.
+#endif
     store_fence();
     // Release-publish: reader polling ready_op_id observes the
     // staging fields populated above only after this store.
@@ -1646,8 +1737,10 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
 
   uint8_t sc = cxl_slot_size_class(encoded);
   if (sc == kSizeClassInline || pool_ == nullptr) {
-    // Inline u64 fallback — pack 8 bytes into staging.value_bytes.
+    // Inline u64 fallback — pack 8 bytes into both staging value_bytes
+    // (STAGING reader) and resp_blk_off (RCU/HAZARD reader's inline path).
     std::memcpy(st->value_bytes, &encoded, 8);
+    st->resp_blk_off = encoded;  // iter-13A: inline 8B in this field
     publish_staging(0, 8);
     e->resp_value_len = 8;
     std::memcpy(&e->resp_blk_off, &encoded, 8);
@@ -1657,6 +1750,7 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
 
   uint64_t blk_off = cxl_slot_blk_off(encoded);
   if (blk_off == 0) {
+    st->resp_blk_off = 0;
     publish_staging(-1, 0);
     e->status = -1;
     e->resp_value_len = 0;
@@ -1670,6 +1764,7 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
   uint32_t vlen = 0;
   std::memcpy(&vlen, hdr, 4);
   if (vlen == 0 || vlen > kReadStagingSlotBytes) {
+    st->resp_blk_off = 0;
     publish_staging(-1, 0);
     e->status = -1;
     e->resp_value_len = 0;
@@ -1677,8 +1772,15 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
     return;
   }
 
-  // Direct-deposit: copy value bytes from pool into staging arena.
+#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
+  // STAGING (default): owner copies value bytes pool→staging — this is
+  // the redundant copy iter-13A is eliminating for RCU/HAZARD builds.
   pool_->read(blk_off + 4, st->value_bytes, vlen);
+#else
+  // RCU / HAZARD: skip the copy. Just hand reader the blk_off so it can
+  // pool_->read() directly into its own DRAM buffer.
+#endif
+  st->resp_blk_off = blk_off;
   publish_staging(0, vlen);
 
   // Legacy resp fields (compat — new reader ignores).
