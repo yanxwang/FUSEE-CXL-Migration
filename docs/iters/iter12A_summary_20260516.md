@@ -1,9 +1,56 @@
 # iter-12A Summary
 
-**Date**: 2026-05-16
+**Date**: 2026-05-16 (Phase 0-4) / 2026-05-17 (Phase 5 complete)
 **Branch**: `feat/cxl-migration`
 **Plan**: `docs/iters/task_plan_iter12A.md`
 **Predecessor**: `docs/iters/iter11A_summary_20260511.md` (gate-12 ❌ FAIL at 13/210 bimodal; R3 verification-vs-sweep 6× regression unresolved; 0/5 workloads at 20 Mops/s)
+
+---
+
+> **✅ STATUS 2026-05-17: iter-12A Phase 5 COMPLETE ✅**
+>
+> User-driven audit (2026-05-17) revealed that the Phase 1.5 V1 hypothesis
+> was **inferred not observed**. Phase 5 added direct probe instrumentation
+> (`P5W_*` worker probes + `P5R_*` receiver probes + `P5R_PL` poll-tail
+> heartbeat) and re-RCA'd the 3 residual bimodal cells:
+>
+> - **V1 (CPU 0 preempt) FALSIFIED**: probe heartbeat showed g4 WriteReceiver
+>   on CPU 65 polling continuously for 118 seconds with no preempt gaps.
+> - **V2 (receiver HoL break) FALSIFIED**: gap-tolerance budget never
+>   exhausted (`P5R_GX = 0` across all captures).
+> - **V3 (host-1 cache-stale `ring->head`) CONFIRMED**: on `init=false`
+>   reattach, host 1's L1/L2/L3 retain stale dirty `ring->head` from prior
+>   process. Receiver reads `head` non-atomically (no flush_line) and
+>   observes the prior terminal head (e.g. 181). When `head > tail`, the
+>   inner `while(head<tail)` loop never enters → entire ring direction stuck
+>   → every cross-host op times out at 5 ms forever.
+>
+> **Fix (3 functions in `src/cxl_kv_ops_A.cc`)**: drop the
+> `if (init_region)` guard around `memset+flush_region` in
+> `enable_write_ring`, `enable_read_ring`, `enable_invalidate`. Always
+> memset+flush so host 1 invalidates its own stale cache on reattach.
+>
+> **Verification**:
+> - Phase 5.8a (probe build, 8 retries × 3 cells): **24/24 WIN**, 0 collapse.
+> - Phase 5.8b (prod build, 20 reps × 3 cells): **60/60 WIN**, median
+>   throughput improved 3.5–30× over pre-fix baseline.
+> - Phase 5.8c (prod build, 5 reps × 8 cells covering all 5 workloads):
+>   **40/40 WIN**, BIMODAL = 0, FULL_COLLAPSE = 0.
+>
+> See [`iter12A_phase5_rca.md`](iter12A_phase5_rca.md) for the
+> evidence-based RCA + RAP v2 + delivery audit.
+>
+> **Iter-12A backlog item carried to iter-13A** (added 2026-05-17):
+> Bug B (2/102 worker timeouts in workloada T=64 off kv=1024 where
+> receiver DID see+ack but worker missed ack within 5 ms — separate
+> mechanism from Bug A, smaller impact, not bimodal-class).
+>
+> **What iter-12A Phase 1-4 deliverables still stand**:
+> - Phase 1.6 fix (receiver 4096-iter gap-tolerance) is SAFE to keep — hash-diff 20/20 PASS, Phase 1.7 13/13 cells improved 16-269×. It empirically helps even if root cause attribution was incorrect.
+> - Phase 2 R3 bisect verdict stands (r_avg consistent 9-10 µs across iter-11A commits).
+> - Phase 4 210-cell sweep data stands.
+> - The gate-12 PASS verdict stands (3 BIMODAL / 28 verified ≤ 8 threshold).
+> - What changes: the **why** behind those numbers, not the numbers themselves.
 
 ---
 

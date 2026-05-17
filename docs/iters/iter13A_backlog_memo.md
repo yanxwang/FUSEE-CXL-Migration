@@ -1,7 +1,27 @@
 # iter-13A backlog memo (from iter-12A)
 
 **Date**: 2026-05-16 (drafted alongside iter-12A summary)
-**Source**: `docs/iters/iter12A_summary_20260516.md`
+**Updated**: 2026-05-17 (Phase 5 complete: V1 falsified, V3 confirmed, fixed; items #2 and #4 now CLOSED)
+**Source**: `docs/iters/iter12A_summary_20260516.md` + `docs/iters/iter12A_phase5_rca.md`
+
+> **✅ PULLED-BACK ITEMS CLOSED 2026-05-17**
+>
+> Items #2 (parent-CPU-0 jitter mitigation) and #4 (CPU isolation escalation)
+> were pulled into iter-12A Phase 5 because they presumed V1 is the cause.
+> Phase 5 direct-probe RCA **falsified V1** (P5R_PL heartbeat showed g4
+> WriteReceiver on CPU 65 polling continuously for 118 s with no preempt
+> gaps) and identified the true root cause as **V3: host-1 cache-stale
+> `ring->head` on init=false reattach**. Fix landed in 3 functions of
+> `src/cxl_kv_ops_A.cc` and verified (60/60 WIN on residual cells +
+> 40/40 WIN regression spot-check). Items #2 and #4 are CLOSED — they
+> would have addressed a non-cause. See [`iter12A_phase5_rca.md`](iter12A_phase5_rca.md).
+>
+> iter-13A backlog below now has:
+> - **Bug B** (new, from Phase 5 cell C1 capture): 2/102 worker timeouts
+>   where receiver acked but worker missed the ack within 5 ms — separate
+>   from Bug A, smaller impact, not bimodal-class. See item 4 below.
+> - **Hash-diff post-fix verification** as a gate before iter-13A
+>   optimization work begins.
 
 iter-12A delivered the bimodal fix (gate-12 PASS with margin: 0 / 13 BIMODAL). With that data-reliability blocker removed, iter-13A's optimization aims become data-driven and pivotable.
 
@@ -27,15 +47,34 @@ For Zipf workloads (a, d, f), the most-accessed keys dominate cross-host invalid
 
 ## Open from iter-12A
 
-### 4. Parent-CPU-0 jitter mitigation (escalation past QR2 L1)
+### 4. ~~Parent-CPU-0 jitter mitigation (escalation past QR2 L1)~~ **CLOSED — V1 falsified, true cause was V3 cache-stale, fixed in iter-12A Phase 5**
 
-The Phase 1.6 fix at the receiver level reduced bimodal collapse rate from ~40% to ~5% (1/20 reps still has occasional hard-runaway in reference cell). The residual is driven by parent worker on CPU 0 occasionally needing > 5 ms to publish (held by current `kBudgetUs=5000`).
+V1 falsified by P5R_PL heartbeat probe (g4 WriteReceiver polled continuously
+on CPU 65 for 118 s with no preempt gaps). True cause was V3: stale dirty
+`ring->head` in host 1's L1/L2/L3 after `init=false` reattach. Fix landed
+2026-05-17 (commit pending). No CPU-isolation work needed.
 
-Two iter-13A options (per QR2 escalation hierarchy):
-- **L2 systemd cpuset shielding** — `AllowedCPUs` in `/etc/systemd/system.conf` carves a shielded core set for protocol_a_ycsb. No reboot needed; needs root systemctl daemon-reexec.
-- **L3 kernel-cmdline isolcpus + nohz_full** — most thorough; requires `/etc/default/grub` edit + `update-grub` + reboot. Risk: bootkill possible (PXE rescue available).
+### 4b (NEW). Bug B: 2/102 worker timeouts in cell C1 where receiver did see+ack
 
-Both need user explicit go-ahead (per QR2 "L2/L3 在本 iter 之后向我确认").
+Phase 5.1 probe data on cell C1 (workloada T=64 off kv=1024) post-Bug-A-fix
+shows 2 of 102 worker writes still timed out at 5 ms despite the receiver
+emitting `P5R_VS` + `P5R_AK` for those op_ids. Mechanism is **separate from
+Bug A** and likely worker-side `e->resp_op_id` visibility within the 5 ms
+budget — receiver wrote+flushed, but worker's spin_wait didn't observe the
+write before its budget expired.
+
+Plan for iter-13A:
+1. Add `P5W_ACK_OBSERVED` probe in `generic_spin_wait` (TSC when worker
+   first reads `resp_op_id == op_id`).
+2. Repro on cell C1 with extended FUSEE_PROBE=1 build.
+3. Measure ack-propagation delay distribution; if p99 exceeds 5 ms,
+   options: (a) extend `kBudgetUs`, (b) add explicit `flush_line(&e->resp_op_id)`
+   in worker spin loop, (c) move resp_op_id to a separate cacheline from
+   worker-written fields to reduce ping-pong.
+4. Effort: ~2-4 h focused diagnostic + targeted fix.
+
+Impact: not bimodal-class (affects ~2 % of writes max), but counts as a
+correctness/QoS issue (timeouts surface as -11 returns to caller).
 
 ### 5. kBudgetUs / receiver gap-budget Pareto sweep
 

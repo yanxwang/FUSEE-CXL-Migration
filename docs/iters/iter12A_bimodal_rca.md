@@ -1,6 +1,48 @@
 # iter-12A Bimodal Root Cause — Reviewer Attack Process (RAP)
 
-**Date**: 2026-05-16
+> **⚠️ SUPERSEDED 2026-05-17 by Phase 5 evidence-based RCA ⚠️**
+>
+> See [`iter12A_phase5_rca.md`](iter12A_phase5_rca.md) for the
+> evidence-based root cause: **host 1 cache-stale `ring->head` on
+> init=false reattach** (not CPU 0 preempt). Verified by direct probe
+> instrumentation (P5R_PL heartbeat); fixed in 3 functions of
+> `src/cxl_kv_ops_A.cc` (drop `if (init_region)` guard around memset+flush).
+> Phase 5.8b: **60/60 WIN** post-fix on the 3 residual bimodal cells
+> (vs ~30 % collapse pre-fix). Phase 5.8c regression: **40/40 WIN** across
+> 8 cells spanning all 5 workloads.
+>
+> The V1+V2 verdict below is preserved for archival reference but should
+> NOT be cited as the root cause.
+>
+> **Original ERRATA 2026-05-17 (kept for context)**:
+>
+> **This RAP's STATE / VERDICT contains an unverified inference chain that
+> CLAUDE.md cautionary precedent #4 should have caught. Do not rely on the
+> V1+V2 verdict below as fully-evidenced root cause.**
+>
+> **What this RAP got right (direct observation)**:
+> - Worker stuck in `generic_spin_wait at cxl_kv_ops_A.cc:74` (the POST-publish ACK-wait spin) — gdb 5+ reps × 3 timepoint
+> - Worker state = `R (running, on-CPU)` at sample time — not OS-preempted at sample time
+> - op_id progresses ~175 ops/sec → each remote write times out at ~5 ms
+> - 3 forked child workers exit normally (ZOMBIE state); only parent (CPU 0) is the slow one
+> - `if (op_id == 0) break;` defect exists at lines 1340/1638/1675 — verified by source read
+>
+> **What this RAP got wrong (inferred, not observed)**:
+> - V1 ("CPU 0 OS-preempts parent worker for > 5 ms") — NEVER directly observed. ftrace sched_switch (Phase 1.2) was SKIPPED per QR1; no preempt-duration measurement exists. A 5 ms preempt on a 86-core Xeon under low non-protocol_a_ycsb load is unrealistic per OS reality (CFS timeslice 1-3 ms, IRQ handler µs-scale).
+> - The cascade story "worker A on CPU 0 preempted → receiver sees gap → HoL block → workers B/C/D timeout" — does NOT explain why parent ALSO bimodal AFTER B/C/D zombie (single-producer case, no contention, no HoL surface).
+> - "V2 (receiver HoL break) is load-bearing" — the iter-12A fix that adds receiver gap-tolerance budget empirically worked (Phase 1.7: 13/13 iter-11A bimodal cells now NOT_BIMODAL with 16-269× median improvement), BUT this does NOT prove HoL was the load-bearing mechanism — the fix could be hiding a different bug whose symptom happens to overlap.
+>
+> **What we don't know (open questions for Phase 5)**:
+> - During the 5 ms timeout window, what is the worker actually doing? (Stuck in pre-publish memcpy/flush? Spinning in generic_spin_wait that never sees resp? Brief preempt followed by stuck publish?)
+> - When worker publishes, does the cacheline actually reach CXL? Does receiver actually see the new req_op_id?
+> - When receiver writes resp_op_id, does worker actually see it? Or is CXL coherence stale?
+> - In single-producer (post-B/C/D-zombie) scenario, where is the time going?
+>
+> **Phase 5 will answer these** via direct worker-side instrumentation (TSC trace at 4 points in forward_write_direct + ftrace sched_switch on parent + bpftrace per-iter receiver loop counter). Until Phase 5 verdict, treat the V2 PRIMARY verdict below as a working hypothesis that EMPIRICALLY MATCHED a mitigation, not as fully-evidenced root cause.
+
+---
+
+**Date**: 2026-05-16 (original) / 2026-05-17 (errata added)
 **Reference cell**: `workloada T=4 cache=off kv=512`
 **Observation-evidence pack**: [`docs/iter12A_diagnostic/phase_1_3_5_observation_verdict.md`](../iter12A_diagnostic/phase_1_3_5_observation_verdict.md)
 **Raw data**:
@@ -11,7 +53,8 @@
 
 ## STATE (≤ 30 chars)
 
-> Receiver HoL-break on op_id==0 amplifies CPU-0 jitter into 5-ms generic_spin_wait timeouts.
+> Receiver HoL-break on op_id==0 amplifies CPU-0 jitter into 5-ms generic_spin_wait timeouts.  
+> **(⚠ unverified — see errata at top. Replaced by Phase 5 evidence-based STATE pending.)**
 
 ## Observation-citation (the only allowed root-cause basis, per C16)
 

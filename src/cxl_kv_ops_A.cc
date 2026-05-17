@@ -382,13 +382,26 @@ int CxlKvStoreA::enable_write_ring(WriteRingMatrix *wr,
   if (!wr || !fs) return -1;
   wr_ = wr;
   fs_ = fs;
-  if (init_region) {
-    std::memset(wr, 0, write_ring_matrix_bytes());
-    flush_region(wr, write_ring_matrix_bytes());
-    std::memset(fs, 0, forward_staging_matrix_bytes());
-    flush_region(fs, forward_staging_matrix_bytes());
-    store_fence();
-  }
+  // iter-12A Phase 5.1c (residual bimodal RCA): memset+flush regardless of
+  // init_region. On init=false (host 1), this host's L1/L2/L3 retain dirty
+  // cache lines for ring->head / entries[].req_op_id from the PRIOR process
+  // (CXL is not coherent across hosts; cache state survives exec exec since
+  // the CXL DAX page is physically-addressed). Without this rewrite, the
+  // receiver reads ring->head non-atomically with no flush_line and observes
+  // the stale terminal head (e.g. 181 from a prior run) — when head>tail,
+  // the inner work loop never enters → entire ring direction stuck → every
+  // worker 5ms-timeouts forever (manifested as workloadb T4 on kv1024
+  // bimodal: 0 P5R_VS, head=181 stuck across 9309 polls in 118 s). Order is
+  // race-free: host 1 reaches this point only after init_done bit 0x1, set
+  // by host 0 *after* host 0's init=true memset; host 1's memset rewrites
+  // the same 0s. The init_region parameter is retained for callsite docs
+  // even though both branches now collapse to the same body.
+  std::memset(wr, 0, write_ring_matrix_bytes());
+  flush_region(wr, write_ring_matrix_bytes());
+  std::memset(fs, 0, forward_staging_matrix_bytes());
+  flush_region(fs, forward_staging_matrix_bytes());
+  store_fence();
+  (void)init_region;
   if (spawn_receiver) {
     write_receiver_stop_.store(false, std::memory_order_relaxed);
     write_receiver_ = std::thread([this]() {
@@ -416,13 +429,13 @@ int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, ReadStagingMatrix *rs,
   if (!rr || !rs) return -1;
   rr_ = rr;
   rs_ = rs;
-  if (init_region) {
-    std::memset(rr, 0, read_ring_matrix_bytes());
-    flush_region(rr, read_ring_matrix_bytes());
-    std::memset(rs, 0, read_staging_matrix_bytes());
-    flush_region(rs, read_staging_matrix_bytes());
-    store_fence();
-  }
+  // iter-12A Phase 5.1c: see comment in enable_write_ring above.
+  std::memset(rr, 0, read_ring_matrix_bytes());
+  flush_region(rr, read_ring_matrix_bytes());
+  std::memset(rs, 0, read_staging_matrix_bytes());
+  flush_region(rs, read_staging_matrix_bytes());
+  store_fence();
+  (void)init_region;
   if (spawn_receiver) {
     read_receiver_stop_.store(false, std::memory_order_relaxed);
     read_receiver_ = std::thread([this]() {
@@ -1145,12 +1158,19 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
 
+  // iter-12A Phase 5.1: P5W_FA = TSC just BEFORE fetch_add (entry to fn).
+  PROBE_OP("P5W_FA", op_id);
+
   // Reserve slot.
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
   uint32_t slot_idx = (uint32_t)(tpos % kWriteRingDepth);
   WriteEntry *e = &ring->entries[slot_idx];
+
+  // iter-12A Phase 5.1: P5W_SR = TSC after fetch_add, BEFORE slot-free wait.
+  // Delta P5W_SR - P5W_FA = fetch_add + ring->tail flush cost (~200 ns typical).
+  PROBE_OP("P5W_SR", op_id);
 
   // Wait for slot free (cacheline 1 holds req_op_id).
   for (;;) {
@@ -1159,6 +1179,11 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
     __builtin_ia32_pause();
   }
+
+  // iter-12A Phase 5.1: P5W_SF = TSC after slot-free wait completes.
+  // Delta P5W_SF - P5W_SR = slot-free spin time. > 0 if prior worker still
+  // hasn't ack'd / released this slot.
+  PROBE_OP("P5W_SF", op_id);
 
   // Copy value bytes into the staging arena slot first (op_kind=DELETE
   // skips this — value_len == 0).
@@ -1181,12 +1206,35 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
+
+  // iter-12A Phase 5.1: P5W_PP = TSC just BEFORE publish (req_op_id store).
+  // Delta P5W_PP - P5W_SF = memcpy + 16x flush_line + fill control fields.
+  // This is the "gap window" — between fetch_add and publish, receiver
+  // sees slot empty.
+  PROBE_OP("P5W_PP", op_id);
+
   e->req_op_id.store(op_id, std::memory_order_release);
   flush_line((void *)&e->req_op_id);  // publish cacheline 1
   store_fence();
 
+  // iter-12A Phase 5.1: P5W_PT = TSC just AFTER publish (post store_fence).
+  // From this point on, receiver could in principle observe req_op_id != 0.
+  PROBE_OP("P5W_PT", op_id);
+
   int status = 0;
   int rc = generic_spin_wait(e, op_id, &status);
+
+  // iter-12A Phase 5.1: P5W_OK / P5W_TO = TSC at spin_wait exit.
+  // (Tags shortened from "P5W_SX_OK/TO" — exceeded 8-char probe limit and
+  // were truncated to "P5W_SX_T" indistinguishably. Use 6-char tags.)
+  // Distinguish success vs timeout. Delta P5W_OK/TO - P5W_PT = ack-wait time
+  // (worker spinning waiting for resp_op_id == op_id).
+  if (rc == 0) {
+    PROBE_OP("P5W_OK", op_id);
+  } else {
+    PROBE_OP("P5W_TO", op_id);
+  }
+
   if (rc != 0) return rc;
   return status;
 }
@@ -1278,11 +1326,11 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
                                    bool spawn_dispatcher) {
   if (!ir) return -1;
   ir_ = ir;
-  if (init_region) {
-    std::memset(ir, 0, inval_ring_matrix_bytes());
-    flush_region(ir, inval_ring_matrix_bytes());
-    store_fence();
-  }
+  // iter-12A Phase 5.1c: see comment in enable_write_ring above.
+  std::memset(ir, 0, inval_ring_matrix_bytes());
+  flush_region(ir, inval_ring_matrix_bytes());
+  store_fence();
+  (void)init_region;
   if (spawn_dispatcher) {
     // iter-11A Phase 2 reverted (commit 455379e): the
     // InvalDispatcher + 8 InvalWorker design passed hash-diff but
@@ -1641,6 +1689,13 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
 
 void CxlKvStoreA::write_receiver_loop() {
   probe_ring();
+  // iter-12A Phase 5.1b: receiver poll-tail heartbeat. P5R_PL emitted every
+  // 1<<P5R_PL_LOG2 outer-loop polls, with op_id encoding (head<<32)|tail of
+  // the just-observed values. Lets us distinguish (a) thread preempted,
+  // (b) thread polling but tail stuck at stale value, (c) tail growing slowly.
+  constexpr uint64_t P5R_PL_LOG2 = 14;  // every 16384 polls
+  uint64_t pl_counter = 0;
+  uint64_t last_tail_obs = (uint64_t)-1;  // sentinel: force first emit
   while (!write_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
@@ -1650,12 +1705,29 @@ void CxlKvStoreA::write_receiver_loop() {
       flush_line((void *)&ring->tail);
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
+      // Heartbeat probe: fires every (1<<P5R_PL_LOG2) polls OR when tail value
+      // changes from prior observation. op_id = (head & 0xFFFFFFFF) << 32 |
+      // (tail & 0xFFFFFFFF). Both head and tail bounded by ~50k in this test.
+      pl_counter++;
+      bool periodic = (pl_counter & ((1ULL<<P5R_PL_LOG2)-1)) == 0;
+      bool changed = (tail != last_tail_obs);
+      if (periodic || changed) {
+        PROBE_OP("P5R_PL", ((head & 0xFFFFFFFFULL) << 32) | (tail & 0xFFFFFFFFULL));
+        last_tail_obs = tail;
+      }
       while (head < tail) {
         uint32_t slot = (uint32_t)(head % kWriteRingDepth);
         WriteEntry *e = &ring->entries[slot];
         flush_line((void *)&e->req_op_id);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
+        // iter-12A Phase 5.1 probe: P5R_FZ = receiver first load of req_op_id
+        // before any gap-tolerance retry. Recording head value as the
+        // "op_id" field lets us cross-correlate with tail growth.
+        // If op_id == 0, this is a gap-encounter event; else first-visible.
+        if (op_id == 0) {
+          PROBE_OP("P5R_GZ", head);  // gap encountered, will spin-budget
+        }
         // iter-12A bimodal fix: gap-tolerance budget before bailing.
         // See note in inval_receiver_loop for rationale.
         if (op_id == 0) {
@@ -1665,8 +1737,17 @@ void CxlKvStoreA::write_receiver_loop() {
             full_fence();
             op_id = e->req_op_id.load(std::memory_order_acquire);
           }
-          if (op_id == 0) break;
+          if (op_id == 0) {
+            // iter-12A Phase 5.1 probe: P5R_GX = gap budget exhausted, will break out.
+            PROBE_OP("P5R_GX", head);
+            break;
+          }
+          // iter-12A Phase 5.1 probe: P5R_GH = gap healed during budget spin.
+          PROBE_OP("P5R_GH", op_id);
         }
+        // iter-12A Phase 5.1 probe: P5R_VS = receiver visible (op_id read non-zero,
+        // about to process). Tag carries the actual op_id (cross-correlate with worker P5W_PT).
+        PROBE_OP("P5R_VS", op_id);
         // Pull the rest of cacheline 1 (key, op_kind, value_len,
         // staging_off, staging_gen) — they're on the same line as
         // req_op_id, the flush above already fetched them.
@@ -1676,6 +1757,9 @@ void CxlKvStoreA::write_receiver_loop() {
         e->resp_op_id.store(op_id, std::memory_order_release);
         flush_line((void *)&e->resp_op_id);
         store_fence();
+        // iter-12A Phase 5.1 probe: P5R_AK = receiver wrote resp_op_id (and flushed/fenced).
+        // Worker's spin_wait should observe this within CXL coherence latency.
+        PROBE_OP("P5R_AK", op_id);
         head++;
         did_work = true;
       }

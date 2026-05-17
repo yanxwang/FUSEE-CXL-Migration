@@ -593,6 +593,183 @@ bash scripts/iter10A_anomaly_5rep_verify.sh ...
 
 ---
 
+## Phase 5 — Worker-side observation + 残余 bimodal 真正 RCA (ADDED 2026-05-17, COMPLETE 2026-05-17)
+
+> **✅ PHASE 5 COMPLETE 2026-05-17** — V1 falsified by direct probe evidence,
+> true cause identified as **V3: host-1 cache-stale `ring->head` on
+> `init=false` reattach** (see [`iter12A_phase5_rca.md`](iter12A_phase5_rca.md)
+> for the evidence-based RAP v2). Fix applied to 3 functions in
+> `src/cxl_kv_ops_A.cc` (drop `if (init_region)` guard around memset+flush);
+> verified at **24/24 + 60/60 + 40/40 WIN** post-fix vs ~30 % collapse pre-fix.
+> Phase 5.2 (ftrace) + 5.5 (CPU 10+ ablation) **superseded** by the
+> P5R_PL poll-tail heartbeat probe which gave stronger direct evidence
+> (118 s of continuous receiver polling on CPU 65 with no preempt gaps).
+> See `docs/iter12A_p5_diagnostic/` for raw data and
+> `iter12A_phase5_rca.md §DELIVERY AUDIT` for per-sub-phase status.
+
+**Why this phase exists**: user-driven audit of Phase 1.5 RAP found that the V1
+hypothesis ("CPU 0 OS-preempts parent worker > 5 ms") was inferred, not
+directly observed. Phase 1.2 (ftrace) was skipped per QR1; the cascade story
+explains multi-producer scenarios but not single-producer (post-zombie) cases
+where parent alone is still bimodal. Per CLAUDE.md cautionary precedent #4
+(hypothesis-without-observation forbidden), the residual 3 bimodal cells
+(workloada T=64 off kv=1024, workloadb T=4 on kv=1024, workloadd T=4 off
+kv=256) MUST be re-observed directly before any further fix is committed.
+
+**Why in iter-12A, not iter-13A**: the original iter-13A backlog items
+#2 (worker-0 CPU shift) and #4 (CPU-jitter mitigation L2/L3) **presume**
+V1 is causal. If V1 turns out NOT to be the cause (or only partially), those
+fixes are wasted effort. iter-12A's job is finishing its own RCA — pushing
+unverified attributions into iter-13A would repeat the iter-11A backlog #2
+failure mode.
+
+### Phase 5.0 — Pre-flight + residual baseline (`docs/iter12A_p5_diagnostic/phase_5_0_baseline/`)
+
+testbed restored (rekey + bootstrap + workloads + daxctl) before this phase.
+
+3 residual bimodal cells × 20 reps each on current iter-12A binary (with
+Phase 1.6 fix), to characterize the residual rate baseline:
+
+```bash
+for cell in "workloada 64 off 1024" "workloadb 4 on 1024" "workloadd 4 off 256"; do
+  bash scripts/iter12A_repro_cell.sh docs/iter12A_p5_diagnostic/phase_5_0_baseline/ $cell 20
+done
+```
+
+**Exit**: each cell shows >= 2 bimodal reps in 20 (i.e., residual is real, not flaky reproducibility).
+
+### Phase 5.1 — Worker-side TSC trace (`docs/iter12A_p5_diagnostic/phase_5_1_tsc/`)
+
+Add 4 inline TSC reads to `forward_write_direct`:
+
+```cpp
+int CxlKvStoreA::forward_write_direct(...) {
+  uint64_t ts1 = __rdtsc();           // pre fetch_add
+  uint64_t tpos = ring->tail.fetch_add(1, ...);
+  // ... slot-free wait, memcpy, fill control ...
+  uint64_t ts2 = __rdtsc();           // pre publish
+  e->req_op_id.store(op_id, ...);
+  flush_line(&e->req_op_id);
+  store_fence();
+  uint64_t ts3 = __rdtsc();           // post publish, pre spin_wait
+  int rc = generic_spin_wait_traced(e, op_id, &status, &ts4_out);  // ts4 = enter / timeout / success
+  // log {tpos, op_id, ts1, ts2, ts3, ts4, rc} into per-thread mmap'd ring buffer
+}
+```
+
+Per-thread ring buffer at fixed CXL or DRAM region, post-process tool extracts
+(publish_gap = ts2-ts1, write_gap = ts3-ts2, ack_wait = ts4-ts3) distributions.
+
+**What this directly answers**:
+- Is publish_gap (Step 1 → Step 5) really > 5 ms? → V1 supporting evidence
+- Is ack_wait the dominant cost? → V2 / cascade evidence
+- Are there gaps between adjacent ts1's > expected per-op interval? → preempt evidence (single-thread)
+
+**Exit**: at least 100 trans-phase forward_write_direct calls per worker × all 4 workers logged; distribution of (publish_gap, write_gap, ack_wait) plotted as histogram per worker.
+
+### Phase 5.2 — ftrace sched_switch on parent worker tid (`docs/iter12A_p5_diagnostic/phase_5_2_ftrace/`)
+
+Do the Phase 1.2 that was skipped per QR1, now mandatory for V1 verification:
+
+```bash
+ssh g3 'trace-cmd record -e sched:sched_switch -e sched:sched_wakeup -e irq:irq_handler_entry -P <parent_tid> -- sleep 30' &
+bash scripts/iter12A_repro_cell.sh ... workloada 64 off 1024 1
+ssh g3 'trace-cmd report > /tmp/p5_2_sched.txt'
+```
+
+Post-process: find all `sched_switch` events where `prev_state == R` and gap
+to next `sched_wakeup` is > 1 ms (i.e., parent was preempted involuntarily for > 1 ms).
+
+**What this directly answers**:
+- Does parent actually get preempted > 5 ms? → V1 direct evidence
+- What IRQ / softirq / system task causes the preempt?
+
+**Exit**: ≥ 1 collapse rep with full sched_switch + IRQ trace captured; max-preempt-duration measured.
+
+### Phase 5.3 — bpftrace per-iter receiver loop count (`docs/iter12A_p5_diagnostic/phase_5_3_receiver/`)
+
+Phase 1.1 bpftrace had a bug — `uprobe:write_receiver_loop` fires once per thread
+lifetime (function entry), not per iteration. Now need per-iteration counter, by
+probing INSIDE the loop:
+
+Option A: add `__attribute__((noinline))` static helper called inside the loop
+(needs source change + rebuild) and bpftrace that helper.
+
+Option B: bpftrace at the specific address inside the loop (e.g., right after
+`flush_line(&e->req_op_id)`) — fragile across compiler optimizations.
+
+Going with Option A — 5-line code change adding an empty helper:
+
+```cpp
+__attribute__((noinline,used))
+static void receiver_loop_iter_probe(int kind, uint64_t head, uint64_t tail, uint64_t op_id) {
+  asm volatile("" : : "r"(kind), "r"(head), "r"(tail), "r"(op_id) : "memory");
+}
+```
+
+Called once per inner-while-iteration in each receiver loop. bpftrace counts
+calls per second + classifies (op_id==0 → "break path", op_id!=0 → "process path").
+
+**What this directly answers**:
+- Is receiver actually break-looping in collapse reps? → V2 direct evidence
+- Receiver iter rate per sec → CPU efficiency
+- Break-path vs process-path ratio → HoL block frequency
+
+**Exit**: collapse rep + win rep each captured with per-iter counts;
+break-path rate difference identified.
+
+### Phase 5.4 — Observation verdict (`docs/iter12A_p5_diagnostic/phase_5_4_verdict.md`)
+
+Re-run the Phase 1.3.5-style verdict gate with NEW evidence from 5.1-5.3:
+
+| Verdict | Predicate | Phase 5 evidence |
+|---|---|---|
+| V1 (preempt > 5ms) | 5.2 finds max-preempt > 5ms in collapse reps | TBD |
+| V2 (HoL break) | 5.3 finds break-path rate spikes in collapse reps | TBD |
+| V3 (CXL coherence stale) | 5.1 finds short publish_gap but long ack_wait that doesn't correlate with receiver state | TBD |
+| V4 (mixed / new mechanism) | 5.1-5.3 show pattern inconsistent with V1/V2/V3 alone | TBD |
+
+**Exit**: explicit verdict with cited 5.1/5.2/5.3 row references — same standard as Phase 1.3.5.
+
+### Phase 5.5 — Ablation: parent off CPU 0 (`docs/iter12A_p5_diagnostic/phase_5_5_ablation_cpu/`)
+
+1-line code change in `tests/protocol_a_ycsb.cc:316`:
+
+```cpp
+int target_cpu = client_id + 10;  // skip CPU 0-9, avoid IRQ-heavy CPUs
+```
+
+Re-run 3 residual cells × 20 reps. Compare bimodal rate vs Phase 5.0 baseline.
+
+**What this directly answers**:
+- If bimodal disappears → V1 (CPU 0 jitter) was sufficient cause
+- If bimodal persists → V1 wasn't load-bearing; other mechanism remains
+
+**Exit**: 3-cell × 20-rep bimodal count post-shift recorded.
+
+### Phase 5.6 — Updated RAP (`docs/iters/iter12A_bimodal_rca_v2.md`)
+
+Same §XIII RAP format as Phase 1.5 but cited from Phase 5.1-5.5 data instead of
+Phase 1.1-1.3. STATE / VERDICT / DECISION updated.
+
+### Phase 5.7 — Narrow-targeted fix (if needed beyond Phase 1.6)
+
+If Phase 5.4 verdict identifies a real mechanism not yet addressed:
+- Fix per C17 (≤ 3 file × function, or stop-and-ask)
+- Hash-diff 20/20 PASS mandatory
+- Re-verify 3 residual cells
+
+If Phase 5.4 verdict is "Phase 1.6 fix already sufficient, residual is acceptable
+physical noise" — document this explicitly with cited evidence, no new fix.
+
+### Phase 5.8 — Re-verify residual + final iter-12A summary update
+
+Run 5-rep verify on the 3 residual cells (plus any newly-flagged by Phase 5.7).
+Update `iter12A_summary_20260516.md` with Phase 5 results; remove "RE-OPENED"
+banner once Phase 5 deliverables in. Update iter-13A backlog (remove pulled-in items).
+
+---
+
 ## Phase delivery audit gate
 
 iter-12A end of iter 必须在 `iter12A_summary.md` 里写**这张表**（per precedent #3）:
