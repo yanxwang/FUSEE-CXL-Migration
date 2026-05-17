@@ -1,0 +1,22 @@
+# iter-12A post-fix scaling_ycsb sweep
+# workloads=workloada workloadb workloadc workloadd workloadf
+# threads=1 2 4 8 16 32 64
+# cache_modes=on off
+# kv_sizes=256 512 1024
+# reps=1  max_ops=200000  timeout=600s
+# total_runs=210
+# started=2026-05-17T02:24:10-05:00
+# commit=2e61487c24e0dee98aad96a31ae88990e0f555b2
+[sweep] 20/210 done (0 fails); elapsed 74s; eta 703s
+[sweep] 40/210 done (0 fails); elapsed 149s; eta 633s
+[sweep] 60/210 done (0 fails); elapsed 222s; eta 555s
+[sweep] 80/210 done (0 fails); elapsed 294s; eta 477s
+[sweep] 100/210 done (0 fails); elapsed 366s; eta 402s
+[sweep] 120/210 done (0 fails); elapsed 437s; eta 327s
+[sweep] 140/210 done (1 fails); elapsed 1107s; eta 553s
+[sweep] 160/210 done (1 fails); elapsed 1177s; eta 367s
+[sweep] 180/210 done (1 fails); elapsed 1257s; eta 209s
+[sweep] 200/210 done (1 fails); elapsed 1343s; eta 67s
+# finished=2026-05-17T02:47:16-05:00
+# ok=209  fail=1  total=210
+# elapsed=1386s
