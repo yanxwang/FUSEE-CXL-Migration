@@ -1,0 +1,9 @@
+scenario	keydist	host	trans_agg_thpt	w_p50_ns	w_p99_ns	r_p50_ns	r_p99_ns
+local_read	uniform	h0	6947339	0	0	13956	61474
+local_read	zipf	h0	9556574	0	0	11377	24600
+xhost_read	uniform	h0	7239032	0	0	14134	29100
+xhost_read	zipf	h0	8602890	0	0	13402	26843
+local_write	uniform	h0	26666666	26138	204948	0	0
+local_write	zipf	h0	22883295	26259	70601	0	0
+xhost_write	uniform	h0	25342118	28159	107263	0	0
+xhost_write	zipf	h0	22789425	30222	206633	0	0
