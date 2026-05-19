@@ -130,3 +130,71 @@ For each canonical cell, compute:
 Gap > 50% → critical path has off-stage contention (lock queueing,
 scheduling, GC) not captured by current PROBE_OP. Trigger P4.3
 investigation.
+
+---
+
+## F. Mandatory output: per-stage walkthrough (added 2026-05-19 mid-iter
+   after user feedback)
+
+Every path_decomp run from iter-14A onward MUST produce a
+`per_stage_walkthrough.md` (in addition to the data-table-only
+`per_stage_decomp.md`). The walkthrough has one section per stage and
+must include the following six fields for ANY stage that triggers an
+alert:
+
+**Alert criteria (any triggers walkthrough)**:
+- **ALERT-A**: p50 > 1 µs
+- **ALERT-B**: p99 > 5 µs
+- **ALERT-C**: max > 100 µs
+- **ALERT-D**: H/E ratio (observed / expected p50) > 2×
+
+**Required fields per alerted stage**:
+1. **Observed**: p50, p99, max, N samples (from parsed_*.tsv)
+2. **Spec expected**: p50 (link to spec row)
+3. **Code logic**: file:line citation in src/ tree
+4. **Is it reasonable?** YES / NO + reasoning (max 3 sentences)
+5. **Optimization room (even if reasonable)**: enumerated list,
+   each with estimated effort + ROI sketch
+6. **Fix action this iter**: attempted (link to RAP + decision) /
+   not attempted (deferred to which iter-N+1 backlog item)
+
+**Stages with no alert**: list under "Within expected — no walkthrough"
+with one-line "all clear" note.
+
+**New alerts not previously known** (e.g., a stage that crossed a
+threshold this iter that wasn't before): MUST be added to the iter's
+backlog memo as iter-N+1 candidate items with explicit reference to
+the walkthrough section.
+
+**Why this is mandatory**: P4 in iter-14A surfaced two anomalies (W10
+SOFT, R2hit MILD) but **six additional alert-triggering observations
+were captured in raw data but never analyzed** (W12 max 12ms, R0_tls_hit
+hit-rate 0.7%, P5W_PT 5.4 µs gap, etc.) until a user-requested
+follow-up review. The walkthrough format makes those alerts surface
+in the standard output and forces the "reasonable + code + opt room"
+discipline at decomp-time, not after.
+
+---
+
+## G. Stage spec re-check on observed deviations
+
+If observed p50 is < 0.5× spec expected (stage is FASTER than spec
+predicted), the spec expected value is suspect. Update spec with the
+observed median + a note explaining why the prediction was off. The
+purpose of "expected" is to flag anomalies — overly conservative
+expectations create false-positive alerts. (Example: W9 spec said
+150 ns but observed 22 ns; spec needs revision.)
+
+---
+
+## H. Probe data retention policy
+
+`parsed_*.tsv` files are the authoritative per-stage record. They MUST
+be committed (small, ~1 KB each). Raw probe dump files (large, ~MBs
+per host per run) MAY be archived separately or deleted after parsing.
+
+Once `per_stage_walkthrough.md` is produced from the parsed TSVs, the
+walkthrough doc becomes the analysis-of-record. Re-running the whole
+decomp is NOT required to revisit the analysis — only to refresh the
+underlying numbers when architecture changes.
+
