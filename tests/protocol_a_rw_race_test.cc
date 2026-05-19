@@ -224,8 +224,10 @@ int main(int argc, char **argv) {
       return 2;
     }
   }
-  store.stop_responder();
-  store.stop_dispatcher();
+  // iter-14A P1 cleanup: stop_responder + stop_dispatcher only join 2
+  // of the (now) 6 named threads; ReadReceiver + 3 senders would leak
+  // and trigger terminate(). store.stop() joins all of them.
+  store.stop();
   cxl_region_destroy(&r);
   return 0;
 }

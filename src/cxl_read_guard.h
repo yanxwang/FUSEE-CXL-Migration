@@ -71,6 +71,21 @@ namespace fusee {
 #define FUSEE_WRITE_ALLOC_RESERVED 1
 #define FUSEE_WRITE_ALLOC_BATCHED  2
 
+// iter-14A Phase 2: cross-host write worker self-invalidate selector.
+//   FUSEE_XHOST_WRITE_SELF_INVAL == 0  (default) — receiver broadcasts
+//     invalidate to all non-self sharers including the writer's host;
+//     the writer's cache is then invalidated by InvalReceiver.
+//   FUSEE_XHOST_WRITE_SELF_INVAL == 1  — writer self-invalidates its
+//     local cache BEFORE forwarding (cache_pool_set_stale + tls_evict);
+//     receiver excludes writer from invalidate broadcast.  Saves one
+//     cross-host InvalRing roundtrip per applicable write.  Correctness:
+//     §I9 strict-A preserved (writer's cache is authoritatively stale
+//     at the moment of write issuance; receiver still invalidates all
+//     OTHER sharers).
+#ifndef FUSEE_XHOST_WRITE_SELF_INVAL
+#define FUSEE_XHOST_WRITE_SELF_INVAL 0
+#endif
+
 // Hard limits (must agree across all build configs — both RCU and
 // HAZARD domains are always laid out in CXL even if disabled, so the
 // offsets between the build flavors stay aligned).

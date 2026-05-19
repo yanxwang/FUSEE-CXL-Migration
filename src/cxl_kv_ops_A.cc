@@ -184,12 +184,13 @@ int CxlKvStoreA::attach(void *bucket_base, uint32_t num_buckets,
 //   - TLS cache update      (TLS is per-thread; receiver thread is not a
 //                            worker thread; TLS irrelevant here.)
 int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
-                                              uint32_t value_len, int op_kind) {
+                                              uint32_t value_len, int op_kind,
+                                              int self_inval_src) {
   if (key == kEmptyKey) return -1;
   if (op_kind == kOpKindDelete) {
     // DELETE shouldn't reach this path — worker doesn't alloc on delete.
     // Fall back to regular delete.
-    return execute_write_local(key, nullptr, 0, kOpKindDelete);
+    return execute_write_local(key, nullptr, 0, kOpKindDelete, self_inval_src);
   }
   if (blk_off == 0 || value_len == 0) return -1;
   if (pool_ && value_len + 4 > pool_->block_size()) return -5;
@@ -223,10 +224,16 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
   CxlKvSlot *slot = &bucket->slots[target_slot];
 
   // Sharer invalidate (same as execute_write_local Step 4).
+  // iter-14A Phase 2: if `self_inval_src` is set, skip that host from
+  // broadcast because the forwarding worker already self-invalidated
+  // its local cache before sending the WriteEntry.
   uint8_t bitmap = de->sharer_bitmap;
   if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
     for (int h = 0; h < num_hosts_; h++) {
       if (h == host_id_) continue;
+#if FUSEE_XHOST_WRITE_SELF_INVAL
+      if (h == self_inval_src) continue;
+#endif
       if ((bitmap & (1u << h)) == 0) continue;
       send_invalidate((uint32_t)h, key);
     }
@@ -258,7 +265,8 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
 // is the user payload. value=nullptr+value_len=0 is the DELETE
 // convention. value_len > pool_->block_size() is rejected.
 int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
-                                     uint32_t value_len, int op_kind) {
+                                     uint32_t value_len, int op_kind,
+                                     int self_inval_src) {
   if (key == kEmptyKey) return -1;
   if (op_kind != kOpKindDelete) {
     if (!value || value_len == 0) return -1;
@@ -317,6 +325,11 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     int n_sent = 0;
     for (int h = 0; h < num_hosts_; h++) {
       if (h == host_id_) continue;
+#if FUSEE_XHOST_WRITE_SELF_INVAL
+      // iter-14A Phase 2: skip the host that forwarded this write to
+      // us — it self-invalidated its local cache before sending.
+      if (h == self_inval_src) continue;
+#endif
       if ((bitmap & (1u << h)) == 0) continue;
       if (n_sent == 0) PROBE_OP("W4", key);
       send_invalidate((uint32_t)h, key);
@@ -1241,6 +1254,18 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
                                       int op_kind) {
   if (!wr_ || !fs_) return -10;
   if (value_len > kForwardStagingSlotBytes) return -5;
+
+#if FUSEE_XHOST_WRITE_SELF_INVAL
+  // iter-14A Phase 2: self-invalidate local cache BEFORE forwarding.
+  // Receiver excludes us from invalidate broadcast (saves 1 cross-host
+  // roundtrip per write). MUST be sequenced before WriteEntry enqueue;
+  // x86 program-order is sufficient (both are stores, release-default).
+  // Safe regardless of whether `key` was actually cached locally —
+  // set_stale + tls_evict are idempotent / no-op on miss.
+  if (cache_) cache_pool_set_stale(cache_, key);
+  if (g_thread_tls) tls_evict(g_thread_tls, key);
+#endif
+
   WriteRing *ring = &wr_->rings[host_id_][owner];
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
@@ -1927,8 +1952,13 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
 
 void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
   uint32_t value_len = e->value_len;
+  // iter-14A Phase 2: forward src host to execute_write_local; if
+  // FUSEE_XHOST_WRITE_SELF_INVAL is on, src has already self-invalidated
+  // its local cache, so we exclude src from the invalidate broadcast.
+  // When flag is off, the src parameter is silently ignored — behavior
+  // matches iter-13A baseline.
   if (e->op_kind == kOpKindDelete) {
-    e->status = execute_write_local(e->key, nullptr, 0, kOpKindDelete);
+    e->status = execute_write_local(e->key, nullptr, 0, kOpKindDelete, src);
     return;
   }
   if (value_len == 0 || value_len > kForwardStagingSlotBytes) {
@@ -1955,7 +1985,7 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
     // Call into execute_write_local with the special "pre-allocated"
     // signal — implemented as a new internal helper:
     e->status = execute_write_local_with_blk(e->key, blk_off, value_len,
-                                              (int)e->op_kind);
+                                              (int)e->op_kind, src);
     return;
   }
   // staging_gen == 1: fallback path, fall through to STAGING below.
@@ -1971,7 +2001,7 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
   }
   full_fence();
   e->status = execute_write_local(e->key, staging, value_len,
-                                   (int)e->op_kind);
+                                   (int)e->op_kind, src);
 }
 
 // iter-11A Phase 1 forwarder-pool-direct: owner's read_handler writes

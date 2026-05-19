@@ -214,11 +214,19 @@ class CxlKvStoreA {
   // the slot pointer + bumps bucket epoch via cache_pool_evict (so
   // subsequent readers see miss → forward_read fresh). Caller passes
   // the pre-allocated blk_off + value_len.
+  // iter-14A Phase 2: optional `self_inval_src` parameter. When >= 0,
+  // it identifies a remote host that self-invalidated its local cache
+  // BEFORE forwarding this write to us. We exclude that host from the
+  // invalidate broadcast loop (saves 1 cross-host roundtrip per write).
+  // Default -1 = legacy behavior (broadcast to all non-self sharers).
+  // Only safe to pass src >= 0 from write_handler (the receiver thread).
   int execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
-                                   uint32_t value_len, int op_kind);
+                                   uint32_t value_len, int op_kind,
+                                   int self_inval_src = -1);
 
   int execute_write_local(uint64_t key, const void *value,
-                          uint32_t value_len, int op_kind);
+                          uint32_t value_len, int op_kind,
+                          int self_inval_src = -1);
 
   // Cross-host helpers — iter-9A Phase 2.A 3-ring split.
   // Public dispatchers: route through aggregator if enabled, else
