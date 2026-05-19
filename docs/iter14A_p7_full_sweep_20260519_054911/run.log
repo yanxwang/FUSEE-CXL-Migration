@@ -1,0 +1,10 @@
+# iter-14A P7 full scaling_ycsb sweep sweep — W1 build (HAZARD read + RESERVED write)
+# total_runs=210 reps=1 max_ops=200000
+# started=2026-05-19T05:49:11-05:00
+# commit=5facbe4ce1cf6d86cde3f8aeb47a3de64af6e39d
+[sweep] 20/210 done (0 fails); elapsed 74s; eta 703s
+[sweep] 40/210 done (2 fails); elapsed 146s; eta 620s
+[sweep] 60/210 done (2 fails); elapsed 217s; eta 542s
+[sweep] 80/210 done (2 fails); elapsed 288s; eta 468s
+[sweep] 100/210 done (2 fails); elapsed 359s; eta 394s
+[sweep] 120/210 done (2 fails); elapsed 430s; eta 322s

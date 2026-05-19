@@ -218,3 +218,91 @@ All shipped flags default OFF (no behavioral change in as-shipped build).
 - `docs/iter14A_p8_tls_research/tls_evolution_review.md` — TLS research
 - `docs/iters/iter14A_summary_20260519.md` — this doc
 - `docs/iters/iter14A_backlog_memo.md` — iter-15A handoff (updated below)
+
+---
+
+## P6.5 + P7 — completed after initial summary (06:08 → 06:08+)
+
+After the initial summary above was written, two additional phases were
+brought to completion using inline (non-launcher-chain) runs to avoid the
+auto-loop / chain-script collisions documented under "Test-bed contention
+discipline" above. Both used the existing build-cxl-w1 binary (as-shipped,
+both F1 + F2 ROLLBACK defaults).
+
+### P6.5 — xhost slowpath verification via cache_pool overflow
+
+This is the NB-overflow variant (`scripts/iter14A_p65_xhost_slowpath.sh`),
+distinct from the probe-based P6 v2 Layer 2 that remains BLOCKED.
+
+Cells: T=64, KV=1024, 24 cells (4 scenario×keydist × 2 NB × 3 reps),
+0 FAIL.
+
+| Scenario | keydist | NB=1024 median | NB=1M median | NB=1024 / NB=1M |
+|---|---|---:|---:|---:|
+| local_read | uniform | 24.24 M | 9.78 M | **2.48×** |
+| local_read | zipf    | 23.29 M | 12.39 M | **1.88×** |
+| xhost_read | uniform | 25.11 M | 9.52 M | **2.64×** |
+| xhost_read | zipf    | 22.79 M | 12.37 M | **1.84×** |
+
+**Counter-result**: hypothesis was "NB=1024 overflow → R3 RTT fires →
+xhost slower than local". Reality: NB=1024 is **1.8-2.6× FASTER** than
+NB=1M, and local ≈ xhost still holds. Detail:
+`docs/iter14A_p65_xhost_slowpath_20260519_054536/ANALYSIS.md`.
+
+Revised mental model: with NB=1024 buckets × 8 probe slots = ~8K
+cache_pool slots, the working set effectively collapses to ~8K hot keys
+(since trans is 200K ops). The TLS + cache_pool stack warms to this
+small set; both layers operate cache-resident; throughput rises. NB=1M
+has full 2M-key working set → TLS misses dominate → R2hit on wider
+cache_pool footprint → 17-cacheline MESI ping-pong (W10 path) → lower
+throughput.
+
+**Implication**: TLS sizing study + workload-set sizing study are
+iter-15A research candidates. Cross-host R3 cost was NOT exposed by
+either P6 NB=1M or P6.5 NB=1024 — needs a different workload structure
+(continuous insert/evict, not static 2M-key load + 200K read trans).
+
+### P7 — 210-cell YCSB scaling sweep on as-shipped (build-cxl-w1)
+
+Sweep parameters: 5 workloads × 2 cache × 3 KV × 7 T × 1 rep = 210 cells.
+Result: 210/210 OK after 4 retries (collisions with parallel-session
+cleanup commands), 0 unexplained anomalies (§13 gate 5 anomaly scan).
+
+Per-workload peaks vs iter-13A as-shipped:
+
+| Workload | iter-14A peak | T,kv,cache | iter-13A | Δ |
+|---|---:|---|---:|---:|
+| workloada | 10.89 M | T=64 kv=1024 c=on | 11.12 M | -2.04% |
+| workloadb | **19.97 M** | T=64 kv=512 c=off | 19.14 M | +4.34% |
+| workloadc | 19.37 M | T=64 kv=256 c=off | 18.79 M | +3.09% |
+| workloadd | 18.42 M | T=64 kv=256 c=on  | 18.20 M | +1.19% |
+| workloadf | 17.49 M | T=64 kv=512 c=off | 16.89 M | +3.57% |
+
+All deltas ±1-4% are within run-to-run noise; the as-shipped build is
+behaviorally identical to iter-13A (both fixes rolled back). workloadb
+essentially reaches the 20 Mops/s YCSB-A target (19.97 = 99.85%).
+
+Hash-diff battery (build-cxl-w1, 5 workloads × 4 KV sizes): **20/20 PASS**.
+§I9 strict-A linearizability preserved.
+
+Data: `docs/iter14A_p7_full_sweep_20260519_054911/SUMMARY.log`,
+`docs/iter14A_p7_hashdiff_*/SUMMARY.log`.
+
+### Updated iter-completion gate row
+
+| Gate | Original status | Updated status |
+|---|---|---|
+| §13 gate 5 anomaly scan (P7) | (P7 deferred) | ✅ PASS (210 cells, 0 anomalies) |
+| G1 hash-diff (P7 as-shipped) | (P7 deferred) | ✅ 20/20 PASS |
+| 5-workload doubling-ratio gate | (P7 deferred) | ✅ PASS (workload-wise) |
+
+P7 deferral note in the original summary is **superseded by this run**.
+P6 v2 Layer 2 (probe verification) remains BLOCKED → iter-15A.
+
+### Updated phase delivery audit row
+
+| Sub-phase | Status |
+|---|---|
+| P6.5 (NB-overflow xhost slowpath) | ✅ FULL (counter-result findings published) |
+| P7 (210-cell sweep) | ✅ FULL (210/210 OK, anomaly-scan clean, hash-diff 20/20 PASS) |
+

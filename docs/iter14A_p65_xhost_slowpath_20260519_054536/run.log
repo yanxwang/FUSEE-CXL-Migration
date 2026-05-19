@@ -1,0 +1,14 @@
+[OK] local_read_uniform_NB1024_rep1 -> thpt=24257125 r_p50=3343ns r_p99=17992ns
+[OK] local_read_uniform_NB1024_rep2 -> thpt=24292481 r_p50=3151ns r_p99=16280ns
+[OK] local_read_uniform_NB1024_rep3 -> thpt=24125452 r_p50=3095ns r_p99=17220ns
+[OK] local_read_uniform_NB1048576_rep1 -> thpt=9688044 r_p50=11817ns r_p99=39562ns
+[OK] local_read_uniform_NB1048576_rep2 -> thpt=9943817 r_p50=11927ns r_p99=29646ns
+[OK] local_read_uniform_NB1048576_rep3 -> thpt=9780907 r_p50=12025ns r_p99=55889ns
+[OK] local_read_zipf_NB1024_rep1 -> thpt=23261223 r_p50=726ns r_p99=11834ns
+[OK] local_read_zipf_NB1024_rep2 -> thpt=23291021 r_p50=728ns r_p99=16811ns
+[OK] local_read_zipf_NB1024_rep3 -> thpt=23679848 r_p50=690ns r_p99=12376ns
+[OK] local_read_zipf_NB1048576_rep1 -> thpt=12392341 r_p50=500ns r_p99=29025ns
+[OK] local_read_zipf_NB1048576_rep2 -> thpt=13403029 r_p50=543ns r_p99=31542ns
+[OK] local_read_zipf_NB1048576_rep3 -> thpt=12368583 r_p50=477ns r_p99=26765ns
+[OK] xhost_read_uniform_NB1024_rep1 -> thpt=25223861 r_p50=2788ns r_p99=11732ns
+[OK] xhost_read_uniform_NB1024_rep2 -> thpt=24891101 r_p50=2727ns r_p99=17600ns
