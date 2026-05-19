@@ -2,8 +2,12 @@
 
 #include <cstring>
 #include <pthread.h>
+#if defined(__x86_64__)
+#include <x86intrin.h>
+#endif
 
-#include "cxl_sharding.h"  // for sharding_hash_u64
+#include "cxl_read_guard.h"  // FUSEE_LRU_SAMPLE
+#include "cxl_sharding.h"    // for sharding_hash_u64
 
 namespace fusee {
 
@@ -87,9 +91,18 @@ bool cache_pool_lookup(KvCachePool *pool, uint64_t key, uint8_t *out,
       continue;
     }
     if (value_size) *value_size = sz;
-    // LRU touch (relaxed RMW).
+    // LRU touch (relaxed RMW). iter-14A F2: when FUSEE_LRU_SAMPLE=1,
+    // sample 1/64 hits via rdtsc low bits to remove MESI ping-pong on
+    // cacheline 0 of KvCacheEntry under hot Zipf multi-reader.
+#if FUSEE_LRU_SAMPLE
+    if ((__rdtsc() & 0x3FULL) == 0) {
+      uint64_t ge = pool->global_epoch.load(std::memory_order_relaxed);
+      e->lru_epoch.store(ge, std::memory_order_relaxed);
+    }
+#else
     uint64_t ge = pool->global_epoch.load(std::memory_order_relaxed);
     e->lru_epoch.store(ge, std::memory_order_relaxed);
+#endif
     return true;
   }
   return false;

@@ -14,8 +14,8 @@
 | **P1** Minimum preflight | ✅ done | rekey g3/g4 + baseline build + smoke 1.42 Mops/s + hash-diff 20/20 PASS + rw_race_test sig fix (commit 258f530) |
 | **P2** xhost write self-inval | ✅ done (F1 ROLLBACK) | RAP + impl + hash-diff PASS + measurement: target T=4 regressed -13%, T=32/64 flat → flag default OFF. Code kept in tree. iter-15A revisit. |
 | **P3** Remaining preflight | ✅ done | microbench traces 32 files (2M load + 1M trans-per-host) 1.3GB rsync'd to g3/g4; build-cxl-w1-probe; stage spec written; P3.C probe overhead bimodal-confounded (see p3c_summary.md); P3.B historical replot deferred (P5 will surface the R1 question directly) |
-| **P4** Production path_decomp + fix | pending | |
-| **P5** Copy elimination attribution | pending | |
+| **P4** Production path_decomp + fix | ✅ done (F2 ROLLBACK) | path_decomp at 4 cells: W10=3.54µs (3.5× spec) SOFT-ANOMALY (cache_pool_insert MESI on 1088B entry) → iter-15A; R2hit=0.23µs (7.7× spec) MILD-ANOMALY → F2 LRU sampling attempted, ROLLBACK (all CIs cross 0, target cells flat). Flag default OFF; code kept. |
+| **P5** Copy elimination attribution | in_progress | |
 | **P6** Ground truth microbench | pending | |
 | **P7** Full YCSB scaling sweep | pending | |
 | **P8** TLS research | pending | |
@@ -38,6 +38,34 @@
 - probe overhead measurement: bimodal noise dominant (~10 Mops/s and ~17 Mops/s modes coexist in same cell). Within-mode probe overhead ≈ 0-3%, acceptable for P4
 - iter-12A bimodal supposed-fix did NOT eliminate bimodal — this is a P4 anomaly to investigate
 - stage spec: 28 PROBE_OP tags categorized; W/R/I top-level + P5W/P5R micro-stages
+
+### P4 production path_decomp (2026-05-19)
+- Build: build-cxl-w1-probe (HAZARD + W1 RESERVED + FUSEE_PROBE=1)
+- 4 cells × 20k ops × 1 rep (MAX_OPS=20k to bound probe-data disk usage)
+- Workloads: workloada T=4/64 kv=1024 c=on, workloadc T=64 kv=1024 c=on, workloadb T=64 kv=256 c=on
+- Output: [docs/iter14A_p4_production_pathdecomp_20260519_024047/per_stage_decomp.md](../iter14A_p4_production_pathdecomp_20260519_024047/per_stage_decomp.md)
+- Anomalies found:
+  - **W10 SOFT** = 3.54 µs p50 vs spec 1 µs (3.5×): cache_pool_insert MESI ping-pong on 1088B KvCacheEntry; same finding as iter-9A/10A/13A; no small-LOC verified fix → iter-15A backlog
+  - **R2hit MILD** = 0.23 µs p50 vs spec 0.03 µs (7.7×): `lru_epoch.store` write-on-read in cache_pool_lookup → F2 LRU sampling fix attempted
+- W10 is T-invariant (T=4: 3.37µs ≈ T=64: 3.54µs) → structural, not contention-driven
+
+### P4.3 F2 measurement (2026-05-19) — F2 ROLLBACK
+- Builds: build-cxl-w1 (baseline) vs build-cxl-w1-lru (FUSEE_LRU_SAMPLE=1)
+- 5 cells × 5 reps × 200k ops
+- **First attempt** (24:0400): flag declared in cxl_read_guard.h but NOT wired in cache_pool.cc — null compare. Implementation gap caught + fixed.
+- **Real measurement** (25:5549): real impl rebuilt on both hosts. Bootstrap 95% CI (10000 resamples, seed=42):
+
+| Cell | delta% | CI95 | Role | Decision |
+|---|---:|---|---|---|
+| workloadc T=64 kv=1024 c=on | -1.07% | [-12.48, +2.76] | target | FAIL |
+| workloadc T=64 kv=256 c=on | +2.38% | [-7.73, +9.06] | target | FAIL |
+| workloadb T=64 kv=1024 c=on | +0.55% | [-7.50, +7.43] | target | FAIL |
+| workloada T=64 kv=1024 c=on | -1.08% | [-6.40, +6.49] | guard | FAIL |
+| workloadd T=64 kv=1024 c=on | +0.61% | [-9.59, +14.36] | guard | FAIL |
+
+- 0 / 3 target cells reach +1% CI-lo threshold per fix policy → **ROLLBACK**.
+- R2hit anomaly is real, just not throughput-load-bearing (W10 + bimodal dominate).
+- Decision: [docs/iter14A_p4_f2_lru_sample_real_20260519_025549/decision.md](../iter14A_p4_f2_lru_sample_real_20260519_025549/decision.md)
 
 ### P2 measurement (2026-05-19) — F1 ROLLBACK
 - Hash-diff battery on build-cxl-p2: **20/20 PASS** (§I9 preserved)

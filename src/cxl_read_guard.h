@@ -86,6 +86,14 @@ namespace fusee {
 #define FUSEE_XHOST_WRITE_SELF_INVAL 0
 #endif
 
+// iter-14A P4 F2: cache_pool_lookup LRU write-on-read sampling.
+// Default = OFF (legacy behavior).  When = 1, only 1/64 hits update
+// `lru_epoch` (via rdtsc lower bits).  LRU is approximate by spec so
+// this preserves semantics while removing cacheline-0 ping-pong cost.
+#ifndef FUSEE_LRU_SAMPLE
+#define FUSEE_LRU_SAMPLE 0
+#endif
+
 // Hard limits (must agree across all build configs — both RCU and
 // HAZARD domains are always laid out in CXL even if disabled, so the
 // offsets between the build flavors stay aligned).
