@@ -1,0 +1,20 @@
+[gen] partitioning 2,000,000 keys across 2 hosts ...
+[gen]   host 0: 999,929 owned keys
+[gen]   host 1: 1,000,071 owned keys
+[gen] wrote bench_local_read_uniform_h0: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_local_read_uniform_h1: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_local_read_zipf_h0: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_local_read_zipf_h1: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_read_uniform_h0: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_read_uniform_h1: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_xhost_read_zipf_h0: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_read_zipf_h1: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_local_write_uniform_h0: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_local_write_uniform_h1: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_local_write_zipf_h0: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_local_write_zipf_h1: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_write_uniform_h0: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_write_uniform_h1: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] wrote bench_xhost_write_zipf_h0: load=2,000,000 trans=1,000,000 pool=1,000,071
+[gen] wrote bench_xhost_write_zipf_h1: load=2,000,000 trans=1,000,000 pool=999,929
+[gen] done

@@ -13,7 +13,7 @@
 |---|---|---|
 | **P1** Minimum preflight | ✅ done | rekey g3/g4 + baseline build + smoke 1.42 Mops/s + hash-diff 20/20 PASS + rw_race_test sig fix (commit 258f530) |
 | **P2** xhost write self-inval | ✅ done (F1 ROLLBACK) | RAP + impl + hash-diff PASS + measurement: target T=4 regressed -13%, T=32/64 flat → flag default OFF. Code kept in tree. iter-15A revisit. |
-| **P3** Remaining preflight | pending | |
+| **P3** Remaining preflight | ✅ done | microbench traces 32 files (2M load + 1M trans-per-host) 1.3GB rsync'd to g3/g4; build-cxl-w1-probe; stage spec written; P3.C probe overhead bimodal-confounded (see p3c_summary.md); P3.B historical replot deferred (P5 will surface the R1 question directly) |
 | **P4** Production path_decomp + fix | pending | |
 | **P5** Copy elimination attribution | pending | |
 | **P6** Ground truth microbench | pending | |
@@ -29,6 +29,15 @@
 - Smoke: workload-d kv=8 T=4 cache=on → **1.42 Mops/s** trans_agg_thpt
 - Hash-diff battery (5 workloads × 4 KV): **20/20 PASS** on baseline build
 - Both hosts: 6 named/pinned receivers + 3 named/pinned senders verified
+
+### P3 preflight (2026-05-19)
+- microbench traces generated: 4 scenarios × 2 keyDists × 2 hosts × {load, trans} = 32 files
+  - load: 2M unique INSERT ops (host 0 inserts, both hosts attach)
+  - trans: 1M ops per host filtered by sharding partition
+- build-cxl-w1-probe added (FUSEE_READ_GUARD=2 + FUSEE_WRITE_ALLOC=1 + FUSEE_PROBE=1)
+- probe overhead measurement: bimodal noise dominant (~10 Mops/s and ~17 Mops/s modes coexist in same cell). Within-mode probe overhead ≈ 0-3%, acceptable for P4
+- iter-12A bimodal supposed-fix did NOT eliminate bimodal — this is a P4 anomaly to investigate
+- stage spec: 28 PROBE_OP tags categorized; W/R/I top-level + P5W/P5R micro-stages
 
 ### P2 measurement (2026-05-19) — F1 ROLLBACK
 - Hash-diff battery on build-cxl-p2: **20/20 PASS** (§I9 preserved)
