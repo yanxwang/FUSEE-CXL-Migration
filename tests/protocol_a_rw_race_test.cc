@@ -24,6 +24,7 @@
 #include "cxl_kv_ops_A.h"
 #include "cxl_mm.h"
 #include "cxl_read_ring.h"
+#include "cxl_read_staging.h"
 #include "cxl_sharding.h"
 #include "cxl_write_ring.h"
 
@@ -69,9 +70,11 @@ int main(int argc, char **argv) {
   std::size_t rr_bytes = read_ring_matrix_bytes();
   std::size_t ir_bytes = inval_ring_matrix_bytes();
   std::size_t fs_bytes = forward_staging_matrix_bytes();
+  std::size_t rs_bytes = read_staging_matrix_bytes();
   std::size_t header_bytes = 4096;
   std::size_t total = header_bytes + bucket_bytes + pool_bytes
-                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes + 4096;
+                    + wr_bytes + rr_bytes + ir_bytes + fs_bytes
+                    + rs_bytes + 4096;
   total = ((total + kCxlDevdaxAlign - 1) / kCxlDevdaxAlign) * kCxlDevdaxAlign;
 
   CXLRegion r{};
@@ -89,6 +92,7 @@ int main(int argc, char **argv) {
   void *rr_mem = reinterpret_cast<char *>(wr_mem) + wr_bytes;
   void *ir_mem = reinterpret_cast<char *>(rr_mem) + rr_bytes;
   void *fs_mem = reinterpret_cast<char *>(ir_mem) + ir_bytes;
+  void *rs_mem = reinterpret_cast<char *>(fs_mem) + fs_bytes;
 
   bool is_host_primary = (host_id == 0);
   if (is_host_primary) {
@@ -128,8 +132,9 @@ int main(int argc, char **argv) {
     ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
     ForwardStagingMatrix *fs = reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    ReadStagingMatrix *rs = reinterpret_cast<ReadStagingMatrix *>(rs_mem);
     if (store.enable_write_ring(wr, fs, true, true) != 0) return 1;
-    if (store.enable_read_ring(rr, true, true) != 0) return 1;
+    if (store.enable_read_ring(rr, rs, true, true) != 0) return 1;
     if (store.enable_invalidate(ir, true, true) != 0) return 1;
     if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
@@ -147,8 +152,9 @@ int main(int argc, char **argv) {
     ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
     InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
     ForwardStagingMatrix *fs = reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+    ReadStagingMatrix *rs = reinterpret_cast<ReadStagingMatrix *>(rs_mem);
     if (store.enable_write_ring(wr, fs, false, true) != 0) return 1;
-    if (store.enable_read_ring(rr, false, true) != 0) return 1;
+    if (store.enable_read_ring(rr, rs, false, true) != 0) return 1;
     if (store.enable_invalidate(ir, false, true) != 0) return 1;
     if (store.assert_n_to_n_active() != 0) return 1;
     uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
