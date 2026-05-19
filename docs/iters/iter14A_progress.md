@@ -15,7 +15,7 @@
 | **P2** xhost write self-inval | ✅ done (F1 ROLLBACK) | RAP + impl + hash-diff PASS + measurement: target T=4 regressed -13%, T=32/64 flat → flag default OFF. Code kept in tree. iter-15A revisit. |
 | **P3** Remaining preflight | ✅ done | microbench traces 32 files (2M load + 1M trans-per-host) 1.3GB rsync'd to g3/g4; build-cxl-w1-probe; stage spec written; P3.C probe overhead bimodal-confounded (see p3c_summary.md); P3.B historical replot deferred (P5 will surface the R1 question directly) |
 | **P4** Production path_decomp + fix | ✅ done (F2 ROLLBACK) | path_decomp at 4 cells: W10=3.54µs (3.5× spec) SOFT-ANOMALY (cache_pool_insert MESI on 1088B entry) → iter-15A; R2hit=0.23µs (7.7× spec) MILD-ANOMALY → F2 LRU sampling attempted, ROLLBACK (all CIs cross 0, target cells flat). Flag default OFF; code kept. |
-| **P5** Copy elimination attribution | in_progress | |
+| **P5** Copy elimination attribution | ✅ done | Case B (slow-mode) + Case C-conditional (fast-mode). B/op -28.9% (HAZARD+W1 vs STAGING) all-reps; in slow-mode B/op is IDENTICAL (~120 B/op both). Fast mode reaches 17.5 Mops/s (HAZARD+W1 3/5 reps; STAGING 0/5). Bimodal collapse is the throughput gap. iter-15A: bimodal RCA = top priority. |
 | **P6** Ground truth microbench | pending | |
 | **P7** Full YCSB scaling sweep | pending | |
 | **P8** TLS research | pending | |
@@ -66,6 +66,20 @@
 - 0 / 3 target cells reach +1% CI-lo threshold per fix policy → **ROLLBACK**.
 - R2hit anomaly is real, just not throughput-load-bearing (W10 + bimodal dominate).
 - Decision: [docs/iter14A_p4_f2_lru_sample_real_20260519_025549/decision.md](../iter14A_p4_f2_lru_sample_real_20260519_025549/decision.md)
+
+### P5 attribution (2026-05-19) — case B (slow) + case C-conditional (fast)
+- Builds: build-cxl (STAGING) vs build-cxl-w1 (HAZARD+W1)
+- Cell: workloada T=64 KV=1024 cache=on, 5 reps each, with pcm-memory
+- Median total memory BW: STAGING 1230 MB/s → HAZARD+W1 1348 MB/s (+9.6%)
+- Median trans_agg_thpt: 10.69M → 17.20M (+60.8%) — driven by bimodal-fast mode incidence
+- **Bytes/op (load-bearing)**: 119.9 → 85.2 (-28.9% total memory traffic per op)
+- All channels uniformly -25% to -31% B/op: copy elim works at data-movement level
+- **Bimodal segmentation**:
+  - Slow-mode vs slow-mode: B/op identical (~120), thpt identical (~10.7) → case B
+  - Fast-mode (HAZARD+W1 only): B/op 80, thpt 17.4 → case C-conditional
+  - STAGING 0/5 reps in fast mode; HAZARD+W1 3/5 reps in fast mode
+- Conclusion: **In slow mode, copy elim makes no observable difference.** Fast mode reaches 17.5 Mops/s. Bimodal RCA = top iter-15A priority.
+- Detail: [docs/iter14A_p5_attribution_20260519_030131/conclusion.md](../iter14A_p5_attribution_20260519_030131/conclusion.md)
 
 ### P2 measurement (2026-05-19) — F1 ROLLBACK
 - Hash-diff battery on build-cxl-p2: **20/20 PASS** (§I9 preserved)
