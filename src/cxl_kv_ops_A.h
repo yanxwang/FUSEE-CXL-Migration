@@ -338,6 +338,10 @@ constexpr uint8_t kOpKindInsert        = 1;
 constexpr uint8_t kOpKindDelete        = 2;
 constexpr uint8_t kOpKindCacheRegister = 4;  // routed via ReadRing
 
+// iter-15A Layer A: dump per-thread path counters at end of test.
+// No-op when FUSEE_PATH_COUNTERS=0 (default).
+void fusee_path_counters_dump(FILE *fp, int host_id);
+
 }  // namespace fusee
 
 #endif  // FUSEE_CXL_KV_OPS_A_H_

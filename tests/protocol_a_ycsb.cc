@@ -795,6 +795,9 @@ int main(int argc, char **argv) {
     fflush(stdout);
   }
 
+  // iter-15A Layer A: dump path counters (no-op if FUSEE_PATH_COUNTERS=0)
+  fusee::fusee_path_counters_dump(stdout, host_id);
+
   cxl_region_destroy(&r);
   return 0;
 }

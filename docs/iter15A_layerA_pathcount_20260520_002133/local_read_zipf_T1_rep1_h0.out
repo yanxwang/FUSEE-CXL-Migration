@@ -1,0 +1,3 @@
+YCSB opt=A cache=1 num_hosts=2 threads=1 threads_eff=1 rep=1 load_ops=1000000 load_thpt=214207 trans_ops=1000000 trans_wall_max=0.448282 trans_agg_thpt=2230738 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=266 r_p50_ns=255 r_p99_ns=719 first_op_ns_max=834 first_op_ns_avg=417 ops_to_first_ns_max=2430 ops_to_first_ns_avg=1215 # bench_local_read_zipf_optA_t1_cacheon_rep1
+# PATH host=0 tid=140171206658112 r0_tls=112626 r2hit=136531 r2miss_local=250843 r3=0 cpool_ins_r=0 local_w=501122 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=501122
+# PATH host=0 AGG r0_tls=112626 r2hit=136531 r2miss_local=250843 r3=0 cpool_ins_r=0 local_w=501122 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=501122

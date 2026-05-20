@@ -2,6 +2,8 @@
 #include <sched.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <mutex>
+#include <vector>
 
 #include "cxl_kv_ops_A.h"
 #include "cxl_probe.h"
@@ -26,6 +28,98 @@ namespace {
 thread_local int       g_aggr_worker_id = -1;
 thread_local TlsCache *g_thread_tls     = nullptr;
 }  // namespace
+
+// ============================================================
+// iter-15A Layer A — per-thread path-counter instrumentation.
+// Verifies that local_read/xhost_read/local_write/xhost_write
+// trace scenarios trigger ONLY the expected code paths.
+// Build-time off by default; enable with -DFUSEE_PATH_COUNTERS=1.
+// ============================================================
+#ifndef FUSEE_PATH_COUNTERS
+#define FUSEE_PATH_COUNTERS 0
+#endif
+
+#if FUSEE_PATH_COUNTERS
+namespace {
+struct PathCounters {
+  // Read path
+  uint64_t n_tls_hit                       = 0;  // R0_tls_hit
+  uint64_t n_r2hit                         = 0;  // shared cache_pool hit
+  uint64_t n_r2miss_local                  = 0;  // cache miss + key owned by self
+  uint64_t n_r3                            = 0;  // cache miss + key peer-owned -> forward_read
+  uint64_t n_cache_pool_insert_from_read   = 0;  // cache_pool_insert after R3
+  // Write path (worker side)
+  uint64_t n_local_write_worker            = 0;  // execute_write_local from worker (own-key)
+  uint64_t n_forward_write                 = 0;  // forward_write_direct (peer-key)
+  // Write path (receiver side — re-entries from forwarded writes)
+  uint64_t n_local_write_with_blk_forwarded = 0; // W1 RESERVED receiver path
+  uint64_t n_local_write_staging_forwarded  = 0; // STAGING receiver path
+  uint64_t n_cache_pool_insert_from_write   = 0; // cache_pool_insert after W10 (both worker + receiver)
+};
+
+thread_local PathCounters g_path_counters;
+thread_local bool         g_path_counters_registered = false;
+
+std::mutex g_path_registry_mu;
+std::vector<PathCounters*> g_path_registry;
+std::vector<uint64_t>      g_path_registry_tids;
+
+void register_path_counters_once() {
+  if (g_path_counters_registered) return;
+  g_path_counters_registered = true;
+  std::lock_guard<std::mutex> lk(g_path_registry_mu);
+  g_path_registry.push_back(&g_path_counters);
+  // pthread_self() returns thread id (opaque, but stable per-thread)
+  g_path_registry_tids.push_back((uint64_t)pthread_self());
+}
+}  // anon ns
+
+void fusee_path_counters_dump(FILE *fp, int host_id) {
+  std::lock_guard<std::mutex> lk(g_path_registry_mu);
+  PathCounters agg{};
+  for (size_t i = 0; i < g_path_registry.size(); i++) {
+    PathCounters *p = g_path_registry[i];
+    fprintf(fp,
+      "# PATH host=%d tid=%lu "
+      "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
+      "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu\n",
+      host_id, g_path_registry_tids[i],
+      p->n_tls_hit, p->n_r2hit, p->n_r2miss_local, p->n_r3, p->n_cache_pool_insert_from_read,
+      p->n_local_write_worker, p->n_forward_write,
+      p->n_local_write_with_blk_forwarded, p->n_local_write_staging_forwarded,
+      p->n_cache_pool_insert_from_write);
+    agg.n_tls_hit                        += p->n_tls_hit;
+    agg.n_r2hit                          += p->n_r2hit;
+    agg.n_r2miss_local                   += p->n_r2miss_local;
+    agg.n_r3                             += p->n_r3;
+    agg.n_cache_pool_insert_from_read    += p->n_cache_pool_insert_from_read;
+    agg.n_local_write_worker             += p->n_local_write_worker;
+    agg.n_forward_write                  += p->n_forward_write;
+    agg.n_local_write_with_blk_forwarded += p->n_local_write_with_blk_forwarded;
+    agg.n_local_write_staging_forwarded  += p->n_local_write_staging_forwarded;
+    agg.n_cache_pool_insert_from_write   += p->n_cache_pool_insert_from_write;
+  }
+  fprintf(fp,
+    "# PATH host=%d AGG "
+    "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
+    "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu\n",
+    host_id,
+    agg.n_tls_hit, agg.n_r2hit, agg.n_r2miss_local, agg.n_r3, agg.n_cache_pool_insert_from_read,
+    agg.n_local_write_worker, agg.n_forward_write,
+    agg.n_local_write_with_blk_forwarded, agg.n_local_write_staging_forwarded,
+    agg.n_cache_pool_insert_from_write);
+  fflush(fp);
+}
+
+#define PATH_CTR(field) do { \
+  if (!g_path_counters_registered) register_path_counters_once(); \
+  g_path_counters.field++; \
+} while (0)
+
+#else
+#define PATH_CTR(field) do {} while (0)
+void fusee_path_counters_dump(FILE *fp, int host_id) { (void)fp; (void)host_id; }
+#endif
 
 namespace {
 
@@ -187,6 +281,7 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
                                               uint32_t value_len, int op_kind,
                                               int self_inval_src) {
   if (key == kEmptyKey) return -1;
+  PATH_CTR(n_local_write_with_blk_forwarded);
   if (op_kind == kOpKindDelete) {
     // DELETE shouldn't reach this path — worker doesn't alloc on delete.
     // Fall back to regular delete.
@@ -272,6 +367,10 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     if (!value || value_len == 0) return -1;
     if (pool_ && value_len + 4 > pool_->block_size()) return -5;
   }
+  // iter-15A Layer A: count which caller — worker (self_inval_src < 0)
+  // or receiver of forwarded write (self_inval_src >= 0, the src host id).
+  if (self_inval_src < 0) PATH_CTR(n_local_write_worker);
+  else                    PATH_CTR(n_local_write_staging_forwarded);
   PROBE_OP("W1", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
@@ -434,6 +533,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     cache_pool_insert(cache_, key,
                       reinterpret_cast<const uint8_t *>(value),
                       value_len);
+    PATH_CTR(n_cache_pool_insert_from_write);
     // iter-10A Phase 1.C: populate TLS L1 with the just-written value
     // and the post-bump epoch so this thread's next read hits TLS.
     if (g_thread_tls) {
@@ -1254,6 +1354,7 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
                                       int op_kind) {
   if (!wr_ || !fs_) return -10;
   if (value_len > kForwardStagingSlotBytes) return -5;
+  PATH_CTR(n_forward_write);
 
 #if FUSEE_XHOST_WRITE_SELF_INVAL
   // iter-14A Phase 2: self-invalidate local cache BEFORE forwarding.
@@ -2277,6 +2378,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     if (tls_lookup(g_thread_tls, key, cur_epoch, tls_buf,
                    sizeof(tls_buf), &tls_sz)) {
       PROBE_OP("R0_tls_hit", key);
+      PATH_CTR(n_tls_hit);
       if (out_len) *out_len = tls_sz;
       uint32_t copy_len = tls_sz < buf_len ? tls_sz : buf_len;
       if (out_buf && copy_len > 0) std::memcpy(out_buf, tls_buf, copy_len);
@@ -2290,6 +2392,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
     PROBE_OP("R2hit", key);
+    PATH_CTR(n_r2hit);
     // populate TLS L1 with the freshly-fetched value + current epoch
     if (g_thread_tls) {
       uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
@@ -2308,6 +2411,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   // Cross-host miss: §I9 register-then-fill via OP_CACHE_REGISTER.
   if (owner != (uint32_t)host_id_ && rr_) {
     PROBE_OP("R3", key);
+    PATH_CTR(n_r3);
     uint8_t v[kForwardStagingSlotBytes];
     uint32_t vlen = 0;
     int rc = forward_read(owner, key, v, sizeof(v), &vlen);
@@ -2316,6 +2420,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     // §AP15: populate cache ONLY after register ACK (we got it here).
     if (vlen > 0) {
       cache_pool_insert(cache_, key, v, vlen);
+      PATH_CTR(n_cache_pool_insert_from_read);
       // Also populate TLS L1 with new epoch (cache_pool_insert just
       // bumped it).
       if (g_thread_tls) {
@@ -2331,6 +2436,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   }
 
   // Owner-self miss: direct CXL bucket scan + own pool fetch.
+  PATH_CTR(n_r2miss_local);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
   flush_line(bucket);

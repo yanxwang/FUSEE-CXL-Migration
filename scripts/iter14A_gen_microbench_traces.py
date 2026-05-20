@@ -30,6 +30,8 @@ import sys
 
 
 def fnv1a_u64(key: int) -> int:
+    """FNV-1a over the 8 bytes of a uint64 (matches sharding_hash_u64
+    in cxl_sharding.h)."""
     h = 0xCBF29CE484222325
     for i in range(8):
         h ^= (key >> (i * 8)) & 0xFF
@@ -37,13 +39,37 @@ def fnv1a_u64(key: int) -> int:
     return h
 
 
-def owner_host(key: int, num_hosts: int = 2) -> int:
-    """Returns host id (0..num_hosts-1) that owns `key`. Matches
-    cxl_sharding.h::host_of for num_hosts=2 (shift=63, mask=1)."""
+def hash_str_runtime(s: str) -> int:
+    """FNV-1a over the byte sequence of a string. Matches
+    tests/protocol_a_ycsb.cc::hash_str()."""
+    h = 0xCBF29CE484222325
+    for c in s.encode():
+        h ^= c
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    if h == 0:
+        h = 1
+    return h
+
+
+def runtime_key_for_int(int_k: int) -> int:
+    """The trace file emits 'userN' lines; runtime converts that string
+    to the uint64 key via hash_str(). This helper reproduces the full
+    pipeline so the trace generator partitions by the SAME uint64 key
+    the runtime will see."""
+    return hash_str_runtime(f"user{int_k}")
+
+
+def owner_host(int_k: int, num_hosts: int = 2) -> int:
+    """Owner host of `int_k` (the integer used to form 'userN').
+    Reproduces runtime pipeline:
+        userN --hash_str--> uint64 K --sharding_hash_u64--> H
+                                                (H >> 63) & 1 = owner
+    """
     assert num_hosts in (1, 2, 4)
-    shift = 64 - (num_hosts - 1).bit_length()  # num_hosts=2 → shift=63
+    shift = 64 - (num_hosts - 1).bit_length()  # num_hosts=2 → 63
     mask = num_hosts - 1
-    return (fnv1a_u64(key) >> shift) & mask
+    K = runtime_key_for_int(int_k)
+    return (fnv1a_u64(K) >> shift) & mask
 
 
 def zipf_indices(n: int, count: int, theta: float, rng: random.Random) -> list[int]:
