@@ -1,0 +1,217 @@
+=================================================
+            Trace Event Information              
+=================================================
+  Total records                     :      47049
+  Locked Load/Store Operations      :       2000
+  Load Operations                   :      25283
+  Loads - uncacheable               :          0
+  Loads - IO                        :          0
+  Loads - Miss                      :          0
+  Loads - no mapping                :          0
+  Load Fill Buffer Hit              :       5052
+  Load L1D hit                      :       9195
+  Load L2D hit                      :        186
+  Load LLC hit                      :       4523
+  Load Local HITM                   :       1032
+  Load Remote HITM                  :          0
+  Load Remote HIT                   :          0
+  Load Local DRAM                   :        203
+  Load Remote DRAM                  :          0
+  Load MESI State Exclusive         :          0
+  Load MESI State Shared            :        203
+  Load LLC Misses                   :        203
+  Load access blocked by data       :       2221
+  Load access blocked by address    :       3367
+  Load HIT Local Peer               :          0
+  Load HIT Remote Peer              :          0
+  LLC Misses to Local DRAM          :      100.0%
+  LLC Misses to Remote DRAM         :        0.0%
+  LLC Misses to Remote cache (HIT)  :        0.0%
+  LLC Misses to Remote cache (HITM) :        0.0%
+  Store Operations                  :      21766
+  Store - uncacheable               :          0
+  Store - no mapping                :          0
+  Store L1D Hit                     :      21588
+  Store L1D Miss                    :          0
+  Store No available memory level   :          0
+  No Page Map Rejects               :      25906
+  Unable to parse data source       :          0
+
+=================================================
+    Global Shared Cache Line Event Information   
+=================================================
+  Total Shared Cache Lines          :        325
+  Load HITs on shared lines         :       5577
+  Fill Buffer Hits on shared lines  :       1270
+  L1D hits on shared lines          :         83
+  L2D hits on shared lines          :          0
+  LLC hits on shared lines          :       2341
+  Load hits on peer cache or nodes  :          0
+  Locked Access on shared lines     :         81
+  Blocked Access on shared lines    :         94
+  Store HITs on shared lines        :         49
+  Store L1D hits on shared lines    :         49
+  Store No available memory level   :          0
+  Total Merged records              :       1081
+
+=================================================
+                 c2c details                     
+=================================================
+  Events                            : cpu/mem-loads,ldlat=30/P
+                                    : cpu/mem-stores/P
+                                    : dummy:u
+  Cachelines sort on                : Total HITMs
+  Cacheline data grouping           : offset,iaddr
+
+=================================================
+           Shared Data Cache Line Table          
+=================================================
+#
+#        ----------- Cacheline ----------      Tot  ------- Load Hitm -------    Total    Total    Total  --------- Stores --------  ----- Core Load Hit -----  - LLC Load Hit --  - RMT Load Hit --  --- Load Dram ----
+# Index             Address  Node  PA cnt     Hitm    Total  LclHitm  RmtHitm  records    Loads   Stores    L1Hit   L1Miss      N/A       FB       L1       L2    LclHit  LclHitm    RmtHit  RmtHitm       Lcl       Rmt
+# .....  ..................  ....  ......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  ........  .......  ........  .......  ........  ........
+#
+      0      0x7fce32a00040   N/A       0   61.82%      638      638        0     1479     1479        0        0        0        0       17        0        0       824      638         0        0         0         0
+      1  0xffffffffbcba04c0     0      97    3.39%       35       35        0     1359     1359        0        0        0        0     1008       23        0       293       35         0        0         0         0
+      2  0xff32b7c6ba7017c0     0       2    0.87%        9        9        0       34       32        2        2        0        0        0       23        0         0        9         0        0         0         0
+      3  0xff32b7c71a717880     0       6    0.48%        5        5        0       10       10        0        0        0        0        2        0        0         3        5         0        0         0         0
+      4  0xff32b7c74270d2c0     0       1    0.48%        5        5        0       20       20        0        0        0        0        5        0        0        10        5         0        0         0         0
+      5  0xffffffffbc924f40     0       9    0.39%        4        4        0        9        9        0        0        0        0        3        0        0         2        4         0        0         0         0
+      6      0x7ffce72712c0     0       8    0.39%        4        4        0        8        8        0        0        0        0        0        0        0         4        4         0        0         0         0
+      7  0xffffffffbc924900     0       6    0.29%        3        3        0        9        8        1        1        0        0        3        1        0         1        3         0        0         0         0
+      8  0xffffffffbc925bc0     0       3    0.29%        3        3        0        7        7        0        0        0        0        1        1        0         2        3         0        0         0         0
+      9  0xff32b7c6bb025700     0       3    0.29%        3        3        0        3        3        0        0        0        0        0        0        0         0        3         0        0         0         0
+     10  0xffffffffbc80db40     0      22    0.19%        2        2        0       55       55        0        0        0        0       35        0        0        18        2         0        0         0         0
+     11  0xffffffffbd33d8c0     0       1    0.19%        2        2        0        5        3        2        2        0        0        0        0        0         1        2         0        0         0         0
+     12  0xffffffffbde65a00     0       1    0.19%        2        2        0       34       34        0        0        0        0        1        0        0        31        2         0        0         0         0
+     13  0xff32b7c574ab5380     0       1    0.19%        2        2        0        3        3        0        0        0        0        1        0        0         0        2         0        0         0         0
+     14  0xff32b7c58b6058c0     0       1    0.19%        2        2        0       16       16        0        0        0        0       14        0        0         0        2         0        0         0         0
+     15  0xff32b7c6bb025600     0       3    0.19%        2        2        0        3        3        0        0        0        0        1        0        0         0        2         0        0         0         0
+     16  0xff32b7c6bb0256c0     0       3    0.19%        2        2        0        3        3        0        0        0        0        1        0        0         0        2         0        0         0         0
+     17  0xff32b7c75ac390c0     0       2    0.19%        2        2        0        4        3        1        1        0        0        0        0        0         1        2         0        0         0         0
+
+=================================================
+      Shared Cache Line Distribution Pareto      
+=================================================
+#
+# ----- HITM -----  ------- Store Refs ------  ------- CL --------                      ---------- cycles ----------    Total       cpu                     Shared                   
+# RmtHitm  LclHitm   L1 Hit  L1 Miss      N/A    Off  Node  PA cnt        Code address  rmt hitm  lcl hitm      load  records       cnt    Symbol           Object  Source:Line  Node
+# .......  .......  .......  .......  .......  .....  ....  ......  ..................  ........  ........  ........  .......  ........  ........  ...............  ...........  ....
+#
+  ----------------------------------------------------------------------
+      0        0      638        0        0        0      0x7fce32a00040
+  ----------------------------------------------------------------------
+    0.00%   93.42%    0.00%    0.00%    0.00%    0x0   N/A       0      0x558efc88d8fd         0     26361     28473     1376        63  [.] main  protocol_a_ycsb  main+4221     0
+    0.00%    6.58%    0.00%    0.00%    0.00%    0x0   N/A       0      0x558efc88d382         0     20155     26285      103        56  [.] main  protocol_a_ycsb  main+2818     0
+
+  ----------------------------------------------------------------------
+      1        0       35        0        0        0  0xffffffffbcba04c0
+  ----------------------------------------------------------------------
+    0.00%    8.57%    0.00%    0.00%    0.00%   0x30     0       1  0xffffffffba702996         0       242      1228       50        39  [k] __lock_acquire              [kernel.kallsyms]  lockdep.c:0                     0
+    0.00%   28.57%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba704868         0       380      1187       92        57  [k] lock_acquire                [kernel.kallsyms]  lock_acquire+72                 0
+    0.00%   11.43%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffbbad79ea         0       462       895      123        62  [k] debug_lockdep_rcu_enabled   [kernel.kallsyms]  debug_lockdep_rcu_enabled+10    0
+    0.00%    8.57%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba702bd6         0      2499       984       63        43  [k] __lock_acquire              [kernel.kallsyms]  lockdep.c:0                     0
+    0.00%    5.71%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba702401         0       278       757       73        49  [k] __lock_acquire              [kernel.kallsyms]  lockdep.c:0                     0
+    0.00%    5.71%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffbbad73c0         0       244       794       50        40  [k] lockdep_hardirqs_off        [kernel.kallsyms]  lockdep_hardirqs_off+0          0
+    0.00%    5.71%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffbbad774c         0       596       699      144        65  [k] check_flags                 [kernel.kallsyms]  lockdep.c:0                     0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba5df9b0         0      2362         0        1         1  [k] cr4_update_irqsoff          [kernel.kallsyms]  cr4_update_irqsoff+0            0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba6b26c6         0      2654      1140        6         6  [k] update_rq_clock             [kernel.kallsyms]  update_rq_clock+6               0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba6bb279         0       401       836        5         4  [k] sched_tick                  [kernel.kallsyms]  sched_tick+153                  0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba6bfbb8         0       162       673        8         8  [k] update_load_avg             [kernel.kallsyms]  fair.c:0                        0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba701750         0       193       789       28        24  [k] lockdep_hardirqs_on_prepar  [kernel.kallsyms]  lockdep_hardirqs_on_prepare+0   0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba70193d         0       285       904       58        41  [k] lock_release                [kernel.kallsyms]  lock_release+61                 0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffba95e5b6         0       405       719        2         2  [k] __mod_zone_page_state       [kernel.kallsyms]  __mod_zone_page_state+6         0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffbbad76f0         0       738       850      260        76  [k] check_flags                 [kernel.kallsyms]  lockdep.c:0                     0
+    0.00%    2.86%    0.00%    0.00%    0.00%   0x34     0       1  0xffffffffbbad78c6         0       322       912      110        55  [k] lock_is_held_type           [kernel.kallsyms]  lock_is_held_type+22            0
+
+  ----------------------------------------------------------------------
+      2        0        9        2        0        0  0xff32b7c6ba7017c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%   0x2c     0       1  0xffffffffba9226d2         0       516         0        9         9  [k] filemap_map_pages        [kernel.kallsyms]  filemap_map_pages+1426   0
+    0.00%    0.00%  100.00%    0.00%    0.00%   0x38     0       1  0xffffffffba9861d6         0         0         5        7         1  [k] fault_dirty_shared_page  [kernel.kallsyms]  memory.c:0               0
+
+  ----------------------------------------------------------------------
+      3        0        5        0        0        0  0xff32b7c71a717880
+  ----------------------------------------------------------------------
+    0.00%   80.00%    0.00%    0.00%    0.00%   0x10     0       1  0xffffffffbbaeb74c         0       383       234        5         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+    0.00%   20.00%    0.00%    0.00%    0.00%   0x10     0       1  0xffffffffba709466         0       644         0        1         1  [k] do_raw_spin_trylock         [kernel.kallsyms]  do_raw_spin_trylock+6            0
+
+  ----------------------------------------------------------------------
+      4        0        5        0        0        0  0xff32b7c74270d2c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffba6c6f43         0      1806       262       15        13  [k] update_cfs_group  [kernel.kallsyms]  fair.c:0      0
+
+  ----------------------------------------------------------------------
+      5        0        4        0        0        0  0xffffffffbc924f40
+  ----------------------------------------------------------------------
+    0.00%   25.00%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffba709466         0       409         0        1         1  [k] do_raw_spin_trylock         [kernel.kallsyms]  do_raw_spin_trylock+6            0
+    0.00%   25.00%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbbaeb523         0       451         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+    0.00%   25.00%    0.00%    0.00%    0.00%    0x4     0       1  0xffffffffba7094ca         0       316         0        1         1  [k] do_raw_spin_unlock          [kernel.kallsyms]  do_raw_spin_unlock+10            0
+    0.00%   25.00%    0.00%    0.00%    0.00%   0x3c     0       1  0xffffffffba7060d5         0       324         0        1         1  [k] lock_acquired               [kernel.kallsyms]  lock_acquired+405                0
+
+  ----------------------------------------------------------------------
+      6        0        4        0        0        0      0x7ffce72712c0
+  ----------------------------------------------------------------------
+    0.00%   50.00%    0.00%    0.00%    0.00%   0x18     0       1      0x558efc893e67         0       279       249        4         1  [.] fusee::CxlKvStoreA::write_  protocol_a_ycsb  atomic_base.h:501   0
+    0.00%   50.00%    0.00%    0.00%    0.00%   0x1a     0       1      0x558efc892d88         0       262       146        3         1  [.] fusee::CxlKvStoreA::inval_  protocol_a_ycsb  atomic_base.h:501   0
+
+  ----------------------------------------------------------------------
+      7        0        3        1        0        0  0xffffffffbc924900
+  ----------------------------------------------------------------------
+    0.00%   66.67%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbbaeb74c         0       486         0        2         2  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+    0.00%   33.33%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbbaeb523         0       390       558        2         2  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+    0.00%    0.00%  100.00%    0.00%    0.00%   0x3c     0       1  0xffffffffba7060ed         0         0         0        1         1  [k] lock_acquired               [kernel.kallsyms]  lock_acquired+429                0
+
+  ----------------------------------------------------------------------
+      8        0        3        0        0        0  0xffffffffbc925bc0
+  ----------------------------------------------------------------------
+    0.00%   66.67%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffba709466         0       242       104        3         3  [k] do_raw_spin_trylock         [kernel.kallsyms]  do_raw_spin_trylock+6            0
+    0.00%   33.33%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbbaeb74c         0       326         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      9        0        3        0        0        0  0xff32b7c6bb025700
+  ----------------------------------------------------------------------
+    0.00%   33.33%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbb889a20         0      3127         0        1         1  [k] tcp_event_data_recv   [kernel.kallsyms]  tcp_input.c:0             0
+    0.00%   66.67%    0.00%    0.00%    0.00%   0x10     0       1  0xffffffffbb88b23d         0       441         0        2         1  [k] tcp_rcv_space_adjust  [kernel.kallsyms]  tcp_rcv_space_adjust+77   0
+
+  ----------------------------------------------------------------------
+     10        0        2        0        0        0  0xffffffffbc80db40
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%    0x8     0       1  0xffffffffba702421         0       326       241       26        23  [k] __lock_acquire      [kernel.kallsyms]  lockdep.c:0             0
+
+  ----------------------------------------------------------------------
+     11        0        2        2        0        0  0xffffffffbd33d8c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%  100.00%    0.00%    0.00%   0x20     0       1  0xffffffffba62f03c         0       792       114        5         5  [k] native_set_fixmap  [kernel.kallsyms]  native_set_fixmap+92   0
+
+  ----------------------------------------------------------------------
+     12        0        2        0        0        0  0xffffffffbde65a00
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%   0x30     0       1  0xffffffffba774ca4         0       353       162       34        28  [k] ktime_get_update_offsets_n  [kernel.kallsyms]  ktime_get_update_offsets_now+1   0
+
+  ----------------------------------------------------------------------
+     13        0        2        0        0        0  0xff32b7c574ab5380
+  ----------------------------------------------------------------------
+    0.00%   50.00%    0.00%    0.00%    0.00%    0x8     0       1  0xffffffffba6afb38         0       752         0        1         1  [k] ttwu_queue_wakelist  [kernel.kallsyms]  core.c:0      0
+    0.00%   50.00%    0.00%    0.00%    0.00%    0x8     0       1  0xffffffffba6ba2f3         0       276         0        1         1  [k] ttwu_do_activate     [kernel.kallsyms]  core.c:0      0
+
+  ----------------------------------------------------------------------
+     14        0        2        0        0        0  0xff32b7c58b6058c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%   0x28     0       1  0xffffffffba97cda1         0      1120      3056       16        15  [k] workingset_activation  [kernel.kallsyms]  workingset_activation+129   0
+
+  ----------------------------------------------------------------------
+     15        0        2        0        0        0  0xff32b7c6bb025600
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%   0x24     0       1  0xffffffffbb89fe9d         0       327         0        2         2  [k] tcp_stream_memory_free  [kernel.kallsyms]  tcp_stream_memory_free+13   0
+
+  ----------------------------------------------------------------------
+     16        0        2        0        0        0  0xff32b7c6bb0256c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%    0x0     0       1  0xffffffffbb8a86c1         0       212         0        2         2  [k] tcp_v4_rcv  [kernel.kallsyms]  tcp_v4_rcv+4305   0
+
+  ----------------------------------------------------------------------
+     17        0        2        1        0        0  0xff32b7c75ac390c0
+  ----------------------------------------------------------------------
+    0.00%  100.00%    0.00%    0.00%    0.00%   0x10     0       1  0xffffffffba6888b6         0       234         0        2         2  [k] kick_pool      [kernel.kallsyms]  workqueue.c:0   0
+    0.00%    0.00%  100.00%    0.00%    0.00%   0x38     0       1  0xffffffffba68c0b7         0         0         0        1         1  [k] worker_thread  [kernel.kallsyms]  workqueue.c:0   0

@@ -1,0 +1,3 @@
+# PATH host=1 tid=140301755037760 r0_tls=0 r2hit=640 r2miss_local=14 r3=151 cpool_ins_r=144 local_w=50411 fwd_w=348 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=50408
+# PATH host=1 tid=140301743609536 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=408 local_w_stg_fwd=0 cpool_ins_w=0
+# PATH host=1 AGG r0_tls=0 r2hit=640 r2miss_local=14 r3=151 cpool_ins_r=144 local_w=50411 fwd_w=348 local_w_blk_fwd=408 local_w_stg_fwd=0 cpool_ins_w=50408

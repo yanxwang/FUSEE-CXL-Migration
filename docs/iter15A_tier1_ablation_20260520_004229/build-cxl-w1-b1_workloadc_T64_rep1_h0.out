@@ -1,0 +1,3 @@
+YCSB opt=A cache=1 num_hosts=2 threads=64 threads_eff=64 rep=1 load_ops=100000 load_thpt=116360 trans_ops=200000 trans_wall_max=0.011053 trans_agg_thpt=18092998 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=5693 r_p50_ns=7495 r_p99_ns=25485 first_op_ns_max=89964 first_op_ns_avg=38069 ops_to_first_ns_max=91207 ops_to_first_ns_avg=39792 # workloadc_optA_t64_cacheon_rep1
+# PATH host=0 tid=139947772381248 r0_tls=0 r2hit=1439 r2miss_local=0 r3=124 cpool_ins_r=103 local_w=49998 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=49994
+# PATH host=0 AGG r0_tls=0 r2hit=1439 r2miss_local=0 r3=124 cpool_ins_r=103 local_w=49998 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=49994

@@ -1,0 +1,18 @@
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=24790)
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=24791)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=24792)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=24793)
+[A:thread] WriteReceiver pid=24790 tid=140139658327744 pinned cpu=65 (host_id=1)
+[A:thread] ReadReceiver pid=24790 tid=140139649935040 pinned cpu=67 (host_id=1)
+[A:thread] InvalReceiver pid=24790 tid=140139641542336 pinned cpu=69 (host_id=1)
+[A:thread] WriteSender pid=24790 tid=140139624756928 pinned cpu=64 (host_id=1)
+[A:sender] kind=0 policy=P0 K=16 T_us=100 host_id=1
+[A:thread] ReservHandler pid=24790 tid=140139633149632 pinned cpu=70 (host_id=1)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:thread] ReadSender pid=24790 tid=140139414156992 pinned cpu=66 (host_id=1)
+[A:sender] kind=1 policy=P0 K=16 T_us=100 host_id=1
+[A:thread] InvalSender pid=24790 tid=140137761601216 pinned cpu=68 (host_id=1)
+[A:sender] kind=2 policy=P0 K=16 T_us=100 host_id=1

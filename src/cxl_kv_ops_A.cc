@@ -39,6 +39,22 @@ thread_local TlsCache *g_thread_tls     = nullptr;
 #define FUSEE_PATH_COUNTERS 0
 #endif
 
+// ============================================================
+// iter-15A Tier 1+2 — 2-tier cache ablation flags.
+// FUSEE_DISABLE_TLS         : skip TLS L1 layer (default = 1, OFF)
+// FUSEE_DISABLE_CACHE_POOL  : skip shared cache_pool L2 layer (default = 0, ON)
+//
+// iter-15A Tier 2 ruling (perf c2c): TLS layer does not reduce MESI
+// HITM as iter-10A designed; default-disabled to simplify. Re-enable
+// for ablation experiments only via -DFUSEE_DISABLE_TLS=0.
+// ============================================================
+#ifndef FUSEE_DISABLE_TLS
+#define FUSEE_DISABLE_TLS 1
+#endif
+#ifndef FUSEE_DISABLE_CACHE_POOL
+#define FUSEE_DISABLE_CACHE_POOL 0
+#endif
+
 #if FUSEE_PATH_COUNTERS
 namespace {
 struct PathCounters {
@@ -349,7 +365,9 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
   // iter-13A W1: evict cache_pool entry (bumps bucket_epoch, forces next
   // reader to forward_read and pull fresh value from pool). We do NOT
   // call cache_pool_insert because we don't have value bytes here.
+#if !FUSEE_DISABLE_CACHE_POOL
   cache_pool_evict(cache_, key);
+#endif
   return 0;
 }
 
@@ -523,25 +541,33 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
 
   // Step 7: own cache.
   if (op_kind == kOpKindDelete) {
+#if !FUSEE_DISABLE_CACHE_POOL
     cache_pool_evict(cache_, key);
+#endif
     // iter-10A Phase 1.C: also evict from TLS so subsequent reads
     // don't see the deleted entry. (cache_pool_evict already bumped
     // bucket_epoch so any TLS reader without our explicit evict would
     // also detect stale on next access — this is belt + suspenders.)
+#if !FUSEE_DISABLE_TLS
     if (g_thread_tls) tls_evict(g_thread_tls, key);
+#endif
   } else {
+#if !FUSEE_DISABLE_CACHE_POOL
     cache_pool_insert(cache_, key,
                       reinterpret_cast<const uint8_t *>(value),
                       value_len);
     PATH_CTR(n_cache_pool_insert_from_write);
+#endif
     // iter-10A Phase 1.C: populate TLS L1 with the just-written value
     // and the post-bump epoch so this thread's next read hits TLS.
+#if !FUSEE_DISABLE_TLS
     if (g_thread_tls) {
       uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
       tls_insert(g_thread_tls, key,
                  reinterpret_cast<const uint8_t *>(value),
                  value_len, cur_epoch);
     }
+#endif
   }
   PROBE_OP("W12", key);
   return 0;
@@ -1363,9 +1389,13 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   // x86 program-order is sufficient (both are stores, release-default).
   // Safe regardless of whether `key` was actually cached locally —
   // set_stale + tls_evict are idempotent / no-op on miss.
+#if !FUSEE_DISABLE_CACHE_POOL
   if (cache_) cache_pool_set_stale(cache_, key);
+#endif
+#if !FUSEE_DISABLE_TLS
   if (g_thread_tls) tls_evict(g_thread_tls, key);
 #endif
+#endif  // FUSEE_XHOST_WRITE_SELF_INVAL
 
   WriteRing *ring = &wr_->rings[host_id_][owner];
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -1837,7 +1867,9 @@ void CxlKvStoreA::inval_receiver_loop() {
           if (op_id == 0) break;
         }
         PROBE_OP("I4", op_id);
+#if !FUSEE_DISABLE_CACHE_POOL
         cache_pool_set_stale(cache_, e->key);
+#endif
         PROBE_OP("I5", op_id);
         e->status = 0;
         std::atomic_thread_fence(std::memory_order_release);
@@ -2371,6 +2403,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   // set_thread_tls_cache(). bucket_epoch is a single 8-B atomic load
   // — small cross-core cost vs the 16-cacheline value_bytes memcpy
   // that shared cache_pool_lookup does on hot Zipf keys.
+#if !FUSEE_DISABLE_TLS
   if (g_thread_tls) {
     uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
     uint8_t tls_buf[kForwardStagingSlotBytes];
@@ -2386,24 +2419,29 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
       return 0;
     }
   }
+#endif
 
   // Fast path L2: shared cache_pool lookup with stale check.
+#if !FUSEE_DISABLE_CACHE_POOL
   uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
     PROBE_OP("R2hit", key);
     PATH_CTR(n_r2hit);
     // populate TLS L1 with the freshly-fetched value + current epoch
+#if !FUSEE_DISABLE_TLS
     if (g_thread_tls) {
       uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
       tls_insert(g_thread_tls, key, buf, sz, cur_epoch);
     }
+#endif
     if (out_len) *out_len = sz;
     uint32_t copy_len = sz < buf_len ? sz : buf_len;
     if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
     PROBE_OP("R6", key);
     return 0;
   }
+#endif
   PROBE_OP("R2miss", key);
 
   uint32_t owner = owner_host(key);
@@ -2419,14 +2457,18 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     PROBE_OP("R4", key);
     // §AP15: populate cache ONLY after register ACK (we got it here).
     if (vlen > 0) {
+#if !FUSEE_DISABLE_CACHE_POOL
       cache_pool_insert(cache_, key, v, vlen);
       PATH_CTR(n_cache_pool_insert_from_read);
+#endif
       // Also populate TLS L1 with new epoch (cache_pool_insert just
       // bumped it).
+#if !FUSEE_DISABLE_TLS
       if (g_thread_tls) {
         uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
         tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
       }
+#endif
     }
     if (out_len) *out_len = vlen;
     uint32_t copy_len = vlen < buf_len ? vlen : buf_len;

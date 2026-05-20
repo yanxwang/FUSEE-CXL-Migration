@@ -1,0 +1,41 @@
+---
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 115K of event 'cycles:P'
+# Event count (approx.): 120391557098
+#
+# Overhead  Command          Shared Object             Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+# ........  ...............  ........................  .................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    50.70%  protocol_a_ycsb  protocol_a_ycsb           [.] main
+            |          
+             --50.69%--main
+                       __libc_start_call_main
+
+    14.48%  protocol_a_ycsb  [kernel.kallsyms]         [k] workingset_activation
+            |          
+             --14.47%--workingset_activation
+                       |          
+                        --14.47%--folio_mark_accessed
+                                  unmap_page_range
+                                  unmap_single_vma
+                                  unmap_vmas
+                                  exit_mmap
+                                  __mmput
+                                  mmput
+                                  do_exit
+                                  do_group_exit
+                                  0xffffffffba664c68
+                                  0xffffffffba4c7e2b
+                                  do_syscall_64
+                                  entry_SYSCALL_64_after_hwframe
+
+     1.94%  protocol_a_ycsb  libc.so.6                 [.] __memset_avx512_unaligned_erms
+            |          
+             --1.91%--__memset_avx512_unaligned_erms
+
+     1.57%  protocol_a_ycsb  protocol_a_ycsb           [.] fusee::cache_pool_lookup(fusee::KvCachePool*, unsigned long, unsigned char*, unsigned int, unsigned int*)
+            |          

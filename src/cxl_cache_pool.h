@@ -28,7 +28,12 @@
 
 namespace fusee {
 
-constexpr uint32_t kCacheValueMaxBytes = 1024;   // pad to MAX of expected sizes
+// iter-15A Tier 2 Exp 1: configurable via build flag for entry-size ablation.
+// Override -DFUSEE_CACHE_VALUE_MAX=N (must be >= workload's KV size).
+#ifndef FUSEE_CACHE_VALUE_MAX
+#define FUSEE_CACHE_VALUE_MAX 1024
+#endif
+constexpr uint32_t kCacheValueMaxBytes = FUSEE_CACHE_VALUE_MAX;
 constexpr uint64_t kCacheKeyEmpty       = 0;     // sentinel
 constexpr uint64_t kCacheKeyTomb        = ~0ULL; // tombstone (after evict)
 

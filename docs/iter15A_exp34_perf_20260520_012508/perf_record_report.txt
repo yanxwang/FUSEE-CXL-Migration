@@ -1,0 +1,100 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 62K of event 'cycles:P'
+# Event count (approx.): 178378321326
+#
+# Overhead  Command          Shared Object             Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+# ........  ...............  ........................  .................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+    72.30%  protocol_a_ycsb  protocol_a_ycsb           [.] main
+            |          
+             --72.29%--main
+                       __libc_start_call_main
+
+     8.01%  protocol_a_ycsb  [kernel.kallsyms]         [k] workingset_activation
+            |          
+             --8.00%--workingset_activation
+                       folio_mark_accessed
+                       unmap_page_range
+                       unmap_single_vma
+                       unmap_vmas
+                       exit_mmap
+                       __mmput
+                       mmput
+                       do_exit
+                       do_group_exit
+                       0xffffffffba664c68
+                       0xffffffffba4c7e2b
+                       do_syscall_64
+                       entry_SYSCALL_64_after_hwframe
+
+     1.44%  WriteSender      protocol_a_ycsb           [.] void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<0>(std::atomic<bool>*)
+               0x7fff8be9ce40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb651e90789
+
+     1.43%  ReadSender       protocol_a_ycsb           [.] void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<1>(std::atomic<bool>*)
+               0x7fff8be9ce40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_senders(fusee::AggregatorRegion*, int, bool)::{lambda()#2}> > >::~_State_impl()
+               0x90ffffb621e90789
+
+     1.43%  InvalSender      protocol_a_ycsb           [.] void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+            |
+            ---void fusee::CxlKvStoreA::sender_loop_dispatch<2>(std::atomic<bool>*)
+
+     1.05%  WriteReceiver    protocol_a_ycsb           [.] fusee::CxlKvStoreA::write_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::write_receiver_loop()
+               0x7fff8be9ce40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb6b1e90789
+
+     1.04%  ReadReceiver     protocol_a_ycsb           [.] fusee::CxlKvStoreA::read_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::read_receiver_loop()
+               |          
+                --0.84%--0x7fff8be9ce40
+                          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::~_State_impl()
+                          0x90ffffb681e90789
+
+     1.03%  InvalReceiver    protocol_a_ycsb           [.] fusee::CxlKvStoreA::inval_receiver_loop()
+            |
+            ---fusee::CxlKvStoreA::inval_receiver_loop()
+               0x10000
+               |          
+                --0.82%--0
+
+     1.01%  ReservHandler    protocol_a_ycsb           [.] fusee::CxlKvStoreA::reservation_handler_loop()
+            |
+            ---fusee::CxlKvStoreA::reservation_handler_loop()
+               0x7fff8be9ce40
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_reservation_ring(fusee::ReservationRingMatrix*, bool, bool)::{lambda()#1}> > >::~_State_impl()
+               0x90ffffb5c1e90789
+
+     0.68%  protocol_a_ycsb  protocol_a_ycsb           [.] fusee::cache_pool_insert(fusee::KvCachePool*, unsigned long, unsigned char const*, unsigned int)
+            |
+            ---fusee::cache_pool_insert(fusee::KvCachePool*, unsigned long, unsigned char const*, unsigned int)
+
+     0.64%  protocol_a_ycsb  protocol_a_ycsb           [.] (anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+            |          
+             --0.56%--(anonymous namespace)::load_ops_from_file(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+                       0
+                       std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()
+                       0x48fb894853001400
+
+     0.63%  protocol_a_ycsb  [kernel.kallsyms]         [k] __lock_acquire
+            |          
+             --0.60%--__lock_acquire
+                       |          
+                        --0.60%--lock_acquire
+
+     0.51%  protocol_a_ycsb  [kernel.kallsyms]         [k] check_chain_key
+            |          
+             --0.50%--check_chain_key

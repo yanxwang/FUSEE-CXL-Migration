@@ -1,0 +1,2 @@
+# PATH host=1 tid=140378181724224 r0_tls=0 r2hit=5392 r2miss_local=4 r3=854 cpool_ins_r=785 local_w=50002 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=50001
+# PATH host=1 AGG r0_tls=0 r2hit=5392 r2miss_local=4 r3=854 cpool_ins_r=785 local_w=50002 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=50001
