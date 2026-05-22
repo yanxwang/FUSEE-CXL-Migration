@@ -566,7 +566,9 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
       return -4;
     }
     // iter-9A: store 4B length header, then value bytes. search()
-    // reads the 4B header to know how much to copy back.
+    // owner-self-miss path reads the 4B header to know how much to copy
+    // back. iter-17A audit: confirmed used at cxl_kv_ops_A.cc:2632-2634.
+    // Removing would require encoding value_len in bucket slot — defer.
     uint8_t buf[4096];  // local stack scratch (max block 4 KB)
     uint32_t total = 4 + value_len;
     if (total > sizeof(buf)) {
