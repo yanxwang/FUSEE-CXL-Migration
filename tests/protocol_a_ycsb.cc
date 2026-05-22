@@ -161,7 +161,8 @@ int main(int argc, char **argv) {
   uint64_t cookie = 0;
   bool cache_on = false;
   std::string wl_name = "wl";
-  int ring_shards_factor = 1;  // iter-17A: N (workers per ring shard). N=1 = baseline.
+  int ring_shards_factor = 0;  // iter-17A: 0 = disabled (single-shard baseline).
+                               // Set to 4 or 8 to enable multi-ring scaling.
   if (const char *e = getenv("FUSEE_NUM_HOSTS")) num_hosts = atoi(e);
   if (const char *e = getenv("FUSEE_HOST_ID")) host_id = atoi(e);
   if (const char *e = getenv("FUSEE_NUM_THREADS")) num_threads = atoi(e);
@@ -170,7 +171,7 @@ int main(int argc, char **argv) {
   if (const char *e = getenv("FUSEE_CACHE")) cache_on = (e[0] == '1');
   if (const char *e = getenv("FUSEE_WORKLOAD_NAME")) wl_name = e;
   if (const char *e = getenv("FUSEE_RING_SHARDS_FACTOR")) ring_shards_factor = atoi(e);
-  if (ring_shards_factor < 1) ring_shards_factor = 1;
+  if (ring_shards_factor < 0) ring_shards_factor = 0;
 
   if (num_threads > kMaxClients) num_threads = kMaxClients;
 

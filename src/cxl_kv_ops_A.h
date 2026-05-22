@@ -38,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
+#include <vector>
 
 namespace fusee {
 
@@ -327,9 +328,10 @@ class CxlKvStoreA {
   // iter-11A Phase 2 (455379e) added InvalDispatcher + 8 InvalWorker
   // threads but was reverted in the next commit due to w_p99 26×
   // regression. Restored to single-thread receiver.
-  std::thread write_receiver_;
-  std::thread read_receiver_;
-  std::thread inval_receiver_;
+  // iter-17A: vector to support N receiver threads per type.
+  std::vector<std::thread> write_receivers_;
+  std::vector<std::thread> read_receivers_;
+  std::vector<std::thread> inval_receivers_;
   std::atomic<bool> write_receiver_stop_{false};
   std::atomic<bool> read_receiver_stop_{false};
   std::atomic<bool> inval_receiver_stop_{false};
@@ -338,9 +340,11 @@ class CxlKvStoreA {
   std::atomic<uint64_t> read_op_counter_{0};
   std::atomic<uint64_t> inval_op_counter_{0};
 
-  void write_receiver_loop();
-  void read_receiver_loop();
-  void inval_receiver_loop();
+  // iter-17A: take a list of ring_idx shards this thread is
+  // responsible for. Single-shard (size=1) preserves baseline behavior.
+  void write_receiver_loop(std::vector<int> ring_indices);
+  void read_receiver_loop(std::vector<int> ring_indices);
+  void inval_receiver_loop(std::vector<int> ring_indices);
 
   void write_sender_loop();
   void read_sender_loop();

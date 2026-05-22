@@ -706,6 +706,70 @@ int CxlKvStoreA::remove(uint64_t key) {
 
 // ---- Cross-host forwarding (iter-9A Phase 2: 3-ring + staging) ----
 
+// iter-17A Phase 3: receiver layout helper.
+// Computes per-type thread plans = list of (cpu, ring_indices to drain).
+// Allocates ceil-fair across the receiver CPU pool starting at
+// start_cpu = num_workers (right after worker pinning). Write gets the
+// remainder when (pool_size % 3) != 0.
+namespace {
+struct ReceiverPlan {
+  int cpu;
+  std::vector<int> ring_indices;
+};
+struct ReceiverLayout {
+  std::vector<ReceiverPlan> write_plans;
+  std::vector<ReceiverPlan> read_plans;
+  std::vector<ReceiverPlan> inval_plans;
+  int start_cpu = 0;
+  int pool_size = 0;
+};
+
+ReceiverLayout compute_receiver_layout(int num_workers, int num_shards) {
+  ReceiverLayout L;
+  long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+  if (nproc <= 0) nproc = 86;
+  // start_cpu = num_workers (紧跟 worker), with hard floor at 64
+  // empirically: pinning receivers to CPU 8-10 at T=8 gave 5x slowdown
+  // (likely L3 cache contention with worker cores 0-7; further audit
+  // pending). Use max(num_workers, 64) until diagnosis available.
+  int start_cpu = num_workers;
+  if (start_cpu < 64) start_cpu = 64;
+  if (start_cpu < 0) start_cpu = 0;
+  if (start_cpu >= (int)nproc) start_cpu = (int)nproc - 1;
+  int pool_size = (int)nproc - start_cpu;
+  if (pool_size < 3) pool_size = 3;
+  L.start_cpu = start_cpu;
+  L.pool_size = pool_size;
+
+  int budget_base  = pool_size / 3;
+  int budget_extra = pool_size % 3;  // give to write
+  int t_w = std::min(num_shards, budget_base + budget_extra);
+  int t_r = std::min(num_shards, budget_base);
+  int t_i = std::min(num_shards, budget_base);
+  if (t_w < 1) t_w = 1;
+  if (t_r < 1) t_r = 1;
+  if (t_i < 1) t_i = 1;
+
+  auto build = [&](int n_threads, int cpu_start,
+                   std::vector<ReceiverPlan> &out) {
+    for (int i = 0; i < n_threads; i++) {
+      ReceiverPlan p;
+      p.cpu = cpu_start + i;
+      int ring_start = (int)((long)i * num_shards / n_threads);
+      int ring_end   = (int)((long)(i + 1) * num_shards / n_threads);
+      for (int r = ring_start; r < ring_end; r++) {
+        p.ring_indices.push_back(r);
+      }
+      out.push_back(std::move(p));
+    }
+  };
+  build(t_w, start_cpu,                 L.write_plans);
+  build(t_r, start_cpu + t_w,           L.read_plans);
+  build(t_i, start_cpu + t_w + t_r,     L.inval_plans);
+  return L;
+}
+}  // namespace
+
 int CxlKvStoreA::enable_write_ring(WriteRingMatrix *wr,
                                    ForwardStagingMatrix *fs,
                                    bool init_region, bool spawn_receiver) {
@@ -734,24 +798,40 @@ int CxlKvStoreA::enable_write_ring(WriteRingMatrix *wr,
   (void)init_region;
   if (spawn_receiver) {
     write_receiver_stop_.store(false, std::memory_order_relaxed);
-    write_receiver_ = std::thread([this]() {
-      // iter-9A Phase 2.E + C3: named + CPU-pinned per task plan §2.F.
-      pthread_setname_np(pthread_self(), "WriteReceiver");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(65, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] WriteReceiver pid=%d tid=%lu pinned cpu=65 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->write_receiver_loop();
-    });
+    // iter-17A Phase 3: spawn N write-receiver threads per layout.
+    int T = g_num_workers;
+    int S = g_actual_ring_shards;
+    ReceiverLayout L = compute_receiver_layout(T, S);
+    write_receivers_.reserve(L.write_plans.size());
+    for (size_t i = 0; i < L.write_plans.size(); i++) {
+      ReceiverPlan p = L.write_plans[i];  // copy for capture
+      int idx = (int)i;
+      write_receivers_.emplace_back([this, p, idx]() {
+        char nm[16]; snprintf(nm, sizeof(nm), "WriteRecv%d", idx);
+        pthread_setname_np(pthread_self(), nm);
+        cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(p.cpu, &cs);
+        pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+        fprintf(stderr,
+          "[A:thread] %s pid=%d tid=%lu cpu=%d host=%d rings=[",
+          nm, getpid(), (unsigned long)pthread_self(), p.cpu, host_id_);
+        for (size_t k = 0; k < p.ring_indices.size(); k++) {
+          fprintf(stderr, "%s%d", k ? "," : "", p.ring_indices[k]);
+        }
+        fprintf(stderr, "]\n");
+        this->write_receiver_loop(p.ring_indices);
+      });
+    }
   }
   return 0;
 }
 
 void CxlKvStoreA::stop_write_receiver() {
-  if (!write_receiver_.joinable()) return;
+  if (write_receivers_.empty()) return;
   write_receiver_stop_.store(true, std::memory_order_release);
-  write_receiver_.join();
+  for (auto &t : write_receivers_) {
+    if (t.joinable()) t.join();
+  }
+  write_receivers_.clear();
 }
 
 int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, ReadStagingMatrix *rs,
@@ -768,23 +848,39 @@ int CxlKvStoreA::enable_read_ring(ReadRingMatrix *rr, ReadStagingMatrix *rs,
   (void)init_region;
   if (spawn_receiver) {
     read_receiver_stop_.store(false, std::memory_order_relaxed);
-    read_receiver_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "ReadReceiver");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(67, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] ReadReceiver pid=%d tid=%lu pinned cpu=67 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->read_receiver_loop();
-    });
+    int T = g_num_workers;
+    int S = g_actual_ring_shards;
+    ReceiverLayout L = compute_receiver_layout(T, S);
+    read_receivers_.reserve(L.read_plans.size());
+    for (size_t i = 0; i < L.read_plans.size(); i++) {
+      ReceiverPlan p = L.read_plans[i];
+      int idx = (int)i;
+      read_receivers_.emplace_back([this, p, idx]() {
+        char nm[16]; snprintf(nm, sizeof(nm), "ReadRecv%d", idx);
+        pthread_setname_np(pthread_self(), nm);
+        cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(p.cpu, &cs);
+        pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+        fprintf(stderr,
+          "[A:thread] %s pid=%d tid=%lu cpu=%d host=%d rings=[",
+          nm, getpid(), (unsigned long)pthread_self(), p.cpu, host_id_);
+        for (size_t k = 0; k < p.ring_indices.size(); k++) {
+          fprintf(stderr, "%s%d", k ? "," : "", p.ring_indices[k]);
+        }
+        fprintf(stderr, "]\n");
+        this->read_receiver_loop(p.ring_indices);
+      });
+    }
   }
   return 0;
 }
 
 void CxlKvStoreA::stop_read_receiver() {
-  if (!read_receiver_.joinable()) return;
+  if (read_receivers_.empty()) return;
   read_receiver_stop_.store(true, std::memory_order_release);
-  read_receiver_.join();
+  for (auto &t : read_receivers_) {
+    if (t.joinable()) t.join();
+  }
+  read_receivers_.clear();
 }
 
 // iter-9A Phase 2.C: per-worker aggregator routing id setter.
@@ -795,23 +891,40 @@ void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
 void CxlKvStoreA::set_thread_tls_cache(TlsCache *tls) { g_thread_tls = tls; }
 
 // iter-17A multi-ring scaling: set process-wide sharding parameters.
+// N semantics: "workers per ring shard". So actual_shards = ceil(T/N).
+//   N >= T  ⇒ shards = 1 (single-ring baseline)
+//   N == 0  ⇒ TREAT AS DISABLED, shards = 1 (backward-compat default)
+//   N == 4  ⇒ T=64 yields 16 shards, T=8 yields 2 shards
+//   N == 8  ⇒ T=64 yields 8 shards, T=8 yields 1 shard
 void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
   if (num_workers < 1) num_workers = 1;
-  if (shards_factor < 1) shards_factor = 1;
-  g_num_workers        = num_workers;
+  g_num_workers = num_workers;
+  if (shards_factor <= 0) {
+    g_ring_shards_factor = 0;
+    g_actual_ring_shards = 1;
+    g_ring_block_size    = num_workers;
+    fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d (disabled) -> shards=1 block=%d\n",
+            num_workers, shards_factor, num_workers);
+    return;
+  }
   g_ring_shards_factor = shards_factor;
-  int s = (num_workers + shards_factor - 1) / shards_factor;  // ceil(T/N)
+  int s = (num_workers + shards_factor - 1) / shards_factor;
   if (s < 1) s = 1;
   if (s > kRingShardsMax) s = kRingShardsMax;
   g_actual_ring_shards = s;
-  int blk = (num_workers + s - 1) / s;                        // ceil(T/s)
+  int blk = (num_workers + s - 1) / s;
   if (blk < 1) blk = 1;
   g_ring_block_size    = blk;
+  fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d -> shards=%d block=%d\n",
+          num_workers, shards_factor, s, blk);
 }
 
 int CxlKvStoreA::num_ring_shards()    { return g_actual_ring_shards; }
 int CxlKvStoreA::ring_shards_factor() { return g_ring_shards_factor; }
 int CxlKvStoreA::worker_ring_idx()    { return worker_ring_idx_helper(); }
+
+// (compute_receiver_layout definition is up at file-scope anon namespace
+// earlier so enable_write_ring/read/invalidate can see it. See above.)
 
 // ---- Aggregator-routed worker dispatchers ----
 //
@@ -1421,45 +1534,21 @@ void CxlKvStoreA::inval_sender_loop() {
 
 int CxlKvStoreA::enable_senders(AggregatorRegion *ar, int num_workers,
                                 bool spawn_senders) {
-  if (!ar) return -1;
-  if (num_workers <= 0 || num_workers > kMaxAggrWorkers) return -2;
-  aggr_ = ar;
-  num_aggr_workers_ = num_workers;
-  if (spawn_senders) {
-    write_sender_stop_.store(false, std::memory_order_relaxed);
-    read_sender_stop_.store(false, std::memory_order_relaxed);
-    inval_sender_stop_.store(false, std::memory_order_relaxed);
-    write_sender_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "WriteSender");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(64, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] WriteSender pid=%d tid=%lu pinned cpu=64 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->write_sender_loop();
-    });
-    read_sender_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "ReadSender");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(66, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] ReadSender pid=%d tid=%lu pinned cpu=66 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->read_sender_loop();
-    });
-    inval_sender_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "InvalSender");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(68, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] InvalSender pid=%d tid=%lu pinned cpu=68 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->inval_sender_loop();
-    });
-  }
+  // iter-17A Phase 4: senders removed.
+  // Critical: do NOT wire aggr_ (leave it nullptr). If we did, the
+  // forward_write()/forward_read()/send_invalidate() dispatchers
+  // would route through aggregator slots and wait forever for sender
+  // threads that no longer exist. With aggr_ = nullptr, those
+  // dispatchers fall through to *_direct path immediately (which is
+  // what we want — workers write CXL ring directly).
+  (void)ar; (void)num_workers; (void)spawn_senders;
+  num_aggr_workers_ = 0;
+  // aggr_ stays nullptr.
   return 0;
 }
 
+// iter-17A Phase 4: sender threads removed (see enable_senders).
+// Stop functions become no-ops since no thread to join.
 void CxlKvStoreA::stop_write_sender() {
   if (!write_sender_.joinable()) return;
   write_sender_stop_.store(true, std::memory_order_release);
@@ -1831,11 +1920,19 @@ int CxlKvStoreA::enable_reservation_ring(ReservationRingMatrix *rsv,
     rsv_handler_stop_.store(false, std::memory_order_relaxed);
     rsv_handler_ = std::thread([this]() {
       pthread_setname_np(pthread_self(), "ReservHandler");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(70, &cs);
+      // iter-17A: pin to last CPU (85) — last receiver thread also at 85
+      // in T=64 N=4 packing case, but ReservHandler is mostly idle under
+      // FUSEE_WRITE_ALLOC=RESERVED (only services W3 BATCHED requests).
+      // Pinning it to 85 prevents it from drifting onto worker CPUs and
+      // stealing cycles. Tail-CPU sharing with InvalRecv6 is acceptable
+      // since ReservHandler is idle.
+      long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+      int rsv_cpu = (nproc > 0) ? (int)nproc - 1 : 85;
+      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(rsv_cpu, &cs);
       pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
       fprintf(stderr,
-        "[A:thread] ReservHandler pid=%d tid=%lu pinned cpu=70 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
+        "[A:thread] ReservHandler pid=%d tid=%lu pinned cpu=%d (host_id=%d)\n",
+        getpid(), (unsigned long)pthread_self(), rsv_cpu, host_id_);
       this->reservation_handler_loop();
     });
   }
@@ -1947,23 +2044,39 @@ int CxlKvStoreA::enable_invalidate(InvalRingMatrix *ir, bool init_region,
     // measurement-driven detection of bursts) deferred to
     // iter-12A backlog #8.
     inval_receiver_stop_.store(false, std::memory_order_relaxed);
-    inval_receiver_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "InvalReceiver");
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(69, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] InvalReceiver pid=%d tid=%lu pinned cpu=69 (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), host_id_);
-      this->inval_receiver_loop();
-    });
+    int T = g_num_workers;
+    int S = g_actual_ring_shards;
+    ReceiverLayout L = compute_receiver_layout(T, S);
+    inval_receivers_.reserve(L.inval_plans.size());
+    for (size_t i = 0; i < L.inval_plans.size(); i++) {
+      ReceiverPlan p = L.inval_plans[i];
+      int idx = (int)i;
+      inval_receivers_.emplace_back([this, p, idx]() {
+        char nm[16]; snprintf(nm, sizeof(nm), "InvalRecv%d", idx);
+        pthread_setname_np(pthread_self(), nm);
+        cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(p.cpu, &cs);
+        pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
+        fprintf(stderr,
+          "[A:thread] %s pid=%d tid=%lu cpu=%d host=%d rings=[",
+          nm, getpid(), (unsigned long)pthread_self(), p.cpu, host_id_);
+        for (size_t k = 0; k < p.ring_indices.size(); k++) {
+          fprintf(stderr, "%s%d", k ? "," : "", p.ring_indices[k]);
+        }
+        fprintf(stderr, "]\n");
+        this->inval_receiver_loop(p.ring_indices);
+      });
+    }
   }
   return 0;
 }
 
 void CxlKvStoreA::stop_inval_receiver() {
-  if (!inval_receiver_.joinable()) return;
+  if (inval_receivers_.empty()) return;
   inval_receiver_stop_.store(true, std::memory_order_release);
-  inval_receiver_.join();
+  for (auto &t : inval_receivers_) {
+    if (t.joinable()) t.join();
+  }
+  inval_receivers_.clear();
 }
 
 // InvalReceiver: drain incoming InvalRing[*][me]; for each entry mark
@@ -1976,15 +2089,14 @@ void CxlKvStoreA::stop_inval_receiver() {
 // processing has lower per-op latency (~1.5 µs) than the parallel
 // dispatcher+worker design (3-5 µs/op + handoff tail) when invals
 // are not bursty enough to saturate a single thread.
-void CxlKvStoreA::inval_receiver_loop() {
+void CxlKvStoreA::inval_receiver_loop(std::vector<int> ring_indices) {
   probe_ring();
   while (!inval_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
+   for (int ring_idx : ring_indices) {
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      // iter-17A Phase 1: single-receiver hard-codes shard 0.
-      // Phase 3 will parameterize ring_idx for multi-receiver.
-      InvalRing *ring = &ir_->rings[src][host_id_][0];
+      InvalRing *ring = &ir_->rings[src][host_id_][ring_idx];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       full_fence();
@@ -2027,6 +2139,7 @@ void CxlKvStoreA::inval_receiver_loop() {
       }
       ring->head = head;
     }
+   }  // for ring_idx
     if (!did_work) __builtin_ia32_pause();
   }
   probe_flush();
@@ -2488,27 +2601,19 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
   e->status = 0;
 }
 
-void CxlKvStoreA::write_receiver_loop() {
+void CxlKvStoreA::write_receiver_loop(std::vector<int> ring_indices) {
   probe_ring();
   // iter-17A Stage 6 micro-opt: lfence-vs-mfence applied at sites A+C only.
-  // Site B (per-slot req_op_id load) MUST remain mfence: that load is
-  // followed by reads of other cacheline-1 fields (key/op_kind/value_len/
-  // staging_off/staging_gen) in write_handler. Per Intel SDM §11.4.4,
-  // clflushopt is ordered by mfence/sfence but NOT by lfence — lfence allows
-  // the load to speculatively read STALE L1 data from prior slot reuse.
-  // For site B, stale non-zero op_id cascades into stale field reads →
-  // receiver acks the wrong op_id → current worker times out (5 ms cap,
-  // hit during bisection: -65% thpt at T=8/64 with site-B lfence).
-  // Sites A (tail poll, single-field load only) and C (gap-spin, loop-
-  // based self-correction — stale read costs extra iter but final load
-  // sees fresh CXL value) are safe.
+  // Site B (per-slot req_op_id load) MUST remain mfence: see iter-17A
+  // scaling design doc for full reasoning.
+  // iter-17A Phase 3: receiver may own multiple ring shards (packing);
+  // we round-robin across ring_indices to ensure fairness.
   while (!write_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
+   for (int ring_idx : ring_indices) {
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      // iter-17A Phase 1: single-receiver hard-codes shard 0.
-      // Phase 3 will parameterize ring_idx for multi-receiver.
-      WriteRing *ring = &wr_->rings[src][host_id_][0];
+      WriteRing *ring = &wr_->rings[src][host_id_][ring_idx];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       __builtin_ia32_lfence();  // site A (single-field tail load, safe)
@@ -2560,20 +2665,20 @@ void CxlKvStoreA::write_receiver_loop() {
       }
       ring->head = head;
     }
+   }  // for ring_idx
     if (!did_work) __builtin_ia32_pause();
   }
   probe_flush();
 }
 
-void CxlKvStoreA::read_receiver_loop() {
+void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
   probe_ring();
   while (!read_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
+   for (int ring_idx : ring_indices) {
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      // iter-17A Phase 1: single-receiver hard-codes shard 0.
-      // Phase 3 will parameterize ring_idx for multi-receiver.
-      ReadRing *ring = &rr_->rings[src][host_id_][0];
+      ReadRing *ring = &rr_->rings[src][host_id_][ring_idx];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       full_fence();
@@ -2608,6 +2713,7 @@ void CxlKvStoreA::read_receiver_loop() {
       }
       ring->head = head;
     }
+   }  // for ring_idx
     if (!did_work) __builtin_ia32_pause();
   }
   probe_flush();
