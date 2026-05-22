@@ -192,6 +192,24 @@ int main(int argc, char **argv) {
     }
   }
 
+  // iter-17A: configure ring sharding (Plan A multi-shard scaling).
+  // FUSEE_RING_SHARDS_FACTOR=N: N workers per ring shard (0 = disabled,
+  // single-shard backward-compat). N=4 is Plan A default winner.
+  // FUSEE_RING_ROUTING=key_hash enables Plan B routing (Plan A default).
+  {
+    int rsf = 0;
+    if (const char *e = getenv("FUSEE_RING_SHARDS_FACTOR")) rsf = atoi(e);
+    if (rsf < 0) rsf = 0;
+    int routing = 0;
+    if (const char *e = getenv("FUSEE_RING_ROUTING")) {
+      if (std::string(e) == "key_hash") routing = 1;
+    }
+#if CONSENSUS_OPT == FUSEE_OPT_A
+    fusee::CxlKvStoreA::set_ring_routing_mode(routing);
+    fusee::CxlKvStoreA::configure_ring_sharding(num_clients, rsf);
+#endif
+  }
+
   // Options A and B keep per-host replication state (PendingRing matrix,
   // one replicator per process). Intra-host client scaling is unsafe for
   // WRITES (multiple clients push to same ring, multiple replicators race
@@ -426,6 +444,12 @@ int main(int argc, char **argv) {
 
   const int global_id = host_id * num_clients + client_id;
   const bool is_primary_client = (host_id == 0) && (client_id == 0);
+
+  // iter-17A: set worker_id so worker_ring_idx_helper() returns the right
+  // ring shard for this worker. Called unconditionally (no aggregator gate).
+#if CONSENSUS_OPT == FUSEE_OPT_A
+  fusee::CxlKvStoreA::set_worker_id(client_id);
+#endif
 
   // Phase 1 read-only path (A/B pure-read workloads):
   // FUSEE_READ_ONLY=1 → non-primary fork children attach read-only,

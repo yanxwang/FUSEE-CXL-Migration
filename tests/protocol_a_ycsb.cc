@@ -173,10 +173,18 @@ int main(int argc, char **argv) {
   if (const char *e = getenv("FUSEE_RING_SHARDS_FACTOR")) ring_shards_factor = atoi(e);
   if (ring_shards_factor < 0) ring_shards_factor = 0;
 
+  // iter-17A Plan B opt-in: FUSEE_RING_ROUTING=key_hash → ring_idx = fnv1a(key) % shards
+  // Default (any other value / unset) = Plan A (ring_idx = client_id / block_size)
+  int routing_mode = 0;
+  if (const char *e = getenv("FUSEE_RING_ROUTING")) {
+    if (std::string(e) == "key_hash") routing_mode = 1;
+  }
+
   if (num_threads > kMaxClients) num_threads = kMaxClients;
 
-  // iter-17A: configure ring sharding before any enable_*_ring spawns
-  // a receiver. Sets process-wide statics inherited by forks.
+  // iter-17A: configure ring sharding + routing mode before any
+  // enable_*_ring spawns. Both set process-wide statics inherited by forks.
+  fusee::CxlKvStoreA::set_ring_routing_mode(routing_mode);
   fusee::CxlKvStoreA::configure_ring_sharding(num_threads, ring_shards_factor);
 
   // Parse workload traces.

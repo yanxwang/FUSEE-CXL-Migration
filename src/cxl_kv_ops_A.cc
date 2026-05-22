@@ -30,21 +30,35 @@ thread_local TlsCache *g_thread_tls     = nullptr;
 
 // iter-17A multi-ring scaling: process-wide ring sharding config.
 // Set once via configure_ring_sharding() at attach time.
-// g_block_size > 0 ⇒ ring_idx = g_aggr_worker_id / g_block_size (Plan A).
-// All default to 1 ⇒ single-shard backward-compatible behavior.
 int g_num_workers          = 1;   // T
 int g_ring_shards_factor   = 1;   // N
 int g_actual_ring_shards   = 1;   // ceil(T/N), capped at kRingShardsMax
 int g_ring_block_size      = 1;   // ceil(T/actual_shards)
+// iter-17A Plan A vs B routing selector. 0 = worker_id (Plan A,
+// default). 1 = key_hash (Plan B, opt-in via FUSEE_RING_ROUTING=key_hash).
+int g_ring_routing_mode    = 0;
 
 inline int worker_ring_idx_helper() {
-  // Plan A: static modulo. Workers without g_aggr_worker_id set
-  // (senders, dispatchers, internal callers) get shard 0.
+  // Plan A: static modulo on worker_id (default).
   int wid = g_aggr_worker_id;
   if (wid < 0) return 0;
   int idx = wid / g_ring_block_size;
   if (idx >= g_actual_ring_shards) idx = g_actual_ring_shards - 1;
   return idx;
+}
+
+inline int worker_ring_idx_for_key(uint64_t key) {
+  // Plan B: ring_idx = fnv1a(key) % actual_shards. Per key-affinity:
+  // same key always routes to same receiver, improving bucket cacheline
+  // locality at receiver but losing worker-side per-ring locality.
+  if (g_actual_ring_shards <= 1) return 0;
+  return (int)(fnv1a_u64(key) % (uint64_t)g_actual_ring_shards);
+}
+
+inline int compute_ring_idx(uint64_t key) {
+  return (g_ring_routing_mode == 1)
+       ? worker_ring_idx_for_key(key)
+       : worker_ring_idx_helper();
 }
 }  // namespace
 
@@ -891,11 +905,6 @@ void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
 void CxlKvStoreA::set_thread_tls_cache(TlsCache *tls) { g_thread_tls = tls; }
 
 // iter-17A multi-ring scaling: set process-wide sharding parameters.
-// N semantics: "workers per ring shard". So actual_shards = ceil(T/N).
-//   N >= T  ⇒ shards = 1 (single-ring baseline)
-//   N == 0  ⇒ TREAT AS DISABLED, shards = 1 (backward-compat default)
-//   N == 4  ⇒ T=64 yields 16 shards, T=8 yields 2 shards
-//   N == 8  ⇒ T=64 yields 8 shards, T=8 yields 1 shard
 void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
   if (num_workers < 1) num_workers = 1;
   g_num_workers = num_workers;
@@ -903,8 +912,9 @@ void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
     g_ring_shards_factor = 0;
     g_actual_ring_shards = 1;
     g_ring_block_size    = num_workers;
-    fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d (disabled) -> shards=1 block=%d\n",
-            num_workers, shards_factor, num_workers);
+    fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d (disabled) -> shards=1 block=%d routing=%s\n",
+            num_workers, shards_factor, num_workers,
+            g_ring_routing_mode == 1 ? "key_hash" : "worker_id");
     return;
   }
   g_ring_shards_factor = shards_factor;
@@ -915,8 +925,15 @@ void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
   int blk = (num_workers + s - 1) / s;
   if (blk < 1) blk = 1;
   g_ring_block_size    = blk;
-  fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d -> shards=%d block=%d\n",
-          num_workers, shards_factor, s, blk);
+  fprintf(stderr, "[A:cfg] ring_sharding T=%d N=%d -> shards=%d block=%d routing=%s\n",
+          num_workers, shards_factor, s, blk,
+          g_ring_routing_mode == 1 ? "key_hash" : "worker_id");
+}
+
+// iter-17A Plan B opt-in: select routing mode.
+// 0 = worker_id (Plan A, default), 1 = key_hash (Plan B).
+void CxlKvStoreA::set_ring_routing_mode(int mode) {
+  g_ring_routing_mode = (mode == 1) ? 1 : 0;
 }
 
 int CxlKvStoreA::num_ring_shards()    { return g_actual_ring_shards; }
@@ -1617,9 +1634,9 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
 #endif
 #endif  // FUSEE_XHOST_WRITE_SELF_INVAL
 
-  // iter-17A Plan A: route to ring shard based on worker id.
-  // worker_ring_idx_helper() returns 0 when N=1 (backward compat).
-  int ring_idx = worker_ring_idx_helper();
+  // iter-17A: route to ring shard. Plan A (default) uses worker_id;
+  // Plan B (env FUSEE_RING_ROUTING=key_hash) uses fnv1a(key).
+  int ring_idx = compute_ring_idx(key);
   WriteRing *ring = &wr_->rings[host_id_][owner][ring_idx];
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
@@ -1832,8 +1849,8 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
 // ALWAYS call this direct version (they are not workers).
 int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   if (!ir_) return -10;  // invalidate channel not enabled
-  // iter-17A Plan A: ring shard by worker id (Backward-compat N=1 ⇒ 0)
-  int ring_idx = worker_ring_idx_helper();
+  // iter-17A: Plan A worker_id / Plan B key_hash routing.
+  int ring_idx = compute_ring_idx(key);
   InvalRing *ring = &ir_->rings[host_id_][target_host][ring_idx];
   uint64_t my_op = inval_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
@@ -2167,8 +2184,8 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
                                      void *out_buf, uint32_t buf_len,
                                      uint32_t *out_len) {
   if (!rr_ || !rs_) return -10;
-  // iter-17A Plan A: ring shard by worker id (backward-compat N=1 ⇒ 0)
-  int ring_idx = worker_ring_idx_helper();
+  // iter-17A: Plan A worker_id / Plan B key_hash routing.
+  int ring_idx = compute_ring_idx(key);
   ReadRing *ring = &rr_->rings[host_id_][owner][ring_idx];
   uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);

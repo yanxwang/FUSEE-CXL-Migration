@@ -152,6 +152,9 @@ class CxlKvStoreA {
   static int  ring_shards_factor();
   static int  worker_ring_idx();   // Plan A routing for current worker
 
+  // iter-17A Plan B: select routing mode (0=worker_id default, 1=key_hash).
+  static void set_ring_routing_mode(int mode);
+
   // iter-10A Phase 1.C: per-worker TlsCache attach. Worker calls this
   // post-fork (after tls_cache_init). search() / execute_write_local
   // route through TLS L1 if set; otherwise skip and go straight to
