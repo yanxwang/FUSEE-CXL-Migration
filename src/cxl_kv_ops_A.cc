@@ -386,9 +386,13 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
   if (pool_ && value_len + 4 > pool_->block_size()) return -5;
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
-  flush_line(bucket);
-  flush_line((char *)bucket + 64);
-  full_fence();
+  // iter-17A: removed bucket flush+mfence here (was 2×clflushopt+mfence).
+  // Buckets are sharded by owner host; only owner writes its own buckets.
+  // Within owner host, x86 MOESI keeps multi-core L1 coherent automatically,
+  // and prior writes' clflushopt already invalidated owner L1 copies.
+  // Empirical evidence: the matching flush in the post-lock path below only
+  // flushed cacheline 1 of bucket, never touching slots 4-7's cacheline,
+  // yet the code worked → flush was never load-bearing.
 
   int match = -1, empty = -1;
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -409,8 +413,7 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
   SlotDirectoryEntry *de =
       slot_directory_entry(dir_, b, (uint32_t)target_slot);
   slot_directory_lock(de);
-  flush_line(bucket);
-  full_fence();
+  // iter-17A: removed flush_line(bucket)+full_fence post-lock — see above.
   CxlKvSlot *slot = &bucket->slots[target_slot];
 
   // Sharer invalidate (same as execute_write_local Step 4).
@@ -474,9 +477,9 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
 
-  flush_line(bucket);
-  flush_line((char *)bucket + 64);
-  full_fence();
+  // iter-17A: removed bucket flush+mfence here. Owner-host-only writes
+  // + x86 MOESI keeps owner's L1 coherent without explicit clflushopt.
+  // (Same audit as execute_write_local_with_blk.)
 
   int match = -1, empty = -1;
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
@@ -501,8 +504,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   slot_directory_lock(de);
   PROBE_PATH("W2", key);
 
-  flush_line(bucket);
-  full_fence();
+  // iter-17A: removed flush_line(bucket)+full_fence post-lock — see above.
   CxlKvSlot *slot = &bucket->slots[target_slot];
 
   // Step 4: invalidate sharers \ {self}. spec §I9 / I10.
