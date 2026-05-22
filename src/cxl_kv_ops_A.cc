@@ -71,6 +71,15 @@ struct PathCounters {
   uint64_t n_local_write_with_blk_forwarded = 0; // W1 RESERVED receiver path
   uint64_t n_local_write_staging_forwarded  = 0; // STAGING receiver path
   uint64_t n_cache_pool_insert_from_write   = 0; // cache_pool_insert after W10 (both worker + receiver)
+  // iter-15A microbench plan C.3: cache_pool counters
+  uint64_t n_cache_pool_evict              = 0;  // cache_pool_evict() events (explicit physical delete)
+  uint64_t n_cache_pool_set_stale          = 0;  // cache_pool_set_stale() events (lazy invalidate)
+  uint64_t n_cache_pool_lru_evict          = 0;  // cache_pool_insert chose LRU slot (implicit eviction)
+  // iter-15A microbench HR-2: receiver-side READ counter — symmetric to
+  // n_local_write_with_blk_forwarded on the write path. Single-threaded
+  // (receiver in primary), so survives fork — accurate cluster anchor for
+  // gate verification.
+  uint64_t n_read_handler_served           = 0;
 };
 
 thread_local PathCounters g_path_counters;
@@ -90,20 +99,24 @@ void register_path_counters_once() {
 }
 }  // anon ns
 
-void fusee_path_counters_dump(FILE *fp, int host_id) {
+void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
   std::lock_guard<std::mutex> lk(g_path_registry_mu);
   PathCounters agg{};
+  const char *lbl = label ? label : "final";
   for (size_t i = 0; i < g_path_registry.size(); i++) {
     PathCounters *p = g_path_registry[i];
     fprintf(fp,
-      "# PATH host=%d tid=%lu "
+      "# PATH host=%d label=%s tid=%lu "
       "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
-      "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu\n",
-      host_id, g_path_registry_tids[i],
+      "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu "
+      "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu\n",
+      host_id, lbl, g_path_registry_tids[i],
       p->n_tls_hit, p->n_r2hit, p->n_r2miss_local, p->n_r3, p->n_cache_pool_insert_from_read,
       p->n_local_write_worker, p->n_forward_write,
       p->n_local_write_with_blk_forwarded, p->n_local_write_staging_forwarded,
-      p->n_cache_pool_insert_from_write);
+      p->n_cache_pool_insert_from_write,
+      p->n_cache_pool_evict, p->n_cache_pool_set_stale, p->n_cache_pool_lru_evict,
+      p->n_read_handler_served);
     agg.n_tls_hit                        += p->n_tls_hit;
     agg.n_r2hit                          += p->n_r2hit;
     agg.n_r2miss_local                   += p->n_r2miss_local;
@@ -114,16 +127,23 @@ void fusee_path_counters_dump(FILE *fp, int host_id) {
     agg.n_local_write_with_blk_forwarded += p->n_local_write_with_blk_forwarded;
     agg.n_local_write_staging_forwarded  += p->n_local_write_staging_forwarded;
     agg.n_cache_pool_insert_from_write   += p->n_cache_pool_insert_from_write;
+    agg.n_cache_pool_evict               += p->n_cache_pool_evict;
+    agg.n_cache_pool_set_stale           += p->n_cache_pool_set_stale;
+    agg.n_cache_pool_lru_evict           += p->n_cache_pool_lru_evict;
+    agg.n_read_handler_served            += p->n_read_handler_served;
   }
   fprintf(fp,
-    "# PATH host=%d AGG "
+    "# PATH host=%d label=%s AGG "
     "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
-    "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu\n",
-    host_id,
+    "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu "
+    "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu\n",
+    host_id, lbl,
     agg.n_tls_hit, agg.n_r2hit, agg.n_r2miss_local, agg.n_r3, agg.n_cache_pool_insert_from_read,
     agg.n_local_write_worker, agg.n_forward_write,
     agg.n_local_write_with_blk_forwarded, agg.n_local_write_staging_forwarded,
-    agg.n_cache_pool_insert_from_write);
+    agg.n_cache_pool_insert_from_write,
+    agg.n_cache_pool_evict, agg.n_cache_pool_set_stale, agg.n_cache_pool_lru_evict,
+    agg.n_read_handler_served);
   fflush(fp);
 }
 
@@ -132,23 +152,77 @@ void fusee_path_counters_dump(FILE *fp, int host_id) {
   g_path_counters.field++; \
 } while (0)
 
+void fusee_path_ctr_cache_evict()     { PATH_CTR(n_cache_pool_evict); }
+void fusee_path_ctr_cache_set_stale() { PATH_CTR(n_cache_pool_set_stale); }
+void fusee_path_ctr_cache_lru_evict() { PATH_CTR(n_cache_pool_lru_evict); }
+
 #else
 #define PATH_CTR(field) do {} while (0)
-void fusee_path_counters_dump(FILE *fp, int host_id) { (void)fp; (void)host_id; }
+void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
+  (void)fp; (void)host_id; (void)label;
+}
+void fusee_path_ctr_cache_evict()     {}
+void fusee_path_ctr_cache_set_stale() {}
+void fusee_path_ctr_cache_lru_evict() {}
 #endif
+
+// iter-16A receiver-NOOP study (per docs/microbench_xhost_spec.md §D).
+// Env var FUSEE_RECEIVER_NOOP_LEVEL ∈ {0,1,2,3} switches how much of the
+// receiver-side work to do. L0 = full real path; L1 skips invalidate
+// broadcast; L2 only does CXL slot publish + ack; L3 only acks. Used to
+// disentangle which receiver step dominates the 0.6 Mops/s xhost ceiling.
+static int g_recv_noop_level = -1;
+static inline int recv_noop_level() {
+  int v = g_recv_noop_level;
+  if (__builtin_expect(v < 0, 0)) {
+    const char *e = std::getenv("FUSEE_RECEIVER_NOOP_LEVEL");
+    v = (e && e[0]) ? std::atoi(e) : 0;
+    if (v < 0 || v > 3) v = 0;
+    g_recv_noop_level = v;
+  }
+  return v;
+}
+
+// iter-15A microbench HR (HARD REQUIREMENT 2): receiver-side read serving
+// counter. Called from read_handler() — receiver thread is single-instance
+// in primary process, so this counter is fork-safe and authoritative for
+// gate verification (xhost_read scenario: total cluster ≈ trans_ops).
+void CxlKvStoreA::wire_rings_for_child(WriteRingMatrix *wr,
+                                       ForwardStagingMatrix *fs,
+                                       ReadRingMatrix *rr,
+                                       ReadStagingMatrix *rs,
+                                       InvalRingMatrix *ir,
+                                       ReservationRingMatrix *rsv,
+                                       RcuDomain *rcu, HazardDomain *haz) {
+  // Pure pointer assignment — no memset, no spawn, no fence. Children call
+  // this in their post-fork init path to get the same ring view as primary
+  // would have via enable_*_ring (which they don't call). Without this,
+  // children's wr_/rr_/ir_/etc are nullptr → forward_*_direct fail with
+  // -10 → high-T cross-host throughput is silently faked. See HR-2 in
+  // docs/iter15A_microbench_plan/README.md.
+  if (wr)  wr_  = wr;
+  if (fs)  fs_  = fs;
+  if (rr)  rr_  = rr;
+  if (rs)  rs_  = rs;
+  if (ir)  ir_  = ir;
+  if (rsv) rsv_ = rsv;
+  if (rcu) rcu_ = rcu;
+  if (haz) haz_ = haz;
+}
 
 namespace {
 
 // CoW slot publish: write value bytes to a freshly allocated CXL block
 // (already done by caller before reaching here), then atomically update
-// slot.{key,value}. We use the spec §VI-A.bis "plain + clflushopt +
-// sfence" pattern for the 16 B slot itself (slot is < 256 B → NT store
-// not warranted).
+// slot.{key,value}. The slot is 16 B = key(8) + value(8) on a single
+// cacheline, so one flush_line + sfence makes both fields visible
+// atomically to peer-host readers (CXL cacheline writes are 64 B atomic).
+// Older two-phase publish (write value→flush→write key→flush) was
+// inherited from spec §VI-A.bis but that pattern is for the case where
+// value and key live on DIFFERENT cachelines — not this layout.
 inline void publish_slot_cow(CxlKvSlot *slot, uint64_t key,
                              uint64_t encoded_value) {
   slot->value = encoded_value;
-  flush_line(slot);
-  store_fence();
   slot->key = key;
   flush_line(slot);
   store_fence();
@@ -338,8 +412,10 @@ int CxlKvStoreA::execute_write_local_with_blk(uint64_t key, uint64_t blk_off,
   // iter-14A Phase 2: if `self_inval_src` is set, skip that host from
   // broadcast because the forwarding worker already self-invalidated
   // its local cache before sending the WriteEntry.
+  // iter-16A Receiver-NOOP L1: skip broadcast entirely to measure
+  // invalidate-broadcast cost.
   uint8_t bitmap = de->sharer_bitmap;
-  if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
+  if (recv_noop_level() < 1 && op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
     for (int h = 0; h < num_hosts_; h++) {
       if (h == host_id_) continue;
 #if FUSEE_XHOST_WRITE_SELF_INVAL
@@ -389,7 +465,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // or receiver of forwarded write (self_inval_src >= 0, the src host id).
   if (self_inval_src < 0) PATH_CTR(n_local_write_worker);
   else                    PATH_CTR(n_local_write_staging_forwarded);
-  PROBE_OP("W1", key);
+  PROBE_PATH("W1", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
 
@@ -418,7 +494,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
 
   SlotDirectoryEntry *de = slot_directory_entry(dir_, b, (uint32_t)target_slot);
   slot_directory_lock(de);
-  PROBE_OP("W2", key);
+  PROBE_PATH("W2", key);
 
   flush_line(bucket);
   full_fence();
@@ -437,7 +513,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // For INSERT no prior sharers exist (we're the only host ever to
   // touch the slot), so skip. UPDATE/DELETE: scan bitmap.
   uint8_t bitmap = de->sharer_bitmap;
-  PROBE_OP("W3", key);
+  PROBE_PATH("W3", key);
   if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
     int n_sent = 0;
     for (int h = 0; h < num_hosts_; h++) {
@@ -448,11 +524,11 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
       if (h == self_inval_src) continue;
 #endif
       if ((bitmap & (1u << h)) == 0) continue;
-      if (n_sent == 0) PROBE_OP("W4", key);
+      if (n_sent == 0) PROBE_PATH("W4", key);
       send_invalidate((uint32_t)h, key);
       n_sent++;
     }
-    if (n_sent > 0) PROBE_OP("W6", key);
+    if (n_sent > 0) PROBE_PATH("W6", key);
   }
 
   // Step 5: CoW publish.
@@ -464,18 +540,18 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // want the lower per-op cost).
   if (op_kind == kOpKindDelete) {
     retire_slot(slot);
-    PROBE_OP("W9", key);
+    PROBE_PATH("W9", key);
   } else if (pool_ == nullptr) {
     // Inline u64 fallback (legacy / Protocol A degenerate mode).
     // Only valid when caller passes 8 bytes; truncated otherwise.
     uint64_t inline_v = 0;
     std::memcpy(&inline_v, value, value_len < 8 ? value_len : 8);
     publish_slot_cow(slot, key, inline_v);
-    PROBE_OP("W9", key);
+    PROBE_PATH("W9", key);
   } else {
     // Full blockpool CoW path with real value_len bytes.
     uint64_t blk_off = pool_->alloc();
-    PROBE_OP("W7", key);
+    PROBE_PATH("W7", key);
     static thread_local int trace = -1;
     if (trace == -1) {
       const char *e = getenv("FUSEE_TRACE_BLOCKPOOL");
@@ -500,7 +576,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     std::memcpy(buf, &value_len, 4);
     std::memcpy(buf + 4, value, value_len);
     pool_->write(blk_off, buf, total);
-    PROBE_OP("W8", key);
+    PROBE_PATH("W8", key);
     uint8_t fp = key_fingerprint(key);
     uint8_t sc = kSizeClassBlock256;
     // iter-9A: encode value_len in slot.value high bits via separate
@@ -523,7 +599,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
               host_id_, key, op_kind, blk_off, value_len);
     }
     publish_slot_cow(slot, key, encoded);
-    PROBE_OP("W9", key);
+    PROBE_PATH("W9", key);
   }
 
   // Step 6: directory state.
@@ -536,7 +612,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     // Self only — peer hosts must re-register if they want to cache.
     de->sharer_bitmap = (uint8_t)(1u << (uint32_t)host_id_);
   }
-  PROBE_OP("W10", key);
+  PROBE_PATH("W10", key);
   slot_directory_unlock(de);
 
   // Step 7: own cache.
@@ -569,7 +645,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     }
 #endif
   }
-  PROBE_OP("W12", key);
+  PROBE_PATH("W12", key);
   return 0;
 }
 
@@ -1401,8 +1477,8 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
 
-  // iter-12A Phase 5.1: P5W_FA = TSC just BEFORE fetch_add (entry to fn).
-  PROBE_OP("P5W_FA", op_id);
+  // iter-16A Stage 1 (slot_reserve) start.
+  PROBE_OP("XWS1S", op_id);
 
   // Reserve slot.
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
@@ -1411,22 +1487,26 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   uint32_t slot_idx = (uint32_t)(tpos % kWriteRingDepth);
   WriteEntry *e = &ring->entries[slot_idx];
 
-  // iter-12A Phase 5.1: P5W_SR = TSC after fetch_add, BEFORE slot-free wait.
-  // Delta P5W_SR - P5W_FA = fetch_add + ring->tail flush cost (~200 ns typical).
-  PROBE_OP("P5W_SR", op_id);
+  // iter-16A Stage 1 end ≡ Stage 2 (slot_wait) start.
+  PROBE_OP("XWS1E", op_id);
 
   // Wait for slot free (cacheline 1 holds req_op_id).
+  int c_iters = 0;
   for (;;) {
     flush_line((void *)&e->req_op_id);
     full_fence();
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+    c_iters++;
     __builtin_ia32_pause();
   }
 
-  // iter-12A Phase 5.1: P5W_SF = TSC after slot-free wait completes.
-  // Delta P5W_SF - P5W_SR = slot-free spin time. > 0 if prior worker still
-  // hasn't ack'd / released this slot.
-  PROBE_OP("P5W_SF", op_id);
+  // iter-16A Stage 2 end ≡ Stage 3 (value_xfer) start.
+  PROBE_OP("XWS2E", op_id);
+  if (c_iters > 0) {
+    // Conditional probe — emits ONLY if Stage 2 actually spun.
+    // Payload = number of spin iterations (NOT op_id).
+    PROBE_OP("XWS2R", (uint64_t)c_iters);
+  }
 
   // iter-13A Phase 2: select write-path based on FUSEE_WRITE_ALLOC.
   uint64_t direct_blk_off = 0;
@@ -1536,6 +1616,9 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   }
 #endif
 
+  // iter-16A Stage 3 end ≡ Stage 4 (ctrl_publish) start.
+  PROBE_OP("XWS3E", op_id);
+
   // Fill control message (cacheline 1).
   e->key = key;
   e->op_kind = (uint8_t)op_kind;
@@ -1559,32 +1642,21 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
 
-  // iter-12A Phase 5.1: P5W_PP = TSC just BEFORE publish (req_op_id store).
-  // Delta P5W_PP - P5W_SF = memcpy + 16x flush_line + fill control fields.
-  // This is the "gap window" — between fetch_add and publish, receiver
-  // sees slot empty.
-  PROBE_OP("P5W_PP", op_id);
-
   e->req_op_id.store(op_id, std::memory_order_release);
   flush_line((void *)&e->req_op_id);  // publish cacheline 1
   store_fence();
 
-  // iter-12A Phase 5.1: P5W_PT = TSC just AFTER publish (post store_fence).
-  // From this point on, receiver could in principle observe req_op_id != 0.
-  PROBE_OP("P5W_PT", op_id);
+  // iter-16A Stage 4 end ≡ Stage 5 (ack_wait) start.
+  PROBE_OP("XWS4E", op_id);
 
   int status = 0;
   int rc = generic_spin_wait(e, op_id, &status);
 
-  // iter-12A Phase 5.1: P5W_OK / P5W_TO = TSC at spin_wait exit.
-  // (Tags shortened from "P5W_SX_OK/TO" — exceeded 8-char probe limit and
-  // were truncated to "P5W_SX_T" indistinguishably. Use 6-char tags.)
-  // Distinguish success vs timeout. Delta P5W_OK/TO - P5W_PT = ack-wait time
-  // (worker spinning waiting for resp_op_id == op_id).
-  if (rc == 0) {
-    PROBE_OP("P5W_OK", op_id);
-  } else {
-    PROBE_OP("P5W_TO", op_id);
+  // iter-16A Stage 5 end. XWS5E always fires; XWS5T conditional on timeout
+  // (timeout indicates receiver pathology — investigate occurrences).
+  PROBE_OP("XWS5E", op_id);
+  if (rc != 0) {
+    PROBE_OP("XWS5T", op_id);
   }
 
   if (rc != 0) return rc;
@@ -1610,7 +1682,7 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
-  PROBE_OP("I1", op_id);
+  PROBE_PATH("I1", op_id);
   uint32_t slot = (uint32_t)(tpos % kInvalRingDepth);
   InvalEntry *e = &ring->entries[slot];
 
@@ -1629,7 +1701,7 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   e->req_op_id.store(op_id, std::memory_order_release);
   flush_line((void *)e);
   store_fence();
-  PROBE_OP("I2", op_id);
+  PROBE_PATH("I2", op_id);
 
   // Spin on response.
   // iter-6A: resp_op_id lives on the SECOND cacheline of InvalEntry —
@@ -1645,12 +1717,12 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
     full_fence();
     uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
     if (resp == op_id) {
-      PROBE_OP("I7", op_id);
+      PROBE_PATH("I7", op_id);
       int rc = e->status;
       e->req_op_id.store(0, std::memory_order_release);
       flush_line((void *)e);  // line 1 (req_op_id)
       store_fence();
-      PROBE_OP("I8", op_id);
+      PROBE_PATH("I8", op_id);
       return rc;
     }
     if (spin_start_ns == 0) {
@@ -1845,7 +1917,7 @@ void CxlKvStoreA::inval_receiver_loop() {
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
       while (head < tail) {
-        PROBE_OP("I3", tail);
+        PROBE_PATH("I3", tail);
         uint32_t slot = (uint32_t)(head % kInvalRingDepth);
         InvalEntry *e = &ring->entries[slot];
         flush_line((void *)e);
@@ -1866,17 +1938,17 @@ void CxlKvStoreA::inval_receiver_loop() {
           }
           if (op_id == 0) break;
         }
-        PROBE_OP("I4", op_id);
+        PROBE_PATH("I4", op_id);
 #if !FUSEE_DISABLE_CACHE_POOL
         cache_pool_set_stale(cache_, e->key);
 #endif
-        PROBE_OP("I5", op_id);
+        PROBE_PATH("I5", op_id);
         e->status = 0;
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);
         flush_line((void *)&e->resp_op_id);
         store_fence();
-        PROBE_OP("I6", op_id);
+        PROBE_PATH("I6", op_id);
         head++;
         did_work = true;
       }
@@ -2084,12 +2156,40 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
 }
 
 void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
+  // L3: ack only — skip ALL work, just return. Caller's loop publishes
+  // resp_op_id; we just need a status set.
+  int nlevel = recv_noop_level();
+  if (nlevel >= 3) {
+    e->status = 0;
+    return;
+  }
+  // L2: CXL slot publish + ack only — write a dummy CoW pointer into a
+  // fixed slot to simulate the publish cost (1 CXL cacheline + flush_line
+  // + sfence). Skip bucket scan, directory state, invalidate broadcast.
+  // NOT semantically valid (slot 0 reused arbitrarily); measures publish
+  // overhead only.
+  if (nlevel >= 2) {
+    if (e->op_kind != kOpKindDelete && e->staging_gen == 0 && buckets_) {
+      uint32_t b = bucket_idx(e->key);
+      CxlKvBucket *bucket = &buckets_[b];
+      uint64_t encoded = cxl_slot_pack(e->staging_off, kSizeClassBlock256,
+                                       key_fingerprint(e->key));
+      bucket->slots[0].value = encoded;
+      flush_line(&bucket->slots[0]);
+      store_fence();
+    }
+    e->status = 0;
+    return;
+  }
   uint32_t value_len = e->value_len;
   // iter-14A Phase 2: forward src host to execute_write_local; if
   // FUSEE_XHOST_WRITE_SELF_INVAL is on, src has already self-invalidated
   // its local cache, so we exclude src from the invalidate broadcast.
   // When flag is off, the src parameter is silently ignored — behavior
   // matches iter-13A baseline.
+  // For L1, src is forwarded to execute_write_local_with_blk /
+  // execute_write_local; those functions check recv_noop_level() and
+  // skip the invalidate broadcast inner loop.
   if (e->op_kind == kOpKindDelete) {
     e->status = execute_write_local(e->key, nullptr, 0, kOpKindDelete, src);
     return;
@@ -2147,9 +2247,57 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
 // still set for protocol compatibility but no longer consulted by the
 // new reader path.
 void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
+  PATH_CTR(n_read_handler_served);  // iter-15A HR-2 gate anchor
   uint64_t req_op_id = e->req_op_id.load(std::memory_order_acquire);
   uint32_t b = bucket_idx(e->key);
   CxlKvBucket *bucket = &buckets_[b];
+
+  // iter-16A Receiver-NOOP study (per docs/microbench_xhost_spec.md §D).
+  // L3: only ack — set staging to no-data, publish ready_op_id, return.
+  //     Reader's spin loop unblocks immediately on ready_op_id.
+  // L2: lookup + dummy publish — skip pool->read of value bytes.
+  // L1: == L0 (read path has no invalidate broadcast; nothing to skip).
+  int nlevel = recv_noop_level();
+  if (nlevel >= 2) {
+    ReadStagingSlot *st_noop =
+        read_staging_slot(rs_, src, host_id_, (int)slot_idx);
+    if (nlevel >= 3) {
+      // L3: pure ack
+      st_noop->key = e->key;
+      st_noop->value_size = 0;
+      st_noop->status = 0;
+      st_noop->lookup_epoch = 0;
+      st_noop->resp_blk_off = 0;
+      flush_line(st_noop);
+      store_fence();
+      st_noop->ready_op_id.store(req_op_id, std::memory_order_release);
+      flush_line(&st_noop->ready_op_id);
+      store_fence();
+      e->status = 0;
+      e->resp_value_len = 0;
+      e->resp_blk_off = 0;
+      return;
+    }
+    // L2: bucket cacheline read (CXL line touch cost), no pool->read for value.
+    flush_line(bucket);
+    full_fence();
+    (void)bucket->slots[0].value;  // force CXL line into cache
+    st_noop->key = e->key;
+    st_noop->value_size = 0;
+    st_noop->status = 0;
+    st_noop->lookup_epoch = 0;
+    st_noop->resp_blk_off = 0;
+    flush_line(st_noop);
+    store_fence();
+    st_noop->ready_op_id.store(req_op_id, std::memory_order_release);
+    flush_line(&st_noop->ready_op_id);
+    store_fence();
+    e->status = 0;
+    e->resp_value_len = 0;
+    e->resp_blk_off = 0;
+    return;
+  }
+  // L0/L1: full path below.
   flush_line(bucket);
   flush_line((char *)bucket + 64);
   full_fence();
@@ -2266,13 +2414,6 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
 
 void CxlKvStoreA::write_receiver_loop() {
   probe_ring();
-  // iter-12A Phase 5.1b: receiver poll-tail heartbeat. P5R_PL emitted every
-  // 1<<P5R_PL_LOG2 outer-loop polls, with op_id encoding (head<<32)|tail of
-  // the just-observed values. Lets us distinguish (a) thread preempted,
-  // (b) thread polling but tail stuck at stale value, (c) tail growing slowly.
-  constexpr uint64_t P5R_PL_LOG2 = 14;  // every 16384 polls
-  uint64_t pl_counter = 0;
-  uint64_t last_tail_obs = (uint64_t)-1;  // sentinel: force first emit
   while (!write_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
@@ -2282,32 +2423,19 @@ void CxlKvStoreA::write_receiver_loop() {
       flush_line((void *)&ring->tail);
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
-      // Heartbeat probe: fires every (1<<P5R_PL_LOG2) polls OR when tail value
-      // changes from prior observation. op_id = (head & 0xFFFFFFFF) << 32 |
-      // (tail & 0xFFFFFFFF). Both head and tail bounded by ~50k in this test.
-      pl_counter++;
-      bool periodic = (pl_counter & ((1ULL<<P5R_PL_LOG2)-1)) == 0;
-      bool changed = (tail != last_tail_obs);
-      if (periodic || changed) {
-        PROBE_OP("P5R_PL", ((head & 0xFFFFFFFFULL) << 32) | (tail & 0xFFFFFFFFULL));
-        last_tail_obs = tail;
-      }
       while (head < tail) {
         uint32_t slot = (uint32_t)(head % kWriteRingDepth);
         WriteEntry *e = &ring->entries[slot];
+        // iter-16A Stage 6 (rcv_poll) start. Payload packs head+tail
+        // (head in low 32b, tail in high 32b) since op_id is not yet known.
+        PROBE_OP("XWR6S",
+                 (head & 0xFFFFFFFFULL) | ((tail & 0xFFFFFFFFULL) << 32));
         flush_line((void *)&e->req_op_id);
         full_fence();
         uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
-        // iter-12A Phase 5.1 probe: P5R_FZ = receiver first load of req_op_id
-        // before any gap-tolerance retry. Recording head value as the
-        // "op_id" field lets us cross-correlate with tail growth.
-        // If op_id == 0, this is a gap-encounter event; else first-visible.
         if (op_id == 0) {
-          PROBE_OP("P5R_GZ", head);  // gap encountered, will spin-budget
-        }
-        // iter-12A bimodal fix: gap-tolerance budget before bailing.
-        // See note in inval_receiver_loop for rationale.
-        if (op_id == 0) {
+          // Gap encountered (worker fetch_add'd but hasn't published yet).
+          PROBE_OP("XWR6Z", head);
           for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
             __builtin_ia32_pause();
             flush_line((void *)&e->req_op_id);
@@ -2315,28 +2443,28 @@ void CxlKvStoreA::write_receiver_loop() {
             op_id = e->req_op_id.load(std::memory_order_acquire);
           }
           if (op_id == 0) {
-            // iter-12A Phase 5.1 probe: P5R_GX = gap budget exhausted, will break out.
-            PROBE_OP("P5R_GX", head);
+            // Gap budget exhausted — bail out of inner loop, retry next outer iter.
+            PROBE_OP("XWR6X", head);
             break;
           }
-          // iter-12A Phase 5.1 probe: P5R_GH = gap healed during budget spin.
-          PROBE_OP("P5R_GH", op_id);
+          // Gap healed during budget spin.
+          PROBE_OP("XWR6H", op_id);
         }
-        // iter-12A Phase 5.1 probe: P5R_VS = receiver visible (op_id read non-zero,
-        // about to process). Tag carries the actual op_id (cross-correlate with worker P5W_PT).
-        PROBE_OP("P5R_VS", op_id);
+        // iter-16A Stage 6 end ≡ Stage 7 (rcv_work) start.
+        PROBE_OP("XWR6E", op_id);
         // Pull the rest of cacheline 1 (key, op_kind, value_len,
         // staging_off, staging_gen) — they're on the same line as
         // req_op_id, the flush above already fetched them.
         write_handler(e, src);
+        // iter-16A Stage 7 end ≡ Stage 8 (ack_publish) start.
+        PROBE_OP("XWR7E", op_id);
 
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);
         flush_line((void *)&e->resp_op_id);
         store_fence();
-        // iter-12A Phase 5.1 probe: P5R_AK = receiver wrote resp_op_id (and flushed/fenced).
-        // Worker's spin_wait should observe this within CXL coherence latency.
-        PROBE_OP("P5R_AK", op_id);
+        // iter-16A Stage 8 end.
+        PROBE_OP("XWR8E", op_id);
         head++;
         did_work = true;
       }
@@ -2396,7 +2524,7 @@ void CxlKvStoreA::read_receiver_loop() {
 int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
                         uint32_t *out_len) {
   if (key == kEmptyKey) return -1;
-  PROBE_OP("R1", key);
+  PROBE_PATH("R1", key);
 
   // iter-10A Phase 1.C: TLS L1 lookup (per-worker private DRAM, 0
   // cross-core MESI traffic on hit). Only enabled if worker called
@@ -2410,12 +2538,12 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     uint32_t tls_sz = 0;
     if (tls_lookup(g_thread_tls, key, cur_epoch, tls_buf,
                    sizeof(tls_buf), &tls_sz)) {
-      PROBE_OP("R0_tls_hit", key);
+      PROBE_PATH("R0_tls_hit", key);
       PATH_CTR(n_tls_hit);
       if (out_len) *out_len = tls_sz;
       uint32_t copy_len = tls_sz < buf_len ? tls_sz : buf_len;
       if (out_buf && copy_len > 0) std::memcpy(out_buf, tls_buf, copy_len);
-      PROBE_OP("R6", key);
+      PROBE_PATH("R6", key);
       return 0;
     }
   }
@@ -2426,7 +2554,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
-    PROBE_OP("R2hit", key);
+    PROBE_PATH("R2hit", key);
     PATH_CTR(n_r2hit);
     // populate TLS L1 with the freshly-fetched value + current epoch
 #if !FUSEE_DISABLE_TLS
@@ -2438,23 +2566,23 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     if (out_len) *out_len = sz;
     uint32_t copy_len = sz < buf_len ? sz : buf_len;
     if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
-    PROBE_OP("R6", key);
+    PROBE_PATH("R6", key);
     return 0;
   }
 #endif
-  PROBE_OP("R2miss", key);
+  PROBE_PATH("R2miss", key);
 
   uint32_t owner = owner_host(key);
 
   // Cross-host miss: §I9 register-then-fill via OP_CACHE_REGISTER.
   if (owner != (uint32_t)host_id_ && rr_) {
-    PROBE_OP("R3", key);
+    PROBE_PATH("R3", key);
     PATH_CTR(n_r3);
     uint8_t v[kForwardStagingSlotBytes];
     uint32_t vlen = 0;
     int rc = forward_read(owner, key, v, sizeof(v), &vlen);
     if (rc != 0) return rc;
-    PROBE_OP("R4", key);
+    PROBE_PATH("R4", key);
     // §AP15: populate cache ONLY after register ACK (we got it here).
     if (vlen > 0) {
 #if !FUSEE_DISABLE_CACHE_POOL
@@ -2473,7 +2601,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     if (out_len) *out_len = vlen;
     uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
     if (out_buf && copy_len > 0) std::memcpy(out_buf, v, copy_len);
-    PROBE_OP("R6", key);
+    PROBE_PATH("R6", key);
     return 0;
   }
 
@@ -2515,7 +2643,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
         uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
         tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
       }
-      PROBE_OP("R6", key);
+      PROBE_PATH("R6", key);
       return 0;
     }
   }

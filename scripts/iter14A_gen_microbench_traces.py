@@ -107,7 +107,8 @@ def write_trans_file(path: str, keys: list[int], op: str) -> None:
 
 
 def gen_trans_keys(
-    key_pool: list[int], num_ops: int, key_dist: str, seed: int
+    key_pool: list[int], num_ops: int, key_dist: str, seed: int,
+    zipf_theta: float = 0.99,
 ) -> list[int]:
     rng = random.Random(seed)
     n = len(key_pool)
@@ -119,10 +120,33 @@ def gen_trans_keys(
             sample_pool = rng.sample(key_pool, 200000)
         else:
             sample_pool = key_pool
-        idxs = zipf_indices(len(sample_pool), num_ops, theta=0.99, rng=rng)
+        idxs = zipf_indices(len(sample_pool), num_ops, theta=zipf_theta, rng=rng)
         return [sample_pool[i] for i in idxs]
     else:
         raise ValueError(f"unknown key_dist: {key_dist}")
+
+
+def gen_mixed_trans_keys(
+    local_pool: list[int], peer_pool: list[int], num_ops: int,
+    peer_fraction: float, key_dist: str, seed: int,
+    zipf_theta: float = 0.99,
+) -> list[int]:
+    """iter-15A microbench Phase 5: generate trans keys where peer_fraction
+    of ops draw from peer_pool, rest from local_pool. Per-op Bernoulli
+    decision."""
+    rng = random.Random(seed)
+    out = []
+    # Pre-sample from each pool to avoid Zipf re-init cost per op.
+    n_peer = int(round(num_ops * peer_fraction))
+    n_local = num_ops - n_peer
+    peer_keys = gen_trans_keys(peer_pool, n_peer, key_dist,
+                                seed ^ 0xAA55AA55, zipf_theta) if n_peer else []
+    local_keys = gen_trans_keys(local_pool, n_local, key_dist,
+                                 seed ^ 0x55AA55AA, zipf_theta) if n_local else []
+    # Interleave by random shuffle so peer/local pattern isn't striped.
+    mixed = peer_keys + local_keys
+    rng.shuffle(mixed)
+    return mixed
 
 
 def main():
@@ -132,6 +156,17 @@ def main():
     ap.add_argument("--num-trans", type=int, default=1_000_000,
                     help="trans ops PER HOST")
     ap.add_argument("--num-hosts", type=int, default=2)
+    ap.add_argument("--zipf-theta", type=float, default=0.99,
+                    help="Zipf θ for 'zipf' keydist (default 0.99)")
+    ap.add_argument("--mix-fractions", type=str, default="",
+                    help="Comma-separated peer fractions (e.g. '25,50,75') "
+                         "to emit mix_read_<P>_zipf and mix_write_<P>_zipf "
+                         "scenarios. Empty = skip.")
+    ap.add_argument("--keydists", type=str, default="uniform,zipf",
+                    help="Comma-separated keydists to emit (default both)")
+    ap.add_argument("--scenarios", type=str,
+                    default="local_read,xhost_read,local_write,xhost_write",
+                    help="Comma-separated base scenarios to emit")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -142,51 +177,89 @@ def main():
     for h in range(args.num_hosts):
         print(f"[gen]   host {h}: {len(parts[h]):,} owned keys", flush=True)
 
-    # Shared load file (same 2M unique keys). Each scenario × keyDist gets
-    # its own load file (identical content; named for symmetry).
-    scenarios = ["local_read", "xhost_read", "local_write", "xhost_write"]
-    key_dists = ["uniform", "zipf"]
+    scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
+    key_dists = [k.strip() for k in args.keydists.split(",") if k.strip()]
+    # θ-tagged dist names: 'zipf-0.5' / 'zipf-0.99' / 'zipf-1.5'.
+    # 'zipf' alone uses --zipf-theta (back-compat).
+    dist_theta_map = {}
+    for kd in key_dists:
+        if kd == "uniform":
+            dist_theta_map[kd] = None
+        elif kd == "zipf":
+            dist_theta_map[kd] = args.zipf_theta
+        elif kd.startswith("zipf-"):
+            dist_theta_map[kd] = float(kd[len("zipf-"):])
+        else:
+            raise ValueError(f"unknown keydist: {kd}")
 
     all_keys = list(range(args.num_load))
     for sc in scenarios:
         for kd in key_dists:
+            theta = dist_theta_map[kd]
+            base_kd = "uniform" if kd == "uniform" else "zipf"
             for h in range(args.num_hosts):
                 tag = f"bench_{sc}_{kd}_h{h}"
                 load_path = os.path.join(args.out_dir, f"{tag}.spec_load")
                 trans_path = os.path.join(args.out_dir, f"{tag}.spec_trans")
 
-                # Load: shared across all variants; INSERT all 2M keys
-                # in randomized order (different shuffle per file to
-                # avoid identical sequences contaminating measurement).
                 rng_load = random.Random(hash((sc, kd, h, "load")) & 0xFFFFFFFF)
                 load_keys = all_keys[:]
                 rng_load.shuffle(load_keys)
                 write_load_file(load_path, load_keys)
 
-                # Trans: filter pool by scenario, sample by keyDist.
                 if sc == "local_read":
-                    pool = parts[h]
-                    op = "READ"
+                    pool = parts[h]; op = "READ"
                 elif sc == "xhost_read":
                     peer = (h + 1) % args.num_hosts
-                    pool = parts[peer]
-                    op = "READ"
+                    pool = parts[peer]; op = "READ"
                 elif sc == "local_write":
-                    pool = parts[h]
-                    op = "UPDATE"
+                    pool = parts[h]; op = "UPDATE"
                 elif sc == "xhost_write":
                     peer = (h + 1) % args.num_hosts
-                    pool = parts[peer]
-                    op = "UPDATE"
+                    pool = parts[peer]; op = "UPDATE"
+                else:
+                    raise ValueError(f"unknown scenario: {sc}")
 
-                rng_trans = random.Random(hash((sc, kd, h, "trans")) & 0xFFFFFFFF)
                 trans_keys = gen_trans_keys(
-                    pool, args.num_trans, kd, seed=hash((sc, kd, h)) & 0xFFFFFFFF
+                    pool, args.num_trans, base_kd,
+                    seed=hash((sc, kd, h)) & 0xFFFFFFFF,
+                    zipf_theta=theta if theta else 0.99,
                 )
                 write_trans_file(trans_path, trans_keys, op)
-
                 print(f"[gen] wrote {tag}: load={args.num_load:,} "
                       f"trans={args.num_trans:,} pool={len(pool):,}",
+                      flush=True)
+
+    # iter-15A microbench Phase 5: mix scenarios (peer-fraction sweep).
+    # Always zipf θ=0.99 (mix sweep doesn't co-vary with θ).
+    mix_fracs = [int(x.strip()) for x in args.mix_fractions.split(",")
+                 if x.strip()]
+    for pct in mix_fracs:
+        if not (0 < pct < 100):
+            print(f"[gen] skipping mix_fraction={pct} (must be 1..99)", flush=True)
+            continue
+        for op_kind, op_str in [("read", "READ"), ("write", "UPDATE")]:
+            sc = f"mix_{op_kind}_{pct}"
+            for h in range(args.num_hosts):
+                tag = f"bench_{sc}_zipf_h{h}"
+                load_path = os.path.join(args.out_dir, f"{tag}.spec_load")
+                trans_path = os.path.join(args.out_dir, f"{tag}.spec_trans")
+                rng_load = random.Random(hash((sc, "zipf", h, "load")) & 0xFFFFFFFF)
+                load_keys = all_keys[:]
+                rng_load.shuffle(load_keys)
+                write_load_file(load_path, load_keys)
+                peer = (h + 1) % args.num_hosts
+                trans_keys = gen_mixed_trans_keys(
+                    local_pool=parts[h], peer_pool=parts[peer],
+                    num_ops=args.num_trans,
+                    peer_fraction=pct / 100.0,
+                    key_dist="zipf",
+                    seed=hash((sc, "zipf", h)) & 0xFFFFFFFF,
+                    zipf_theta=0.99,
+                )
+                write_trans_file(trans_path, trans_keys, op_str)
+                print(f"[gen] wrote {tag}: load={args.num_load:,} "
+                      f"trans={args.num_trans:,} peer_fraction={pct}%",
                       flush=True)
 
     print("[gen] done")

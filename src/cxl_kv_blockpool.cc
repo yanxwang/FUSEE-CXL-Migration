@@ -92,6 +92,21 @@ int CxlKvBlockPool::attach(void *base, std::size_t bytes,
       full_fence();
       if (hdr->magic == kPoolMagic) break;
     }
+    // iter-15A bimodal RCA (2026-05-20): also flush each host's cursor
+    // cacheline so we observe the just-memset zero values, NOT a stale
+    // cached cursor from a prior rep. Without this, non-primary's first
+    // fetch_add() can read a stale "private exhausted" value from L1/L2/L3
+    // (the OS doesn't invalidate caches between processes; the CXL devdax
+    // memory itself was just zeroed by host 0 + flush_region, but the
+    // peer-host LLC retains lines from prior runs). Symptom: non-primary
+    // immediately returns 0 from alloc, half of LOAD inserts fail silently,
+    // TRANS thpt looks artificially fast (= unloaded keys → UPDATE returns
+    // -1 quickly → trans completes faster but with broken data). See
+    // docs/iter15A_bimodal_step1_*/ for the RCA data trail.
+    for (int h = 0; h < num_hosts; h++) {
+      flush_line(&cursors_[h].bump);
+    }
+    full_fence();
   }
   return 0;
 }

@@ -8,6 +8,7 @@
 
 #include "cxl_read_guard.h"  // FUSEE_LRU_SAMPLE
 #include "cxl_sharding.h"    // for sharding_hash_u64
+#include "cxl_kv_ops_A.h"    // for fusee_path_ctr_cache_* hooks (no-op when FUSEE_PATH_COUNTERS=0)
 
 namespace fusee {
 
@@ -142,6 +143,10 @@ int cache_pool_insert(KvCachePool *pool, uint64_t key,
     }
     KvCacheEntry *target = match ? match : (empty_slot ? empty_slot : lru_slot);
     if (!target) return -1;  // bucket somehow empty (impossible w/ 4 entries)
+    // iter-15A microbench C.3: count implicit LRU eviction = chose LRU slot
+    // (no match, no empty). Counts BEFORE the CAS to claim — if CAS races we
+    // re-pick on retry, may overcount slightly but acceptable signal.
+    if (!match && !empty_slot && lru_slot) fusee_path_ctr_cache_lru_evict();
 
     // Claim target via CAS even → odd.
     uint32_t s_old = target->seq.load(std::memory_order_acquire);
@@ -190,6 +195,7 @@ void cache_pool_set_stale(KvCachePool *pool, uint64_t key) {
       // iter-10A Phase 1.B: bump bucket epoch so per-worker TLS
       // caches detect stale on next lookup of any key in this bucket.
       bk->epoch.fetch_add(1, std::memory_order_release);
+      fusee_path_ctr_cache_set_stale();  // iter-15A microbench C.3
       return;
     }
   }
@@ -224,6 +230,7 @@ void cache_pool_evict(KvCachePool *pool, uint64_t key) {
     target->value_size = 0;
     bk->epoch.fetch_add(1, std::memory_order_release);
     target->seq.store(s_old + 2, std::memory_order_release);
+    fusee_path_ctr_cache_evict();  // iter-15A microbench C.3
     return;
   }
 }

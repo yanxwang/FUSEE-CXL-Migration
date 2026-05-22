@@ -115,6 +115,22 @@ class CxlKvStoreA {
   int enable_senders(AggregatorRegion *ar, int num_workers,
                      bool spawn_senders);
 
+  // iter-15A microbench: wire ring/staging/read-guard pointers in
+  // forked child workers WITHOUT any side effect (no memset, no
+  // spawn). After fork(), each child has its OWN CxlKvStoreA on its
+  // stack with wr_/rr_/ir_/fs_/rs_/rsv_/rcu_/haz_ = nullptr (because
+  // the enable_*_ring calls happen on PRIMARY only). Without these
+  // pointers, forward_write_direct/forward_read_direct/send_invalidate_direct
+  // immediately return -10, and all "T > 1" cross-host throughput is
+  // silently faked by primary worker[0]'s share. This method gives
+  // children the pointers they need. Idempotent; safe to call after
+  // attach() in non-primary clients.
+  void wire_rings_for_child(WriteRingMatrix *wr, ForwardStagingMatrix *fs,
+                            ReadRingMatrix *rr, ReadStagingMatrix *rs,
+                            InvalRingMatrix *ir,
+                            ReservationRingMatrix *rsv,
+                            RcuDomain *rcu, HazardDomain *haz);
+
   // Per-worker thread-local register (post-fork in each child).
   // Workers without this set fall back to the DIRECT cross-host path,
   // i.e. the worker itself does fetch_add on the CXL ring.
@@ -339,8 +355,17 @@ constexpr uint8_t kOpKindDelete        = 2;
 constexpr uint8_t kOpKindCacheRegister = 4;  // routed via ReadRing
 
 // iter-15A Layer A: dump per-thread path counters at end of test.
-// No-op when FUSEE_PATH_COUNTERS=0 (default).
-void fusee_path_counters_dump(FILE *fp, int host_id);
+// No-op when FUSEE_PATH_COUNTERS=0 (default). `label` is a free-form tag
+// that appears on every dumped PATH line (use to distinguish multi-phase
+// snapshots, e.g. "after_LOAD" vs "after_TRANS"). NULL → omit label.
+void fusee_path_counters_dump(FILE *fp, int host_id, const char *label);
+
+// iter-15A microbench plan C.3: cache_pool counter hooks called from
+// cxl_cache_pool.cc (which doesn't see FUSEE_PATH_COUNTERS macro
+// directly). No-op when FUSEE_PATH_COUNTERS=0.
+void fusee_path_ctr_cache_evict();
+void fusee_path_ctr_cache_set_stale();
+void fusee_path_ctr_cache_lru_evict();
 
 }  // namespace fusee
 

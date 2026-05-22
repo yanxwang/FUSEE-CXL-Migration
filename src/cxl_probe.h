@@ -41,7 +41,12 @@
 
 namespace fusee {
 
-constexpr std::size_t kProbeDumpBytes = 128ULL * 1024 * 1024;  // 128 MB
+// iter-16A bump: 128MB cap overflows at T=1 (single worker emits ~15M
+// trans events × 24B ≈ 360MB; receiver thread emits ~12.5M × 24B ≈ 300MB).
+// Bumped to 512MB to fit full T=1 trace. Physical memory only allocated
+// on actual page write (tmpfs sparse), so unused threads still cost
+// near-zero. Per-cell tmpfs usage at T=64 stays well under 1GB physical.
+constexpr std::size_t kProbeDumpBytes = 512ULL * 1024 * 1024;  // 512 MB
 constexpr std::size_t kProbeHeaderBytes = 16;
 constexpr std::size_t kProbeFrameBytes = 24;
 constexpr std::size_t kProbeFrameCapacity =
@@ -147,12 +152,28 @@ inline void probe_flush() {
 #define FUSEE_PROBE 0
 #endif
 
+// FUSEE_PROBE_PATH gates the legacy W*/R*/I* path probes (iter-14A
+// path-validation). Separate from FUSEE_PROBE so iter-16A stage
+// decomp can run with stage probes (XWS*/XWR*) only — without the
+// load-phase W* events overflowing the 128MB per-thread probe ring.
+//
+// Default OFF (0). To re-enable path probes: -DFUSEE_PROBE=1 -DFUSEE_PROBE_PATH=1.
+#ifndef FUSEE_PROBE_PATH
+#define FUSEE_PROBE_PATH 0
+#endif
+
 #if FUSEE_PROBE
 #define PROBE(tag)        ::fusee::probe_ring()->emit(tag, 0)
 #define PROBE_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
 #else
 #define PROBE(tag)        do {} while (0)
 #define PROBE_OP(tag, op) do {} while (0)
+#endif
+
+#if FUSEE_PROBE && FUSEE_PROBE_PATH
+#define PROBE_PATH(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
+#else
+#define PROBE_PATH(tag, op) do {} while (0)
 #endif
 
 #endif  // FUSEE_CXL_PROBE_H_

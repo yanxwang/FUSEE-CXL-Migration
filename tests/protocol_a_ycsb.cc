@@ -188,7 +188,8 @@ int main(int argc, char **argv) {
   uint32_t kBlockSize = 256;
   if (const char *e = getenv("FUSEE_KV_SIZE")) {
     int v = atoi(e);
-    if (v == 256 || v == 512 || v == 1024) kBlockSize = (uint32_t)v;
+    // iter-16A V-sweep: allow V=64 in addition to 256/512/1024.
+    if (v == 64 || v == 256 || v == 512 || v == 1024) kBlockSize = (uint32_t)v;
   }
   uint64_t want_blocks = std::max((uint64_t)64,
                                    (uint64_t)trans_ops.size() * 2 +
@@ -270,12 +271,21 @@ int main(int argc, char **argv) {
   SlotDirectory dir;
   slot_directory_init(&dir, dir_mem, num_buckets, kCxlKvSlotsPerBucket);
 
-  void *cache_mem = mmap(nullptr, cache_pool_bytes(num_buckets),
+  // iter-15A microbench plan: FUSEE_CACHE_BUCKETS env var lets cache_pool
+  // size be set INDEPENDENTLY of the data-plane hash table num_buckets.
+  // Must be power-of-2 (cache_pool_init enforces this).
+  uint32_t cache_buckets = num_buckets;
+  if (const char *e = getenv("FUSEE_CACHE_BUCKETS")) {
+    uint32_t cb = (uint32_t)strtoul(e, nullptr, 0);
+    if (cb > 0 && (cb & (cb - 1)) == 0) cache_buckets = cb;
+    else fprintf(stderr, "[WARN] FUSEE_CACHE_BUCKETS=%s ignored (not pow-of-2)\n", e);
+  }
+  void *cache_mem = mmap(nullptr, cache_pool_bytes(cache_buckets),
                          PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (cache_mem == MAP_FAILED) { fprintf(stderr, "mmap cache failed\n"); return 1; }
   KvCachePool cache;
-  cache_pool_init(&cache, cache_mem, num_buckets);
+  cache_pool_init(&cache, cache_mem, cache_buckets);
 
   BlockFreeList fl;
   block_freelist_init(&fl);
@@ -406,6 +416,25 @@ int main(int argc, char **argv) {
                      &st, &dir, &cache, &fl, &pool) != 0) {
       fprintf(stderr, "[h%d c%d] attach failed\n", host_id, client_id);
       return 1;
+    }
+    // iter-15A microbench HR-2: wire ring pointers in child workers so
+    // their forward_*_direct calls don't silently fail with wr_=nullptr.
+    // Host 1 primary still calls enable_*_ring(spawn=true) below, which
+    // re-sets these pointers AND memsets/spawns — both safe (idempotent
+    // pointer writes). Non-primary children only get the wiring here.
+    {
+      WriteRingMatrix *wr = reinterpret_cast<WriteRingMatrix *>(wr_mem);
+      ReadRingMatrix  *rr = reinterpret_cast<ReadRingMatrix  *>(rr_mem);
+      InvalRingMatrix *ir = reinterpret_cast<InvalRingMatrix *>(ir_mem);
+      ForwardStagingMatrix *fs =
+          reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
+      ReadStagingMatrix *rs =
+          reinterpret_cast<ReadStagingMatrix *>(rs_mem);
+      ReservationRingMatrix *rsv =
+          reinterpret_cast<ReservationRingMatrix *>(rsv_mem);
+      RcuDomain *rcu_d = reinterpret_cast<RcuDomain *>(rcu_mem);
+      HazardDomain *haz_d = reinterpret_cast<HazardDomain *>(haz_mem);
+      store.wire_rings_for_child(wr, fs, rr, rs, ir, rsv, rcu_d, haz_d);
     }
     // Every non-primary child attaches the aggregator (no spawn) so
     // worker threads route through it. Primary child calls
@@ -573,6 +602,9 @@ int main(int argc, char **argv) {
         __builtin_ia32_pause();
       }
     }
+    // iter-15A bimodal debug Step 1: dump path counters after LOAD phase
+    // on primary. Distinguishes LOAD-time activity from TRANS-time.
+    fusee::fusee_path_counters_dump(stdout, host_id, "after_LOAD");
   } else {
     // Children: wait for own host's primary load-done bit.
     uint64_t my_bit = (host_id == 0) ? 0x10ULL : 0x20ULL;
@@ -796,7 +828,34 @@ int main(int argc, char **argv) {
   }
 
   // iter-15A Layer A: dump path counters (no-op if FUSEE_PATH_COUNTERS=0)
-  fusee::fusee_path_counters_dump(stdout, host_id);
+  // Step 1 bimodal debug: this dump is "after_TRANS"; the earlier dump
+  // post-LOAD is "after_LOAD". Delta = TRANS-only contribution per counter.
+  fusee::fusee_path_counters_dump(stdout, host_id, "after_TRANS");
+
+  // iter-15A microbench C.3: cache_pool fill_level_end. Scan all buckets,
+  // count non-empty + non-stale entries. Dump on host_id 0 only (cache_pool
+  // is per-host but layout is symmetric — counted on primary).
+  if (host_id == 0) {
+    uint64_t filled = 0, stale = 0, tomb = 0;
+    uint64_t total = (uint64_t)cache_buckets * fusee::kCacheEntriesPerBucket;
+    for (uint32_t b = 0; b < cache_buckets; b++) {
+      auto *bk = &cache.buckets[b];
+      for (int i = 0; i < fusee::kCacheEntriesPerBucket; i++) {
+        auto *e = &bk->entries[i];
+        uint64_t k = e->key.load(std::memory_order_relaxed);
+        uint8_t  s = e->stale.load(std::memory_order_relaxed);
+        if (k == fusee::kCacheKeyEmpty) continue;
+        if (k == fusee::kCacheKeyTomb)  { tomb++; continue; }
+        if (s) stale++;
+        filled++;
+      }
+    }
+    fprintf(stdout,
+      "# CACHE_FILL host=%d cache_buckets=%u capacity=%lu filled=%lu stale=%lu tomb=%lu fill_pct=%.3f\n",
+      host_id, cache_buckets, total, filled, stale, tomb,
+      (double)filled * 100.0 / (double)total);
+    fflush(stdout);
+  }
 
   cxl_region_destroy(&r);
   return 0;

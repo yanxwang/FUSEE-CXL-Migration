@@ -58,11 +58,27 @@ namespace fusee {
 
 constexpr int kForwardStagingMaxHosts = kWriteMaxHosts;
 constexpr int kForwardStagingDepth    = kWriteRingDepth;
-constexpr uint32_t kForwardStagingSlotBytes = 1024;  // matches max value_len
+// iter-16A V-sweep: configurable so V-matched builds use staging slot
+// sized to actual KV value (saves memory + matches CXL line footprint).
+// Default 1024 keeps V=1024 canonical build unchanged.
+#ifndef FUSEE_FWD_STAGING_SLOT_BYTES
+#define FUSEE_FWD_STAGING_SLOT_BYTES 1024
+#endif
+constexpr uint32_t kForwardStagingSlotBytes = FUSEE_FWD_STAGING_SLOT_BYTES;
 
+// iter-16A V-sweep: when slot_bytes >= 64, keep alignas(64) for false-sharing
+// prevention; when slot_bytes < 64 (e.g., V=8), drop alignas so static_assert
+// "sizeof == slot_bytes" still holds (false-sharing acceptable for decomp
+// study at small V — controlled experiment, not perf-tuned).
+#if FUSEE_FWD_STAGING_SLOT_BYTES >= 64
 struct alignas(64) ForwardStagingSlot {
   uint8_t bytes[kForwardStagingSlotBytes];
 };
+#else
+struct ForwardStagingSlot {
+  uint8_t bytes[kForwardStagingSlotBytes];
+};
+#endif
 static_assert(sizeof(ForwardStagingSlot) == kForwardStagingSlotBytes,
               "ForwardStagingSlot must be exactly slot_bytes (no header)");
 

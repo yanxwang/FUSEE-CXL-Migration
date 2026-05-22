@@ -547,6 +547,58 @@ Hash-diff: `docs/hash_diff_iter10A_phase3_20260510_181153/` (4 builds × 20 cell
 Summary: `docs/iters/iter10A_summary_20260510.md`
 iter-11A backlog: `docs/iters/iter11A_backlog_memo.md`
 
+## 2026-05-20 — iter-15A microbench full grid + bimodal RCA (per `docs/iter15A_microbench_plan/README.md`)
+
+Comprehensive Protocol A microbench across V × T × cache% × distribution
+× cross-host fraction. Plan delivered IN FULL plus Phase 6 RCA campaign.
+
+**Two critical bugs found + fixed during iter** (both data-correctness):
+
+1. **wr_=null on forked children** (`tests/protocol_a_ycsb.cc` + new
+   `CxlKvStoreA::wire_rings_for_child()` method): child workers never
+   wired WriteRing/ReadRing/InvalRing pointers post-fork → `forward_*_direct`
+   returned -10 silently → all "T>1 xhost throughput" since iter-9A was
+   inflated by un-counted attempts. iter-14A "local ≈ xhost" partly caused
+   by this (in addition to the trace hash bug fixed in Layer A).
+2. **CXL pool cursor stale across reps** (`src/cxl_kv_blockpool.cc`):
+   non-primary host's L1/L2/L3 retained `cursors_[h].bump` from prior
+   rep → first `fetch_add` saw stale value → half of LOAD inserts silently
+   dropped → "bimodal collapse" of T=64 zipf throughput. Fix: flush each
+   cursor cacheline after seeing magic on non-primary attach.
+
+**Sweep deliverables** (post-fix, V=1024 T=64 cache=10% zipf-0.99 except
+where dimension swept; medians of 3 reps; full data in respective dirs):
+
+- Phase 1 V slice: local_read peaks at V=256 (65.5 Mops), drops to 47.5 at V=1024.
+- Phase 2 T slice: local scales to T=16 (passes §13 1.5× gate); xhost saturates at T=4-8.
+- Phase 3 cache% slice (zipf-0.99): local_read drops monotonically 65.7 → 26.0 as cache% grows 1→100.
+- Phase 3 inverse (Phase 6d uniform): local_read 35.1 → 14.6 (same shape under uniform); local_write 3× faster under uniform (no hot-bucket lock contention).
+- Phase 4 distribution slice: local_read peaks at zipf-0.99 (47.7), collapses at zipf-1.5 (14.8); local_write collapses 6× from zipf-0.99 to zipf-1.5 (6.67 → 1.09).
+- Phase 5 xhost% slice: even 25% xhost ops drops cluster thpt 20× (Amdahl-like queueing on receiver).
+
+**Phase 6 RCA (7 sub-phases)** refuted all 3 MESI hypotheses and
+identified software-side bottlenecks:
+
+| Hypothesis | Tested by | Verdict |
+|---|---|---|
+| zipf-1.5 collapse = KvCacheEntry MESI ping-pong | Phase 6.0 perf c2c | REFUTED (HITM count constant) |
+| zipf-1.5 collapse = LFM bucket lock contention | Phase 6.0c latency p99/p50 + Phase 6d uniform control | CONFIRMED (w_p99 = 5 ms = 64-way queue; 3× faster under uniform) |
+| cache% effect = larger cache MESI footprint | Phase 6a perf c2c | REFUTED (HITM constant, LLC pressure is real cause) |
+| xhost ceiling = ring tail MESI | Phase 6b perf c2c | REFUTED (ring tail not a HITM hotspot; single-thread receiver is the cause) |
+
+**Stability post-fix**: CV < 10% on 96/98 cells (98%); CV > 25% on 0 cells.
+Bimodal collapse eliminated.
+
+**Backlog reprioritization**: Task 2 (cache entry MESI) reframed for LLC
+pressure relief. Task 4 (ring tail MESI) replaced with multi-thread receiver.
+New Task 5: hot-key replication for LFM lock relief.
+
+Summary: `docs/iters/iter15A_summary_20260520.md`
+Phase dirs: `docs/iter15A_microbench_phase{0..5,6d}_*/`
+Phase 6 RCA dirs: `docs/iter15A_phase6{_0,a,b,c,d}_*/` (each with ANALYSIS.md + evidence plots)
+Plan: `docs/iter15A_microbench_plan/README.md`
+Backlog: `docs/iters/iter15A_backlog_memo.md` (top reprioritized 2026-05-20)
+
 ## Decisions made
 
 - **2026-04-20 01:40** — Single branch `feat/cxl-migration`, all phases squashed into that branch
