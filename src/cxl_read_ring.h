@@ -38,10 +38,15 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "cxl_write_ring.h"  // kRingShardsMax
+
 namespace fusee {
 
 constexpr int kReadRingDepth = 256;
 constexpr int kReadMaxHosts  = 4;
+// iter-17A multi-ring scaling: see cxl_write_ring.h kRingShardsMax.
+// Both header use the same kRingShardsMax from write_ring.h to keep
+// W/R/I matrix layouts compatible (one env var controls all three).
 
 struct alignas(64) ReadEntry {
   // Cacheline 1 — producer-owned (the reader).
@@ -78,12 +83,18 @@ struct alignas(64) ReadRing {
   ReadEntry entries[kReadRingDepth];
 };
 
+// iter-17A: 3D layout (src, dst, ring_shard) — see cxl_write_ring.h.
 struct ReadRingMatrix {
-  ReadRing rings[kReadMaxHosts][kReadMaxHosts];
+  ReadRing rings[kReadMaxHosts][kReadMaxHosts][kRingShardsMax];
 };
 
 inline std::size_t read_ring_matrix_bytes() {
   return sizeof(ReadRingMatrix);
+}
+
+inline ReadRing *read_ring_shard(ReadRingMatrix *m, int src, int dst,
+                                 int shard) {
+  return &m->rings[src][dst][shard];
 }
 
 }  // namespace fusee

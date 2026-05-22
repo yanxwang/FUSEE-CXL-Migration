@@ -161,6 +161,7 @@ int main(int argc, char **argv) {
   uint64_t cookie = 0;
   bool cache_on = false;
   std::string wl_name = "wl";
+  int ring_shards_factor = 1;  // iter-17A: N (workers per ring shard). N=1 = baseline.
   if (const char *e = getenv("FUSEE_NUM_HOSTS")) num_hosts = atoi(e);
   if (const char *e = getenv("FUSEE_HOST_ID")) host_id = atoi(e);
   if (const char *e = getenv("FUSEE_NUM_THREADS")) num_threads = atoi(e);
@@ -168,8 +169,14 @@ int main(int argc, char **argv) {
   if (const char *e = getenv("FUSEE_REP")) rep = atoi(e);
   if (const char *e = getenv("FUSEE_CACHE")) cache_on = (e[0] == '1');
   if (const char *e = getenv("FUSEE_WORKLOAD_NAME")) wl_name = e;
+  if (const char *e = getenv("FUSEE_RING_SHARDS_FACTOR")) ring_shards_factor = atoi(e);
+  if (ring_shards_factor < 1) ring_shards_factor = 1;
 
   if (num_threads > kMaxClients) num_threads = kMaxClients;
+
+  // iter-17A: configure ring sharding before any enable_*_ring spawns
+  // a receiver. Sets process-wide statics inherited by forks.
+  fusee::CxlKvStoreA::configure_ring_sharding(num_threads, ring_shards_factor);
 
   // Parse workload traces.
   auto load_ops = load_ops_from_file(load_path);
@@ -507,8 +514,16 @@ int main(int argc, char **argv) {
   // Enable with FUSEE_USE_AGGREGATOR=1 to exercise the spec path
   // (correctness equivalent — same hash-diff result — but slower
   // until iter-10A adds batching to the senders).
+  //
+  // iter-17A: set_worker_id MUST be called unconditionally so that
+  // worker_ring_idx_helper() in cxl_kv_ops_A.cc can route to the right
+  // ring shard (Plan A). When aggregator is off (default), aggregator-
+  // routing code path falls back to *_direct via the `!aggr_` check, so
+  // calling set_worker_id is a no-op for the aggregator gate.
+  CxlKvStoreA::set_worker_id(client_id);
   if (const char *e = getenv("FUSEE_USE_AGGREGATOR"); e && e[0] == '1') {
-    CxlKvStoreA::set_worker_id(client_id);
+    // (aggregator still requires aggr_ wired; set_worker_id above is
+    // already in effect.)
   }
 
   // iter-10A Phase 1.C: per-worker TlsCache init + attach. Sized via

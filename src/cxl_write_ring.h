@@ -53,6 +53,9 @@ namespace fusee {
 
 constexpr int kWriteRingDepth = 256;
 constexpr int kWriteMaxHosts  = 4;
+// iter-17A multi-ring scaling: shard rings by N (workers per shard).
+// kRingShardsMax covers T=64/N=4 = 16 shards. Bump when needed.
+constexpr int kRingShardsMax  = 16;
 
 struct alignas(64) WriteEntry {
   // Cacheline 1 — producer-owned (the forwarder).
@@ -108,13 +111,24 @@ struct alignas(64) WriteRing {
   WriteEntry entries[kWriteRingDepth];
 };
 
-// (src_host, dst_host) -> ring. Allocated in CXL region.
+// iter-17A: (src_host, dst_host, ring_shard) -> ring. Allocated in CXL region.
+// ring_shard ∈ [0, kRingShardsMax). At startup, only first
+// `actual_shards = ceil(T/N)` shards are used; the rest are init'd
+// once and ignored. ring_shard=0 + actual_shards=1 retains the
+// original (src,dst)→ring topology (backward compat for N=1).
 struct WriteRingMatrix {
-  WriteRing rings[kWriteMaxHosts][kWriteMaxHosts];
+  WriteRing rings[kWriteMaxHosts][kWriteMaxHosts][kRingShardsMax];
 };
 
 inline std::size_t write_ring_matrix_bytes() {
   return sizeof(WriteRingMatrix);
+}
+
+// Helper: access a specific (src, dst, shard) ring. All ring access
+// MUST go through this helper to prevent silent 2D->3D miss.
+inline WriteRing *write_ring_shard(WriteRingMatrix *m, int src, int dst,
+                                   int shard) {
+  return &m->rings[src][dst][shard];
 }
 
 }  // namespace fusee

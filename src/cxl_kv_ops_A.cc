@@ -27,6 +27,25 @@ namespace fusee {
 namespace {
 thread_local int       g_aggr_worker_id = -1;
 thread_local TlsCache *g_thread_tls     = nullptr;
+
+// iter-17A multi-ring scaling: process-wide ring sharding config.
+// Set once via configure_ring_sharding() at attach time.
+// g_block_size > 0 ⇒ ring_idx = g_aggr_worker_id / g_block_size (Plan A).
+// All default to 1 ⇒ single-shard backward-compatible behavior.
+int g_num_workers          = 1;   // T
+int g_ring_shards_factor   = 1;   // N
+int g_actual_ring_shards   = 1;   // ceil(T/N), capped at kRingShardsMax
+int g_ring_block_size      = 1;   // ceil(T/actual_shards)
+
+inline int worker_ring_idx_helper() {
+  // Plan A: static modulo. Workers without g_aggr_worker_id set
+  // (senders, dispatchers, internal callers) get shard 0.
+  int wid = g_aggr_worker_id;
+  if (wid < 0) return 0;
+  int idx = wid / g_ring_block_size;
+  if (idx >= g_actual_ring_shards) idx = g_actual_ring_shards - 1;
+  return idx;
+}
 }  // namespace
 
 // ============================================================
@@ -775,6 +794,25 @@ void CxlKvStoreA::stop_read_receiver() {
 void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
 void CxlKvStoreA::set_thread_tls_cache(TlsCache *tls) { g_thread_tls = tls; }
 
+// iter-17A multi-ring scaling: set process-wide sharding parameters.
+void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
+  if (num_workers < 1) num_workers = 1;
+  if (shards_factor < 1) shards_factor = 1;
+  g_num_workers        = num_workers;
+  g_ring_shards_factor = shards_factor;
+  int s = (num_workers + shards_factor - 1) / shards_factor;  // ceil(T/N)
+  if (s < 1) s = 1;
+  if (s > kRingShardsMax) s = kRingShardsMax;
+  g_actual_ring_shards = s;
+  int blk = (num_workers + s - 1) / s;                        // ceil(T/s)
+  if (blk < 1) blk = 1;
+  g_ring_block_size    = blk;
+}
+
+int CxlKvStoreA::num_ring_shards()    { return g_actual_ring_shards; }
+int CxlKvStoreA::ring_shards_factor() { return g_ring_shards_factor; }
+int CxlKvStoreA::worker_ring_idx()    { return worker_ring_idx_helper(); }
+
 // ---- Aggregator-routed worker dispatchers ----
 //
 // Each routes through aggregator_->slots[k][g_aggr_worker_id] when
@@ -963,7 +1001,8 @@ int CxlKvStoreA::write_sender_drain_dst(int dst, int n,
 int CxlKvStoreA::write_sender_drain_dst_v2_unused(int dst, int n,
                                          const int *slot_workers) {
   if (n <= 0 || n > num_aggr_workers_) return 0;
-  WriteRing *ring = &wr_->rings[host_id_][dst];
+  // iter-17A: 3D ring matrix — unused/dead code, use shard 0
+  WriteRing *ring = &wr_->rings[host_id_][dst][0];
   // Issue: fetch_add(n) on ring tail.
   uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
@@ -1090,7 +1129,8 @@ int CxlKvStoreA::read_sender_drain_dst(int dst, int n,
 int CxlKvStoreA::read_sender_drain_dst_v2_unused(int dst, int n,
                                         const int *slot_workers) {
   if (n <= 0 || n > num_aggr_workers_) return 0;
-  ReadRing *ring = &rr_->rings[host_id_][dst];
+  // iter-17A: 3D ring matrix — unused/dead code, use shard 0
+  ReadRing *ring = &rr_->rings[host_id_][dst][0];
   uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
@@ -1202,7 +1242,8 @@ int CxlKvStoreA::inval_sender_drain_dst(int dst, int n,
 int CxlKvStoreA::inval_sender_drain_dst_v2_unused(int dst, int n,
                                          const int *slot_workers) {
   if (n <= 0 || n > num_aggr_workers_) return 0;
-  InvalRing *ring = &ir_->rings[host_id_][dst];
+  // iter-17A: 3D ring matrix — unused/dead code, use shard 0
+  InvalRing *ring = &ir_->rings[host_id_][dst][0];
   uint64_t base = ring->tail.fetch_add((uint64_t)n, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
@@ -1487,7 +1528,10 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
 #endif
 #endif  // FUSEE_XHOST_WRITE_SELF_INVAL
 
-  WriteRing *ring = &wr_->rings[host_id_][owner];
+  // iter-17A Plan A: route to ring shard based on worker id.
+  // worker_ring_idx_helper() returns 0 when N=1 (backward compat).
+  int ring_idx = worker_ring_idx_helper();
+  WriteRing *ring = &wr_->rings[host_id_][owner][ring_idx];
   uint64_t my_op = write_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
 
@@ -1699,7 +1743,9 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
 // ALWAYS call this direct version (they are not workers).
 int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   if (!ir_) return -10;  // invalidate channel not enabled
-  InvalRing *ring = &ir_->rings[host_id_][target_host];
+  // iter-17A Plan A: ring shard by worker id (Backward-compat N=1 ⇒ 0)
+  int ring_idx = worker_ring_idx_helper();
+  InvalRing *ring = &ir_->rings[host_id_][target_host][ring_idx];
   uint64_t my_op = inval_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = ((uint64_t)(host_id_ + 1) << 56) |
                    (my_op & 0x00FFFFFFFFFFFFFFULL);
@@ -1936,7 +1982,9 @@ void CxlKvStoreA::inval_receiver_loop() {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      InvalRing *ring = &ir_->rings[src][host_id_];
+      // iter-17A Phase 1: single-receiver hard-codes shard 0.
+      // Phase 3 will parameterize ring_idx for multi-receiver.
+      InvalRing *ring = &ir_->rings[src][host_id_][0];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       full_fence();
@@ -2006,7 +2054,9 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
                                      void *out_buf, uint32_t buf_len,
                                      uint32_t *out_len) {
   if (!rr_ || !rs_) return -10;
-  ReadRing *ring = &rr_->rings[host_id_][owner];
+  // iter-17A Plan A: ring shard by worker id (backward-compat N=1 ⇒ 0)
+  int ring_idx = worker_ring_idx_helper();
+  ReadRing *ring = &rr_->rings[host_id_][owner][ring_idx];
   uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
 
@@ -2456,7 +2506,9 @@ void CxlKvStoreA::write_receiver_loop() {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      WriteRing *ring = &wr_->rings[src][host_id_];
+      // iter-17A Phase 1: single-receiver hard-codes shard 0.
+      // Phase 3 will parameterize ring_idx for multi-receiver.
+      WriteRing *ring = &wr_->rings[src][host_id_][0];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       __builtin_ia32_lfence();  // site A (single-field tail load, safe)
@@ -2519,7 +2571,9 @@ void CxlKvStoreA::read_receiver_loop() {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
       if (src == host_id_) continue;
-      ReadRing *ring = &rr_->rings[src][host_id_];
+      // iter-17A Phase 1: single-receiver hard-codes shard 0.
+      // Phase 3 will parameterize ring_idx for multi-receiver.
+      ReadRing *ring = &rr_->rings[src][host_id_][0];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
       full_fence();

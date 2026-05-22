@@ -30,6 +30,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "cxl_write_ring.h"  // kRingShardsMax (iter-17A scaling)
+
 namespace fusee {
 
 constexpr int kInvalMaxHosts = 4;
@@ -74,12 +76,18 @@ struct alignas(64) InvalRing {
   InvalEntry entries[kInvalRingDepth];
 };
 
+// iter-17A: 3D layout (src, dst, ring_shard) — see cxl_write_ring.h.
 struct InvalRingMatrix {
-  InvalRing rings[kInvalMaxHosts][kInvalMaxHosts];
+  InvalRing rings[kInvalMaxHosts][kInvalMaxHosts][kRingShardsMax];
 };
 
 inline std::size_t inval_ring_matrix_bytes() {
   return sizeof(InvalRingMatrix);
+}
+
+inline InvalRing *inval_ring_shard(InvalRingMatrix *m, int src, int dst,
+                                   int shard) {
+  return &m->rings[src][dst][shard];
 }
 
 }  // namespace fusee

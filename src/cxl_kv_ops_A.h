@@ -136,6 +136,21 @@ class CxlKvStoreA {
   // i.e. the worker itself does fetch_add on the CXL ring.
   static void set_worker_id(int wid);
 
+  // iter-17A multi-ring scaling: configure process-wide ring sharding.
+  // num_workers = T (worker count); shards_factor = N (workers per
+  // shard). Computes actual_shards = ceil(T/N) (capped at
+  // kRingShardsMax). All forks inherit these (process-wide statics).
+  // Call once on host primary before enable_*_ring spawns; non-primary
+  // clients call wire_rings_for_child + configure_ring_sharding with
+  // the same N to stay in sync.
+  // N=1 (default) ⇒ actual_shards=1 ⇒ backward-compatible single-ring.
+  static void configure_ring_sharding(int num_workers, int shards_factor);
+
+  // Accessors (read-only).
+  static int  num_ring_shards();
+  static int  ring_shards_factor();
+  static int  worker_ring_idx();   // Plan A routing for current worker
+
   // iter-10A Phase 1.C: per-worker TlsCache attach. Worker calls this
   // post-fork (after tls_cache_init). search() / execute_write_local
   // route through TLS L1 if set; otherwise skip and go straight to
