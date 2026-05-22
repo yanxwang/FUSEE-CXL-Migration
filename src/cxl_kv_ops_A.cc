@@ -2233,11 +2233,12 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
     // = encode(blk_off, vlen, fingerprint). The simplest hook is to add a
     // variant of execute_write_local that takes pre-allocated blk_off.
     uint64_t blk_off = e->staging_off;
-    // Flush the pool bytes the worker wrote (worker did flush_line already,
-    // but we re-flush owner-side to evict any stale cached lines and force
-    // re-fetch from CXL — iter-12A Phase 5 stale-cache pattern).
-    pool_->read(blk_off, nullptr, 0);  // no-op cache invalidate via flush
-    full_fence();
+    // iter-17A Stage 7: removed dead "defensive flush" call here. The
+    // prior code was `pool_->read(blk_off, nullptr, 0)` which early-returns
+    // at len==0 with NO clflushopt issued (see cxl_kv_blockpool.cc:180).
+    // The companion full_fence had nothing to order. execute_write_local_with_blk
+    // does not read pool bytes (it only embeds blk_off into the slot encoding);
+    // future readers do their own pool_->read which performs the flush.
     // Call into execute_write_local with the special "pre-allocated"
     // signal — implemented as a new internal helper:
     e->status = execute_write_local_with_blk(e->key, blk_off, value_len,
