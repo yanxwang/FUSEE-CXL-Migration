@@ -258,9 +258,14 @@ template <typename Entry>
 inline int generic_spin_wait(Entry *e, uint64_t op_id, int *out_status) {
   const uint64_t kBudgetUs = 5000;
   uint64_t spin_start_ns = 0;
+  // iter-17A Stage 5 micro-opt: lfence is sufficient to order clflushopt
+  // before the subsequent load (Intel manual: clflushopt ordered w/r/t
+  // following loads by LFENCE). mfence is overkill here — saves ~10-20 ns
+  // per spin iter, compounded across the spin loop dominating 72-99% of
+  // worker latency at high T (iter-16A finding).
   for (;;) {
     flush_line((void *)&e->resp_op_id);
-    full_fence();
+    __builtin_ia32_lfence();
     uint64_t resp = e->resp_op_id.load(std::memory_order_acquire);
     if (resp == op_id) {
       if (out_status) *out_status = e->status;
