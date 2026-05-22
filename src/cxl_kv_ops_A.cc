@@ -2437,6 +2437,18 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
 
 void CxlKvStoreA::write_receiver_loop() {
   probe_ring();
+  // iter-17A Stage 6 micro-opt: lfence-vs-mfence applied at sites A+C only.
+  // Site B (per-slot req_op_id load) MUST remain mfence: that load is
+  // followed by reads of other cacheline-1 fields (key/op_kind/value_len/
+  // staging_off/staging_gen) in write_handler. Per Intel SDM §11.4.4,
+  // clflushopt is ordered by mfence/sfence but NOT by lfence — lfence allows
+  // the load to speculatively read STALE L1 data from prior slot reuse.
+  // For site B, stale non-zero op_id cascades into stale field reads →
+  // receiver acks the wrong op_id → current worker times out (5 ms cap,
+  // hit during bisection: -65% thpt at T=8/64 with site-B lfence).
+  // Sites A (tail poll, single-field load only) and C (gap-spin, loop-
+  // based self-correction — stale read costs extra iter but final load
+  // sees fresh CXL value) are safe.
   while (!write_receiver_stop_.load(std::memory_order_acquire)) {
     bool did_work = false;
     for (int src = 0; src < num_hosts_; src++) {
@@ -2444,7 +2456,7 @@ void CxlKvStoreA::write_receiver_loop() {
       WriteRing *ring = &wr_->rings[src][host_id_];
       uint64_t head = ring->head;
       flush_line((void *)&ring->tail);
-      full_fence();
+      __builtin_ia32_lfence();  // site A (single-field tail load, safe)
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
       while (head < tail) {
         uint32_t slot = (uint32_t)(head % kWriteRingDepth);
@@ -2462,7 +2474,7 @@ void CxlKvStoreA::write_receiver_loop() {
           for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
             __builtin_ia32_pause();
             flush_line((void *)&e->req_op_id);
-            full_fence();
+            __builtin_ia32_lfence();  // site C (loop self-corrects, safe)
             op_id = e->req_op_id.load(std::memory_order_acquire);
           }
           if (op_id == 0) {
