@@ -1648,6 +1648,14 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   e->staging_off = slot_idx;          // sanity check; receiver asserts
   e->staging_gen = 0;                 // reserved (iter-10A pool-gen)
 #endif
+  // iter-17A Stage 4 audit: these two resets LOOK dead (op_id is
+  // host-tagged so prev resp can't collide; status only read after
+  // resp match → receiver always overwrites it). Removal smoke at
+  // T=1/8/64 measured -5% / -60% / -40% throughput regression with
+  // w_p99 inflated to 1.85-2.37 ms. Root cause not pinpointed (likely
+  // CXL inter-host clflushopt writeback race — see iter-9A
+  // CXL-atomic-flush memory). EMPIRICALLY REQUIRED — do not remove
+  // without re-running 4-path microbench + xhost study.
   e->resp_op_id.store(0, std::memory_order_relaxed);
   e->status = 0;
   std::atomic_thread_fence(std::memory_order_release);
