@@ -1465,6 +1465,11 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   // x86 program-order is sufficient (both are stores, release-default).
   // Safe regardless of whether `key` was actually cached locally —
   // set_stale + tls_evict are idempotent / no-op on miss.
+  //
+  // iter-16A status (2026-05-21): DEAD CODE in default builds.
+  // FUSEE_XHOST_WRITE_SELF_INVAL defaults to 0 in cxl_read_guard.h:86;
+  // current production builds do not override. Block compiles out entirely.
+  // Kept as opt-in flag for future experiment (no maintenance cost).
 #if !FUSEE_DISABLE_CACHE_POOL
   if (cache_) cache_pool_set_stale(cache_, key);
 #endif
@@ -1491,10 +1496,13 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   PROBE_OP("XWS1E", op_id);
 
   // Wait for slot free (cacheline 1 holds req_op_id).
+  // iter-16A Stage 2 micro-opt: lfence is sufficient to order clflushopt
+  // before the subsequent load (Intel manual: clflushopt ordered w/r/t
+  // following loads by LFENCE). mfence is overkill here — saves ~10-20 ns/op.
   int c_iters = 0;
   for (;;) {
     flush_line((void *)&e->req_op_id);
-    full_fence();
+    __builtin_ia32_lfence();
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
     c_iters++;
     __builtin_ia32_pause();
