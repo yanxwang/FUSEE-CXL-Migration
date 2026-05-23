@@ -88,6 +88,11 @@ endif()
 if(DEFINED FUSEE_PROBE)
     target_compile_definitions(fusee_cxl PUBLIC FUSEE_PROBE=${FUSEE_PROBE})
 endif()
+# iter-18A: -DFUSEE_READ_PROBE=1 enables xhost_read stage probes
+# (XRS*/XRR*). Independent of FUSEE_PROBE_PATH; requires FUSEE_PROBE=1.
+if(DEFINED FUSEE_READ_PROBE)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_READ_PROBE=${FUSEE_READ_PROBE})
+endif()
 target_link_libraries(fusee_cxl PUBLIC pthread)
 
 # Decomp-instrumented sibling of fusee_cxl for cxl_latency_decomp_C. Same

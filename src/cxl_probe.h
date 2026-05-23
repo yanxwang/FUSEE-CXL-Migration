@@ -162,6 +162,15 @@ inline void probe_flush() {
 #define FUSEE_PROBE_PATH 0
 #endif
 
+// FUSEE_READ_PROBE gates iter-18A xhost_read stage probes (XRS*/XRR*).
+// Independent of FUSEE_PROBE_PATH so a single build can enable either
+// xhost_write decomp (FUSEE_PROBE=1) or xhost_read decomp
+// (FUSEE_PROBE=1 + FUSEE_READ_PROBE=1) or both simultaneously.
+// Default OFF (0).
+#ifndef FUSEE_READ_PROBE
+#define FUSEE_READ_PROBE 0
+#endif
+
 #if FUSEE_PROBE
 #define PROBE(tag)        ::fusee::probe_ring()->emit(tag, 0)
 #define PROBE_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
@@ -174,6 +183,13 @@ inline void probe_flush() {
 #define PROBE_PATH(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
 #else
 #define PROBE_PATH(tag, op) do {} while (0)
+#endif
+
+// iter-18A: xhost_read stage probes (XRS*/XRR*). Gated by FUSEE_READ_PROBE.
+#if FUSEE_PROBE && FUSEE_READ_PROBE
+#define PROBE_READ_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
+#else
+#define PROBE_READ_OP(tag, op) do {} while (0)
 #endif
 
 #endif  // FUSEE_CXL_PROBE_H_

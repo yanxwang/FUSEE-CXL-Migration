@@ -1,0 +1,14 @@
+[A:cfg] ring_sharding T=1 N=0 (disabled) -> shards=1 block=1 routing=worker_id
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=63614)
+[A:thread] WriteRecv0 pid=63614 tid=139873284781760 cpu=64 host=0 rings=[0]
+[A:thread] ReadRecv0 pid=63614 tid=139873276389056 cpu=65 host=0 rings=[0]
+[A:thread] InvalRecv0 pid=63614 tid=139873267996352 cpu=66 host=0 rings=[0]
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:thread] ReservHandler pid=63614 tid=139873259603648 pinned cpu=85 (host_id=0)
+# PATH host=0 label=after_LOAD tid=139873284995200 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=99972 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=99972 cp_evict=0 cp_set_stale=0 cp_lru_evict=138 rh_served=0
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=99972 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=99972 cp_evict=0 cp_set_stale=0 cp_lru_evict=138 rh_served=0
+YCSB opt=A cache=0 num_hosts=2 threads=1 threads_eff=1 rep=1 load_ops=200000 load_thpt=337417 trans_ops=200000 trans_wall_max=0.937966 trans_agg_thpt=213227 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=7191 r_p50_ns=12842 r_p99_ns=17728 first_op_ns_max=17546 first_op_ns_avg=16088 ops_to_first_ns_max=1512645 ops_to_first_ns_avg=885334 # xhost_read_optA_t1_cacheoff_rep1
+# PATH host=0 label=after_TRANS tid=139873284995200 r0_tls=0 r2hit=367 r2miss_local=0 r3=99633 cpool_ins_r=508 local_w=99972 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=99972 cp_evict=0 cp_set_stale=0 cp_lru_evict=138 rh_served=0
+# PATH host=0 label=after_TRANS tid=139873276389056 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=99331
+# PATH host=0 label=after_TRANS AGG r0_tls=0 r2hit=367 r2miss_local=0 r3=99633 cpool_ins_r=508 local_w=99972 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=99972 cp_evict=0 cp_set_stale=0 cp_lru_evict=138 rh_served=99331
+# CACHE_FILL host=0 cache_buckets=131072 capacity=524288 filled=100342 stale=0 tomb=0 fill_pct=19.139

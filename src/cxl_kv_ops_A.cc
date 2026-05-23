@@ -2205,18 +2205,30 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   uint64_t my_op = read_op_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   uint64_t op_id = encode_op_id(host_id_, my_op);
 
+  // iter-18A Stage 1 (slot_reserve) start.
+  PROBE_READ_OP("XRS1S", op_id);
+
   uint64_t tpos = ring->tail.fetch_add(1, std::memory_order_acq_rel);
   flush_line((void *)&ring->tail);
   store_fence();
   uint32_t slot_idx = (uint32_t)(tpos % kReadRingDepth);
   ReadEntry *e = &ring->entries[slot_idx];
 
+  // iter-18A Stage 1 end ≡ Stage 2 (slot_wait) start.
+  PROBE_READ_OP("XRS1E", op_id);
+
+  int c_iters = 0;
   for (;;) {
     flush_line((void *)&e->req_op_id);
     full_fence();
     if (e->req_op_id.load(std::memory_order_acquire) == 0) break;
+    c_iters++;
     __builtin_ia32_pause();
   }
+
+  // iter-18A Stage 2 end ≡ Stage 3 (req_publish) start.
+  PROBE_READ_OP("XRS2E", op_id);
+  if (c_iters > 0) PROBE_READ_OP("XRS2R", (uint64_t)c_iters);
 
 #if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
   // iter-13A Phase 1 (RCU): publish my reader epoch BEFORE sending the
@@ -2247,6 +2259,9 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   flush_line((void *)&e->req_op_id);
   store_fence();
 
+  // iter-18A Stage 3 end ≡ Stage 4 (ack_wait) start.
+  PROBE_READ_OP("XRS3E", op_id);
+
   // Spin on staging.ready_op_id (single cacheline, faster than
   // the legacy 2-step ack-then-pool-read).
   const uint64_t kReadSpinTimeoutNs = 200ULL * 1000 * 1000;  // 200 ms
@@ -2263,6 +2278,10 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
     }
     __builtin_ia32_pause();
   }
+
+  // iter-18A Stage 4 end ≡ Stage 5 (post_ack_cleanup_and_validate) start.
+  PROBE_READ_OP("XRS4E", op_id);
+  if (timed_out) PROBE_READ_OP("XRS4T", op_id);
   // CRITICAL: free the ring slot by clearing req_op_id=0 BEFORE
   // returning. Otherwise the slot stays "busy" and the next
   // wraparound deadlocks at fetch_add+spin-on-zero in this same
@@ -2316,6 +2335,8 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
     if (out_len) *out_len = 0;
     return -1;
   }
+  // iter-18A Stage 5 end ≡ Stage 6 (value_recv) start.
+  PROBE_READ_OP("XRS5E", op_id);
 #if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
   // STAGING (default): direct copy from CXL staging — owner placed
   // value bytes into st->value_bytes in read_handler (1× CXL→DRAM→CXL
@@ -2372,6 +2393,8 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
 #endif
 #endif  // FUSEE_READ_GUARD branches
   if (out_len) *out_len = vlen;
+  // iter-18A Stage 6 (value_recv) end.
+  PROBE_READ_OP("XRS6E", op_id);
   return 0;
 }
 
@@ -2712,6 +2735,8 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
       if (src == host_id_) continue;
       ReadRing *ring = &rr_->rings[src][host_id_][ring_idx];
       uint64_t head = ring->head;
+      // iter-18A Stage RR1 (ring_drain) start.
+      PROBE_READ_OP("XRR1S", head);
       flush_line((void *)&ring->tail);
       full_fence();
       uint64_t tail = ring->tail.load(std::memory_order_acquire);
@@ -2724,22 +2749,32 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
         // iter-12A bimodal fix: gap-tolerance budget before bailing.
         // See note in inval_receiver_loop for rationale.
         if (op_id == 0) {
+          PROBE_READ_OP("XRR1Z", head);
           for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
             __builtin_ia32_pause();
             flush_line((void *)&e->req_op_id);
             full_fence();
             op_id = e->req_op_id.load(std::memory_order_acquire);
           }
-          if (op_id == 0) break;
+          if (op_id == 0) {
+            PROBE_READ_OP("XRR1X", head);
+            break;
+          }
         }
+        // iter-18A Stage RR1 end ≡ Stage RR2 (handler: bucket+pool+staging) start.
+        PROBE_READ_OP("XRR1E", op_id);
         // iter-11A Phase 1: pass slot_idx so read_handler can deposit
         // value bytes directly into rs_[src][me][slot_idx].
         read_handler(e, src, slot);
+        // iter-18A Stage RR2 end ≡ Stage RR3 (ack publish) start.
+        PROBE_READ_OP("XRR2E", op_id);
 
         std::atomic_thread_fence(std::memory_order_release);
         e->resp_op_id.store(op_id, std::memory_order_release);
         flush_line((void *)&e->resp_op_id);
         store_fence();
+        // iter-18A Stage RR3 end.
+        PROBE_READ_OP("XRR3E", op_id);
         head++;
         did_work = true;
       }
