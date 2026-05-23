@@ -2264,6 +2264,9 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
 
   // Spin on staging.ready_op_id (single cacheline, faster than
   // the legacy 2-step ack-then-pool-read).
+  // iter-18A C3: pause 4× between flushes to reduce CXL polling noise
+  // (peer's ack write needs ≥600 ns to propagate; aggressive flushing
+  // creates bus contention with peer's store).
   const uint64_t kReadSpinTimeoutNs = 200ULL * 1000 * 1000;  // 200 ms
   uint64_t t0 = now_ns_mono();
   bool timed_out = false;
@@ -2276,7 +2279,8 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
       timed_out = true;
       break;
     }
-    __builtin_ia32_pause();
+    __builtin_ia32_pause(); __builtin_ia32_pause();
+    __builtin_ia32_pause(); __builtin_ia32_pause();
   }
 
   // iter-18A Stage 4 end ≡ Stage 5 (post_ack_cleanup_and_validate) start.
