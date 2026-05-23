@@ -1,0 +1,534 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'cycles:P'
+# Event count (approx.): 217719510082
+#
+# Overhead  Command     Shared Object      Symbol                                                                                                    
+# ........  ..........  .................  ..........................................................................................................
+#
+     4.56%  ReadRecv0   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.91%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.55%  ReadRecv1   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.62%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.54%  ReadRecv4   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.85%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.54%  ReadRecv2   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.78%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.54%  ReadRecv3   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.90%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.52%  ReadRecv6   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.83%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.51%  InvalRecv3  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.49%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.51%  InvalRecv2  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.90%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.48%  InvalRecv5  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.80%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.20%  ReadRecv5   protocol_a_ycsb    [.] fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.55%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::read_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_read_ring(fusee::ReadRingMatrix*, fusee::ReadStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.12%  InvalRecv0  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.44%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.12%  WriteRecv1  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.93%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.61%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.11%  InvalRecv1  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --3.64%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     4.00%  WriteRecv0  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--2.17%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.23%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.92%  WriteRecv2  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.90%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.55%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.91%  WriteRecv6  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.98%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.43%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.86%  WriteRecv7  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.96%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.53%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.80%  WriteRecv4  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.89%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.62%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.77%  InvalRecv4  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --2.93%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.74%  WriteRecv3  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--1.83%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.58%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     3.70%  WriteRecv5  protocol_a_ycsb    [.] fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+            |--2.04%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+            |          fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          operator() (inlined)
+            |          __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+            |          _M_invoke<0> (inlined)
+            |          operator() (inlined)
+            |          std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+            |          0x7fb0998a0223
+            |          start_thread
+            |          __GI___clone3
+            |          
+             --1.36%--_mm_mfence() (inlined)
+                       full_fence (inlined)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     2.23%  InvalRecv6  protocol_a_ycsb    [.] fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+            |          
+             --1.73%--std::__atomic_base<unsigned long>::load(std::memory_order) const (inlined)
+                       fusee::CxlKvStoreA::inval_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_invalidate(fusee::InvalRingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     1.37%  WriteRecv5  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |          
+             --1.35%--fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+                       fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     1.27%  WriteRecv0  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |
+            ---fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+               fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+               fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+               operator() (inlined)
+               __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               _M_invoke<0> (inlined)
+               operator() (inlined)
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+               0x7fb0998a0223
+               start_thread
+               __GI___clone3
+
+     1.24%  WriteRecv2  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |          
+             --1.19%--fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+                       fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     1.17%  WriteRecv1  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |
+            ---fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+               fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+               fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+               operator() (inlined)
+               __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               _M_invoke<0> (inlined)
+               operator() (inlined)
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+               0x7fb0998a0223
+               start_thread
+               __GI___clone3
+
+     1.15%  WriteRecv3  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |          
+             --1.12%--fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+                       |          
+                        --1.10%--fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+                                  fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                                  operator() (inlined)
+                                  __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                                  __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                                  _M_invoke<0> (inlined)
+                                  operator() (inlined)
+                                  std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                                  0x7fb0998a0223
+                                  start_thread
+                                  __GI___clone3
+
+     1.03%  WriteRecv4  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |          
+             --1.01%--fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+                       fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+                       fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+                       operator() (inlined)
+                       __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+                       _M_invoke<0> (inlined)
+                       operator() (inlined)
+                       std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+                       0x7fb0998a0223
+                       start_thread
+                       __GI___clone3
+
+     1.01%  WriteRecv7  protocol_a_ycsb    [.] fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+            |
+            ---fusee::CxlKvStoreA::execute_write_local_with_blk(unsigned long, unsigned long, unsigned int, int, int)
+               fusee::CxlKvStoreA::write_handler(fusee::WriteEntry*, int)
+               fusee::CxlKvStoreA::write_receiver_loop(std::vector<int, std::allocator<int> >)
+               operator() (inlined)
+               __invoke_impl<void, fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               __invoke<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::<lambda()> > (inlined)
+               _M_invoke<0> (inlined)
+               operator() (inlined)
+               std::thread::_State_impl<std::thread::_Invoker<std::tuple<fusee::CxlKvStoreA::enable_write_ring(fusee::WriteRingMatrix*, fusee::ForwardStagingMatrix*, bool, bool)::{lambda()#1}> > >::_M_run()
+               0x7fb0998a0223
+               start_thread
+               __GI___clone3
+
+
+
+#
+# (Tip: For tracepoint events, try: perf report -s trace_fields)
+#

@@ -1,0 +1,13 @@
+
+ Performance counter stats for thread id '45313,45314,45315,45316,45317,45318,45319,45320,45321,45322,45323,45324,45325,45326,45327,45328,45329,45330,45331,45332,45333,45334':
+
+      216809504127      cycles                                                                
+       12399718447      instructions                     #    0.06  insn per cycle            
+          82946159      cache-misses                     #   55.38% of all cache refs         
+         149769761      cache-references                                                      
+         128975547      LLC-loads                                                             
+          75849075      LLC-load-misses                  #   58.81% of all LL-cache accesses  
+           1717050      branch-misses                                                         
+
+       3.020202100 seconds time elapsed
+

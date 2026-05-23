@@ -1,0 +1,13 @@
+
+ Performance counter stats for thread id '45079,45080,45081,45082,45083,45084,45085,45086,45087,45088,45089,45090,45091,45092,45093,45094,45095,45096,45097,45098,45099,45100':
+
+      211538991317      cycles                                                                
+       12409179841      instructions                     #    0.06  insn per cycle            
+          78230209      cache-misses                     #   66.02% of all cache refs         
+         118502806      cache-references                                                      
+         101660834      LLC-loads                                                             
+          74080072      LLC-load-misses                  #   72.87% of all LL-cache accesses  
+           1328981      branch-misses                                                         
+
+       3.018967942 seconds time elapsed
+

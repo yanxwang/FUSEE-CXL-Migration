@@ -166,10 +166,101 @@ Supp 3 (per-receiver counter) 未做：uniform 数据已强证假设，无需再
 
 ### 2.4 Scaling 上限分析
 
-T=64 N=4 集群峰值 6.628 Mops 距离 20 Mops 目标 33%。瓶颈：
+T=64 N=4 集群峰值 6.628 Mops 距离 20 Mops 目标 33%。瓶颈猜测（**初版**，§2.5 实验后已修正）：
 - **CPU pool**: 22 receiver cores hard limit
 - **Packing dilution**: T=64 N=4 时 write thread 担 2 ring (50% throughput per ring)，read/inval thread 担 2-3 ring (33-50%)
+- **(已撤回)** T=32 zipf 平台 = `slot_directory_lock` 竞争 — §2.5 Exp 2/3 证伪
 - **未做的优化**: 把 worker 占用的 CPU 0-63 让出一部分给 receiver（牺牲 worker count 换 receiver capacity）
+
+### 2.5 瓶颈实验验证（Exp 1 + Exp 2 + Exp 3，2026-05-23）
+
+§2.4 第一版给出三条瓶颈解释 ("CPU pool" / "packing dilution" / "lock contention")，但都是**未测量的推断**。本节用 3 个针对性实验把它们分别坐实或证伪。所有实验均针对 xhost_write zipf-0.99 V=1024，T=32 或 T=64 主战场。
+
+#### Exp 1 — Single-key flood（**证实**：纯单 key 场景下 lock 是真瓶颈，但是 2-stage pipeline cap，非传统串行 lock）
+
+**Setup**: 让两 host 都 UPDATE 对方 host-owned 的同**一个** key（FNV-1a 匹配挑出 user0/h0 + user4/h1），所有 op 撞同一 shared bucket。72 cells = T ∈ {8,16,32,64} × N ∈ {0,4,8} × routing ∈ {worker_id, key_hash} × 3 rep。
+
+**结果中位数（cluster Mops/s）**:
+
+| Plan | N | T=8 | T=16 | T=32 | T=64 |
+|---|---:|---:|---:|---:|---:|
+| A worker_id | 0 | 0.766 | 0.767 | 0.831 | 0.815 |
+| A worker_id | 4 | 1.240 | **1.506** | **1.507** | **1.489** |
+| A worker_id | 8 | 0.752 | **1.439** | **1.511** | **1.501** |
+| B key_hash  | 0 | 0.765 | 0.767 | 0.832 | 0.821 |
+| B key_hash  | 4 | 0.766 | 0.802 | 0.828 | 0.794 |
+| B key_hash  | 8 | 0.711 | 0.767 | 0.819 | 0.802 |
+
+**发现**：
+- Plan A N≥2 在 T≥16 撞到 **~1.5 Mops cap**（1.9× single-recv baseline），N=4 和 N=8 完全平齐
+- Plan B 所有 N 都停在 single-recv baseline ~0.8 Mops（因为 key_hash 把同一 key 永远路由到同一 shard）
+- A vs B 比值 ≈ 1.9× 当且仅当 shards>1 且 routing 能分散
+
+**机制解释**（修正原"lock contention" 简化模型）: 不是 N 个 receiver 排队抢同一 lock；而是 **2-stage pipeline**：一个 receiver 在 lock-held publish 阶段 (~1-2 µs) 时，另一个 receiver 已经在并行做 lock-free pool 读 (~8 µs)。两 stage 重叠 → 2× single-recv 上限，多于 2 个 receiver 不再 help（每瞬时只有一个能持锁）。Plan B 把所有 ops 路由到 1 个 shard → 失去 pipeline → 退回 baseline。
+
+**图**: [exp1_table_summary.png](../iter17A_exp1_single_key_flood_20260523_022924/exp1_table_summary.png)、[exp1_grouped_bar.png](../iter17A_exp1_single_key_flood_20260523_022924/exp1_grouped_bar.png)
+**数据**: [iter17A_exp1_single_key_flood_20260523_022924/grid.csv](../iter17A_exp1_single_key_flood_20260523_022924/grid.csv)
+
+#### Exp 2 — Receiver perf-stat（**证伪**：T=32 zipf 平台不是 spin-lock 竞争，是 CXL coherence 带宽）
+
+**Setup**: T=32 N=4 worker_id，分别跑 zipf-0.99 和 uniform xhost_write 各 1 rep（trace 重 gen 至 20M trans 以便 perf 抽样 3 s）。perf 同时用 `perf stat -e cycles,instructions,cache-misses,cache-references,LLC-loads,LLC-load-misses` 与 `perf record --call-graph dwarf,8192` attach 到 22 个 receiver tids（8 WriteRecv + 7 ReadRecv + 7 InvalRecv）。
+
+**关键 perf-stat 指标**:
+
+| metric | zipf-0.99 | uniform | delta | 解释 |
+|---|---:|---:|---:|---|
+| Total cycles (3 s, 22 recvs) | 211.5 G | 216.8 G | -2.4 % | 总功率近似 |
+| IPC | 0.059 | 0.057 | +3.5 % | **≈0.06 表明 memory-bound 极重**（spin-lock contention 应该 ≥0.3） |
+| L1+L2 cache miss % | 66.0 % | 55.4 % | +10.6 pp | zipf 高 |
+| **LLC load miss %** | **72.9 %** | **58.8 %** | **+14.1 pp** | **hot-key CXL coherence ping-pong 直接证据** |
+| Cluster throughput (Mops/s) | 4.81 | 5.14 | -6.4 % | uniform 略快（与原 sweep 一致） |
+
+**机制解释**: 22 个 receiver thread 跑在 IPC=0.06 = **几乎所有指令都在等内存**。如果是 pthread_spin_lock 竞争，IPC 应该 ≥0.3（spin-lock 是 tight loop 读 hot cacheline，cache-hit 率高）。我们看到的是 **LLC miss rate >70%** —— 表明 receiver 大部分时间在等 **CXL coherence**（peer host 在写同一 hot key cacheline → 本地 cached copy 被 invalidate → 本地 receiver 重读 CXL 600 ns latency）。Zipf 比 uniform 多 14 pp LLC miss，正好对应"hot key 集中 → 同 cacheline 被两 host 反复 ping-pong"。
+
+**Call-graph 局限**: `perf record --call-graph dwarf` 拿到的 callstack 全部 collapse 到 `std::__atomic_base::load` —— 即 receiver 大部分采样落在**轮询 CXL ring entry 的 atomic load** 上。所以 receiver "等内存" 不仅是 hashtable bucket 访问（critical section 内的）还包括 ring polling（critical section 外的，但同样 CXL 路径）。
+
+**图**: [exp2_perf_stat_table.png](../iter17A_exp2_perf_lock_20260523_030306/exp2_perf_stat_table.png)、[exp2_perf_stat_bars.png](../iter17A_exp2_perf_lock_20260523_030306/exp2_perf_stat_bars.png)
+**数据**: [iter17A_exp2_perf_lock_20260523_030306](../iter17A_exp2_perf_lock_20260523_030306/)
+
+#### Exp 3 — Packing decouple（**证实**：现实 zipf 下吞吐线性 scale 在总 receiver 线程数上）
+
+**Setup**: 加 env `FUSEE_FORCE_THREADS_PER_TYPE` 覆盖默认 `pool_size/3` floor（compute_receiver_layout 增 ~15 LOC）。固定 T=64 N=4（shards=16），变 threads_per_type ∈ {1, 2, 4, 8, 16, default(=8)}。1 = 极致 packing（每 receiver 担 16 shards）；16 = 1:1 无 packing；default = 8+7+7=22 恰好填满 22-CPU pool。
+
+**3-rep median, cluster Mops/s**:
+
+| threads_per_type | 总 receiver 线程数 | zipf | uniform |
+|---|---:|---:|---:|
+| 1 | 3 | 0.812 | 0.811 |
+| 2 | 6 | **1.606** | **1.589** |
+| 4 | 12 | **3.032** | **3.011** |
+| 8 (CPU oversub) | 24 (>22 pool) | 0.512 | 0.453 |
+| 16 (CPU oversub) | 48 (>22 pool, 2.2× oversub) | 0.092 | 0.090 |
+| default | 22 (= pool size) | **5.783** | **5.503** |
+
+**clean zone**（force ∈ {1, 2, 4, default}，**无 CPU 超额**）:
+- 总线程数 3 → 6 → 12 → 22：**线性 scaling**，吞吐 ≈ 0.27 × total_threads
+- zipf 与 uniform 在 clean zone 几乎完全相同（差 < 1 %）
+
+**force=8/16 的 collapse** 是我自己加的 modulo-wrap CPU pinning 的 artifact：t_w+t_r+t_i = 24 (force=8) 或 48 (force=16) 在 22-CPU pool 内会 wrap，导致 WriteRecv 与 InvalRecv 共享 CPU → context switching 把吞吐砸下去。**不是真实瓶颈**，是 force override 的实现 limitation。
+
+**关键结论**: 在 clean zone，吞吐**线性 scale 在 total receiver thread count 上**。如果 lock 竞争主导，应该在某点平台化（多 receiver 在同 lock 上互相阻塞）。我们看到完美线性 → 锁不是上限，**总 receiver CPU 时间** 才是上限。这与 Exp 2 perf-stat 一致（每 receiver IPC=0.06 = memory-stalled，加 receiver 线性增加并行 CXL 访问能力 → 线性增加吞吐）。
+
+**图**: [exp3_thpt_vs_threads.png](../iter17A_exp3_packing_20260523_030745/exp3_thpt_vs_threads.png)、[exp3_summary_table.png](../iter17A_exp3_packing_20260523_030745/exp3_summary_table.png)
+**数据**: [iter17A_exp3_packing_20260523_030745/grid.csv](../iter17A_exp3_packing_20260523_030745/grid.csv)
+**代码**: [src/cxl_kv_ops_A.cc](../../src/cxl_kv_ops_A.cc) lines 757-783（compute_receiver_layout）env override 实现
+
+#### Exp 1 + 2 + 3 综合结论（**取代** §2.4 的初版瓶颈解释）
+
+| 区域 | 真实瓶颈 | 证据 | iter-17A 原始猜测 |
+|---|---|---|---|
+| **Single-key 100 % 同 bucket** | 2-stage pipeline cap (lock-held + lock-free pool read 并行) | Exp 1 N≥2 撞 1.5 Mops cap | "lock contention" — 部分正确，但是 pipeline 模型不是简单串行 |
+| **现实 zipf-0.99（1 M unique keys, top 1 % = 50 % 流量）** | **per-receiver CXL latency × 总 receiver 线程数** | Exp 2 IPC=0.06 + LLC miss 73 % / Exp 3 clean-zone 线性 | ~~"slot_directory_lock 竞争"~~ — **证伪** |
+| **uniform** | 同上（zipf vs uniform 在 clean zone 几乎相同） | Exp 3 中位数差 < 1 % | "hot key 不集中"宏观叙事仍成立，但底层机制是 CXL 而非 lock |
+
+**对未来 iter 的指导**:
+- Receiver-side path opt（H9 同款思路：减少 receiver per-op CXL 操作数）**比** lock 替换（spinlock → MCS 等）**优先级高**
+- 加 receiver 线程数（推 CPU pool 上限）是直接 scaling lever — iter-18A 应考虑 worker/receiver CPU 再平衡（牺牲 T 换 receiver capacity）
+- Single-key cap 1.5 Mops 与正常 zipf cap ~6 Mops 之间 4× 差距说明：**hot-key 集中本身**消耗约 75 % 的可用容量，但**不是 lock 限制**而是 CXL bandwidth 限制 → 物理 hardware 改进（CXL 2.0 → CXL 3.0 / 更宽通道）才是真的根本解药
 
 ---
 

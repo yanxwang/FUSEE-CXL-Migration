@@ -764,11 +764,26 @@ ReceiverLayout compute_receiver_layout(int num_workers, int num_shards) {
   if (t_r < 1) t_r = 1;
   if (t_i < 1) t_i = 1;
 
-  auto build = [&](int n_threads, int cpu_start,
+  // iter-17A Exp 3: env override decouples thread-count from the default
+  // pool_size/3 floor. Holds num_shards fixed, varies threads, so we can
+  // isolate packing cost (each thread owning multiple rings) from
+  // per-bucket lock contention. Allowed values [1, num_shards].
+  const char *force_env = std::getenv("FUSEE_FORCE_THREADS_PER_TYPE");
+  if (force_env && *force_env) {
+    int v = std::atoi(force_env);
+    if (v >= 1 && v <= num_shards) {
+      t_w = v; t_r = v; t_i = v;
+    }
+  }
+
+  auto build = [&](int n_threads, int cpu_offset,
                    std::vector<ReceiverPlan> &out) {
     for (int i = 0; i < n_threads; i++) {
       ReceiverPlan p;
-      p.cpu = cpu_start + i;
+      // Wrap CPU into [start_cpu, nproc) pool. With env override the total
+      // (t_w + t_r + t_i) can exceed pool_size; modulo packs them into the
+      // pool with intentional oversubscription on the wrap.
+      p.cpu = start_cpu + ((cpu_offset + i) % pool_size);
       int ring_start = (int)((long)i * num_shards / n_threads);
       int ring_end   = (int)((long)(i + 1) * num_shards / n_threads);
       for (int r = ring_start; r < ring_end; r++) {
@@ -777,9 +792,9 @@ ReceiverLayout compute_receiver_layout(int num_workers, int num_shards) {
       out.push_back(std::move(p));
     }
   };
-  build(t_w, start_cpu,                 L.write_plans);
-  build(t_r, start_cpu + t_w,           L.read_plans);
-  build(t_i, start_cpu + t_w + t_r,     L.inval_plans);
+  build(t_w, 0,             L.write_plans);
+  build(t_r, t_w,           L.read_plans);
+  build(t_i, t_w + t_r,     L.inval_plans);
   return L;
 }
 }  // namespace

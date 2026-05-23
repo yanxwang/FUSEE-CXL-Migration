@@ -1,0 +1,2 @@
+[ perf record: Woken up 149 times to write data ]
+[ perf record: Captured and wrote 54.062 MB /tmp/exp2_zipf.data (6681 samples) ]

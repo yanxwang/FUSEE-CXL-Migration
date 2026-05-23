@@ -1,0 +1,2 @@
+[ perf record: Woken up 169 times to write data ]
+[ perf record: Captured and wrote 54.071 MB /tmp/exp2_uniform.data (6682 samples) ]
