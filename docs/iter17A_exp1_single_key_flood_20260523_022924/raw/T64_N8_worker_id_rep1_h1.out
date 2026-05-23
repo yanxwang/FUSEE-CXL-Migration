@@ -1,0 +1,163 @@
+[A:cfg] ring_sharding T=64 N=8 -> shards=8 block=8 routing=worker_id
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=37155)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=37156)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=37157)
+[A:thread] Worker pinned host=1 client=4 -> cpu=4 (pid=37158)
+[A:thread] Worker pinned host=1 client=5 -> cpu=5 (pid=37159)
+[A:thread] Worker pinned host=1 client=6 -> cpu=6 (pid=37160)
+[A:thread] Worker pinned host=1 client=7 -> cpu=7 (pid=37161)
+[A:thread] Worker pinned host=1 client=8 -> cpu=8 (pid=37162)
+[A:thread] Worker pinned host=1 client=9 -> cpu=9 (pid=37163)
+[A:thread] Worker pinned host=1 client=10 -> cpu=10 (pid=37164)
+[A:thread] Worker pinned host=1 client=11 -> cpu=11 (pid=37165)
+[A:thread] Worker pinned host=1 client=12 -> cpu=12 (pid=37166)
+[A:thread] Worker pinned host=1 client=13 -> cpu=13 (pid=37167)
+[A:thread] Worker pinned host=1 client=14 -> cpu=14 (pid=37168)
+[A:thread] Worker pinned host=1 client=15 -> cpu=15 (pid=37169)
+[A:thread] Worker pinned host=1 client=16 -> cpu=16 (pid=37170)
+[A:thread] Worker pinned host=1 client=17 -> cpu=17 (pid=37171)
+[A:thread] Worker pinned host=1 client=18 -> cpu=18 (pid=37172)
+[A:thread] Worker pinned host=1 client=19 -> cpu=19 (pid=37173)
+[A:thread] Worker pinned host=1 client=20 -> cpu=20 (pid=37174)
+[A:thread] Worker pinned host=1 client=21 -> cpu=21 (pid=37175)
+[A:thread] Worker pinned host=1 client=22 -> cpu=22 (pid=37176)
+[A:thread] Worker pinned host=1 client=23 -> cpu=23 (pid=37177)
+[A:thread] Worker pinned host=1 client=24 -> cpu=24 (pid=37178)
+[A:thread] Worker pinned host=1 client=25 -> cpu=25 (pid=37179)
+[A:thread] Worker pinned host=1 client=26 -> cpu=26 (pid=37180)
+[A:thread] Worker pinned host=1 client=27 -> cpu=27 (pid=37181)
+[A:thread] Worker pinned host=1 client=28 -> cpu=28 (pid=37182)
+[A:thread] Worker pinned host=1 client=29 -> cpu=29 (pid=37183)
+[A:thread] Worker pinned host=1 client=30 -> cpu=30 (pid=37184)
+[A:thread] Worker pinned host=1 client=31 -> cpu=31 (pid=37185)
+[A:thread] Worker pinned host=1 client=32 -> cpu=32 (pid=37186)
+[A:thread] Worker pinned host=1 client=33 -> cpu=33 (pid=37187)
+[A:thread] Worker pinned host=1 client=34 -> cpu=34 (pid=37188)
+[A:thread] Worker pinned host=1 client=35 -> cpu=35 (pid=37189)
+[A:thread] Worker pinned host=1 client=36 -> cpu=36 (pid=37190)
+[A:thread] Worker pinned host=1 client=37 -> cpu=37 (pid=37191)
+[A:thread] Worker pinned host=1 client=38 -> cpu=38 (pid=37192)
+[A:thread] Worker pinned host=1 client=39 -> cpu=39 (pid=37193)
+[A:thread] Worker pinned host=1 client=40 -> cpu=40 (pid=37194)
+[A:thread] Worker pinned host=1 client=41 -> cpu=41 (pid=37195)
+[A:thread] Worker pinned host=1 client=42 -> cpu=42 (pid=37196)
+[A:thread] Worker pinned host=1 client=43 -> cpu=43 (pid=37197)
+[A:thread] Worker pinned host=1 client=44 -> cpu=44 (pid=37198)
+[A:thread] Worker pinned host=1 client=45 -> cpu=45 (pid=37199)
+[A:thread] Worker pinned host=1 client=46 -> cpu=46 (pid=37200)
+[A:thread] Worker pinned host=1 client=47 -> cpu=47 (pid=37201)
+[A:thread] Worker pinned host=1 client=48 -> cpu=48 (pid=37202)
+[A:thread] Worker pinned host=1 client=49 -> cpu=49 (pid=37203)
+[A:thread] Worker pinned host=1 client=50 -> cpu=50 (pid=37204)
+[A:thread] Worker pinned host=1 client=51 -> cpu=51 (pid=37205)
+[A:thread] Worker pinned host=1 client=52 -> cpu=52 (pid=37206)
+[A:thread] Worker pinned host=1 client=53 -> cpu=53 (pid=37207)
+[A:thread] Worker pinned host=1 client=54 -> cpu=54 (pid=37208)
+[A:thread] Worker pinned host=1 client=55 -> cpu=55 (pid=37209)
+[A:thread] Worker pinned host=1 client=56 -> cpu=56 (pid=37210)
+[A:thread] Worker pinned host=1 client=57 -> cpu=57 (pid=37211)
+[A:thread] Worker pinned host=1 client=58 -> cpu=58 (pid=37212)
+[A:thread] Worker pinned host=1 client=59 -> cpu=59 (pid=37213)
+[A:thread] Worker pinned host=1 client=60 -> cpu=60 (pid=37214)
+[A:thread] Worker pinned host=1 client=61 -> cpu=61 (pid=37215)
+[A:thread] Worker pinned host=1 client=62 -> cpu=62 (pid=37216)
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=37154)
+[A:thread] Worker pinned host=1 client=63 -> cpu=63 (pid=37217)
+[A:thread] WriteRecv0 pid=37154 tid=140030096242368 cpu=64 host=1 rings=[0]
+[A:thread] WriteRecv1 pid=37154 tid=140030087849664 cpu=65 host=1 rings=[1]
+[A:thread] WriteRecv4 pid=37154 tid=140030062671552 cpu=68 host=1 rings=[4]
+[A:thread] WriteRecv5 pid=37154 tid=140030054278848 cpu=69 host=1 rings=[5]
+[A:thread] WriteRecv6 pid=37154 tid=140030045886144 cpu=70 host=1 rings=[[A:thread] WriteRecv2 pid=37154 tid=140030079456960 cpu=66 host=1 rings=[2]
+6]
+[A:thread] WriteRecv3 pid=37154 tid=140030071064256 cpu=67 host=1 rings=[3]
+[A:thread] WriteRecv7 pid=37154 tid=140030037493440 cpu=71 host=1 rings=[7]
+[A:thread] ReadRecv0 pid=37154 tid=140030029100736 cpu=72 host=1 rings=[0]
+[A:thread] ReadRecv1 pid=37154 tid=140030020708032 cpu=73 host=1 rings=[1]
+[A:thread] ReadRecv2 pid=37154 tid=140030012315328 cpu=74 host=1 rings=[2]
+[A:thread] ReadRecv3 pid=37154 tid=140030003922624 cpu=75 host=1 rings=[3]
+[A:thread] ReadRecv4 pid=37154 tid=140029995529920 cpu=76 host=1 rings=[4]
+[A:thread] ReadRecv5 pid=37154 tid=140029987137216 cpu=77 host=1 rings=[5]
+[A:thread] ReadRecv6 pid=37154 tid=140029978744512 cpu=78 host=1 rings=[6,7]
+[A:thread] InvalRecv0 pid=37154 tid=140009986324160 cpu=79 host=1 rings=[0]
+[A:thread] InvalRecv1 pid=37154 tid=140009977931456 cpu=80 host=1 rings=[[A:thread] InvalRecv6 pid=37154 tid=140009457825472 cpu=85 host=1 rings=[[A:thread] InvalRecv4 pid=37154 tid=140009474610880 cpu=83 host=1 rings=[4]
+1[A:thread] InvalRecv2 pid=37154 tid=140009491396288 cpu=81 host=1 rings=[2]
+[A:thread] InvalRecv5 pid=37154 tid=140009466218176 cpu=84 host=1 rings=[5]
+[A:thread] InvalRecv3 pid=37154 tid=140009483003584 cpu=82 host=1 rings=[6,7]
+3]
+]
+[A:thread] ReservHandler pid=37154 tid=140009449432768 pinned cpu=85 (host_id=1)
+[A:tls] worker host=1 client=20 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=11 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=21 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=32 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=35 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=62 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=23 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=39 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=34 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=19 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=16 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=25 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=14 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=58 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=24 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=57 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=28 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=61 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=26 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=42 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=37 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=38 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=18 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=8 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=53 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=41 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=36 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=52 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=44 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=30 entries=1024 (~1088 KiB)
+# PATH host=1 label=after_LOAD tid=140030045886144 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2949 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030096242368 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2340 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=1 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030054278848 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2871 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030037493440 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2898 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030079456960 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2294 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030071064256 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2831 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030062671552 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2701 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030087849664 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=2421 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD tid=140030096455808 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1 fwd_w=0 local_w_blk_fwd=21306 local_w_stg_fwd=0 cpool_ins_w=1 cp_evict=1 cp_set_stale=0 cp_lru_evict=0 rh_served=0
+[A:tls] worker host=1 client=47 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=49 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=56 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=46 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=54 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=51 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=60 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=59 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=27 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=45 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=31 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=33 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=29 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=55 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=40 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=22 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=17 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=63 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=50 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=48 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=43 entries=1024 (~1088 KiB)
+bash: line 1: 37154 Segmentation fault      FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=64 FUSEE_RUN_COOKIE=3217921507 FUSEE_REP=1 FUSEE_CACHE=1 FUSEE_WORKLOAD_NAME=single_key_flood FUSEE_KV_SIZE=1024 FUSEE_CACHE_BUCKETS=131072 FUSEE_RING_SHARDS_FACTOR=8 FUSEE_RING_ROUTING=worker_id ./tests/protocol_a_ycsb /dev/dax0.0 /tmp/microbench_traces/bench_single_key_flood_h1.spec_load /tmp/microbench_traces/bench_single_key_flood_h1.spec_trans 8388608 5000000 2>&1
