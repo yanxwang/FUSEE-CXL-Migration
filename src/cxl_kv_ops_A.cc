@@ -2308,8 +2308,11 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   // forwarder's lookup observed an OLDER cache snapshot than ours
   // (highly unlikely on shared-bus CXL, but defensive). Treat as
   // miss + retry (caller will fall back via cache_pool_lookup).
-  flush_line(st);
-  full_fence();
+  // iter-18A C5: removed redundant flush_line(st)+full_fence — Stage 4
+  // already flushed the same cacheline (st control fields share line
+  // with st->ready_op_id); the post-flush load that broke spin-loop
+  // re-fetched the full 64B from CXL, so lookup_epoch / status /
+  // value_size below are guaranteed fresh.
   if (st->lookup_epoch < my_epoch_at_send) {
 #if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
     if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
