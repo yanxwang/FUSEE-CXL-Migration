@@ -94,9 +94,9 @@ Worker (host 0) 发起 GET(key)，key 属 host 1
 | 1.2 | Worker side 标签：`XRS1S/XRS1E/XRS2E/XRS3E/XRS4E/XRS5E/XRS6E`；Receiver side 标签：`XRR1S/XRR1E/XRR2E/XRR3E/XRR4E` |
 | 1.3 | 添加 stage 汇总：8 个 stage（worker 6 + receiver-side 2 大块）；offline analyzer 模板复用 [scripts/iter16A_xhost_decomp_analyze.py](../../scripts/iter16A_xhost_decomp_analyze.py)，新建 iter18A_read_decomp_analyze.py，`--cpu-ghz 2.4` 同（g3/g4 Xeon TSC 标称频率） |
 | 1.4 | 编译开关 `FUSEE_PROBE=1 -DFUSEE_READ_PROBE=1`（或新加 `FUSEE_READ_PROBE`），默认关；与 cxl_probe.h 已有的 `FUSEE_PROBE_PATH` 风格一致 |
-| 1.5 | 单元 sanity：T=1 单 op probe-on 跑完，验证 ∑stage ≈ wall-clock 用时（±5 % 容差）；probe-on vs probe-off 整体吞吐差 <5 % |
+| 1.5 | 单元 sanity：T=1 单 op probe-on 跑完，验证 ∑stage ≈ wall-clock 用时（±5 % 容差）；probe-on vs probe-off 吞吐影响**参考 iter-16A xhost_write 量级**：T=1 +1% / T=8 -14% / T=64 -3% — read 路径预期同量级或更轻；任意 cell 突破 -25% 视为异常 RCA |
 
-**HARD delivery**: 1.5 验证通过；并附 T=1 / T=16 / T=64 的 path-decomp 后缀格式样本（与 iter-16A 写路径输出格式同构）。
+**HARD delivery**: 1.5 验证通过；并附 T=1 / T=8 / T=16 / T=64 的 probe-on vs probe-off thpt 对比 + path-decomp 后缀格式样本（与 iter-16A 写路径输出格式同构）。
 
 ---
 
@@ -154,13 +154,15 @@ Worker (host 0) 发起 GET(key)，key 属 host 1
 ### 3.2 整体 HARD delivery（Phase 3 关闭条件）
 
 - 上面 8 个候选**每个都尝试过**（不允许跳过；audit-only / revert 也算"尝试过"）。
-- 累计 keep 改动需在 Phase 2.1 baseline 之上至少**≥10 % 全 T 段提升**；或者每个 keep 改动单独 ≥5 %，可累加证明 ≥10 % 全 T 段。
+- **累计提升无硬门槛**（user 2026-05-23 决定）。Phase 3 不以累计 ≥X% 为关闭条件；逐 candidate 决策 keep/audit/revert 即可。但**所有 keep 改动的累计 delta 必须有量化数字写入 iter18A_read_opt_summary.md**。
 - 任意 cell 出现 hash-diff FAIL → 该 commit revert。
-- Phase 3 完成时输出 iter18A_read_opt_summary.md（仿 iter17A_xhost_write_path_opt_summary.md），列每个 stage 改动 + delta 表 + keep/revert 决策矩阵。
+- Phase 3 完成时输出 iter18A_read_opt_summary.md（仿 iter17A_xhost_write_path_opt_summary.md），列每个 stage 改动 + delta 表 + keep/revert 决策矩阵 + 累计 delta（仅作记录，非门槛）。
 
-### 3.3 §XIII RAP 边界
+### 3.3 §XIII RAP 边界 + substage 约束（user 2026-05-23）
 
-- **轻量 audit note**（commit body 50-200 字 + smoke test）适用于：fence 调整 / flush 合批 / pause 节奏 / atomic memory_order 弱化 / dead code 删除等"局部不动语义"类。
+- **每个 candidate 必须是 substage 级**：scope 落在单个 stage 内部的某一子步骤（fence / flush 合批 / pause 节奏 / atomic order / dead code），**不允许跨 stage 边界改动**（跨 stage 触动结构 → 强制 §XIII RAP）
+- **追加 candidate**：Phase 2 decomp 后若发现新 hotspot 不在原 8 候选里，允许追加，但**同样必须是 substage 级 + ≤ 2 LOC + smoke test + audit note**
+- **轻量 audit note**（commit body 50-200 字 + smoke test）适用于上述 substage 级局部不动语义类改动
 - **完整 §XIII RAP**（≥6 attack vectors / 6 类）适用于：staging matrix layout 改动 / receiver loop 算法换骨 / ring 数据结构语义改 / 引入新 fence 模型等"动语义"类。任意 Phase 3 commit 触动后者必须 stop-and-ask + 写 RAP 走流程，不允许"塞进 1-2 行 commit 蒙混"。
 
 ---
@@ -266,40 +268,28 @@ Phase 5  YCSB sanity:                  T(3) × N(2) × 3 rep × 1 workload = 18 
 - **C5**: 任何 spec 改动走 §XIII RAP → 不允许悄悄修 spec 让实现"合法"（iter-3A Finding-1 教训）。
 - **C6**: ReadRecv 在 multi-shard 下的 routing 公式与 WriteRecv 完全一致（read response 必须能找回 originating worker）。
 - **C7**: Iter-17A Exp 3 暴露的 **modulo-wrap CPU oversubscription** 在本 iter 修掉或避开（推荐 cap force_threads_per_type ≤ pool_size/3）。
-- **C8** (NEW): Phase 3 任一 commit 的代码改动行数 ≤ 2（注释/重命名不计），改动语义类型属轻量（fence / flush 合批 / pause 节奏 / atomic order 弱化 / dead-code）才适用"audit note + smoke test"；属重量（layout / loop algo / 新 fence 模型）必须 stop-and-ask + §XIII RAP。
+- **C8** (NEW): Phase 3 任一 commit 的代码改动**必须是 substage 级**（scope 限单 stage 内部某子步骤，不跨 stage 边界）+ 行数 ≤ 2（注释/重命名不计）+ 语义类型属轻量（fence / flush 合批 / pause 节奏 / atomic order 弱化 / dead-code）才适用"audit note + smoke test"；任一条件不满足（跨 stage / >2 LOC / layout / loop algo / 新 fence 模型）必须 stop-and-ask + §XIII RAP。Phase 2 decomp 后**追加 candidate** 同样受此约束。
 
 ---
 
-## 6. 待用户确认（决策点；QR2 / QR3 已 resolve）
+## 6. 决策记录（all QR closed 2026-05-23）
 
-### 已决策
-- ~~**QR2** Phase 3 是否预选 single-flush opt~~ → **不预选**，Phase 3 改为逐 stage 迭代，候选清单由 Phase 2 dominant stage 排序后动态定
-- ~~**QR3** Phase 4 8-group vs 7-group~~ → **7-group**（与 iter-17A uniform sweep 同 layout：跳过 iter-15A baseline group）
-- ~~**Phase 0 是否保留**~~ → **删除**（与 Phase 2 baseline + Phase 4.1 RCA 重复）
+| QR | 议题 | 决策 |
+|---|---|---|
+| QR1 | 独立 iter vs merge 入 iter-19A | **独立 iter**（user accepted recommendation） |
+| ~~QR2~~ | Phase 3 预选 single-flush opt | **不预选**（Phase 3 改逐 stage 迭代，候选由 Phase 2 dominant stage 排序后动态定） |
+| ~~QR3~~ | Phase 4 8-group vs 7-group | **7-group**（与 iter-17A uniform sweep 同 layout） |
+| QR4 | Phase 5 YCSB workload | **workloadc only**（user accepted） |
+| QR5 | read peak 性能门槛 | **不预设硬门槛**（user 决定 2026-05-23）。预期：read peak ≈ iter-17A xhost_write peak ~6.6 Mops/s（iter-15A baseline 时 read ≈ write，path opt + scaling 后预期持平）。未达不阻断 iter 完成，但需 RCA 写入总结 |
+| QR6 | Phase 3 smoke test T grid | **{8, 32, 64}** 三点（user accepted） |
+| QR7 | Phase 3 candidate 追加 | **允许追加**，但**追加的 candidate 必须是 substage 级**（user 2026-05-23 强化版）— scope 限单 stage 内部某子步骤，不允许跨 stage 边界 |
+| QR8 | Phase 1 probe-on/off thpt 差阈值 | **不预设硬阈值**（user 决定 2026-05-23）。参考 iter-16A xhost_write 量级：T=1 +1% / T=8 -14% / T=64 -3% — read 路径预期同量级，任意 cell 突破 -25% 视为异常 RCA |
+| QR9 | xhost_read trace 复用 | **复用** iter-15A 现有 traces（user accepted） |
+| QR10 | uniform-vs-zipf 对比图 + heatmap | **要**（user accepted），同 iter-17A Supp 2 模板 |
+| QR11 | Phase 3 累计 ≥10% 全 T 段门槛 | **不预设硬门槛**（user 决定 2026-05-23）。Phase 3 关闭条件改为：8 candidates 都尝试过 + iter18A_read_opt_summary.md 写完 + 任意 keep 没破 hash-diff。累计 delta 仍量化记录但非门槛 |
+| QR12 | build dir | **同 build** (`build-cxl-w1-v1024`)，加 `FUSEE_READ_PROBE` 编译开关隔离 |
 
-### 仍待决策
-1. **QR1** — iter-18A 是否独立 iter？还是 merge 进 iter-19A（YCSB validation）作单 iter？
-   - **建议独立**。Phase 1+2+3+4 全套代码改动量 ≈ iter-16A + iter-17A 之和，混入 iter-19A 风险高；iter-15A/16A/17A 都是单 focus，节奏稳。
-2. **QR4** — Phase 5 YCSB sanity 用 workloadc only 还是含 workloada（50%R+50%U）？
-   - **建议 workloadc only**。workloada 混 write path，无法单独验 read；workload 隔离更纯。
-3. **QR5** — read peak 性能门槛？
-   - **建议 ≥ 8 Mops/s** 集群峰值（粗推算: iter-17A write 6.6 Mops/s × 1.2 因子，read 无 inval broadcast 故应略快）。
-   - 若太激进可改 ≥ 6.6 Mops/s（与 write 持平）；保守目标但合理。
-4. **QR6** (新) — Phase 3 smoke test T grid 用 {8, 32, 64} 三点还是全 7 T？
-   - **建议 {8, 32, 64}**。iter-17A xhost_write opt 也用 3 点；够看 small/mid/sat 区，节省 (7-3)/7 = 57 % 时间；如果 keep 决策边缘可选择性补全 T。
-5. **QR7** (新) — Phase 3 8 候选清单 + Phase 2 decomp 后发现新 hotspot，允许追加 candidate 吗？
-   - **建议允许追加**，但每追加 candidate 同样走 ≤ 2 LOC + smoke + audit note 流程。
-6. **QR8** (新) — Phase 1 probe-on vs probe-off thpt 差现在硬限 ≤ 5 %。读路径 op 比写短（无 inval broadcast），probe 占比可能更高，可能突破 5 %。怎么办？
-   - **建议门槛放宽到 ≤ 10 %**；若仍突破则砍 inner sub-probe，只留 stage 边界 probe（probe 数从 ≥10 降到 ~6）。
-7. **QR9** (新) — Phase 4 是否复用 iter-15A 现有 xhost_read trace（`setup/iter15A_microbench_traces/bench_xhost_read_*`）？
-   - **建议复用**。trace gen 参数 (num_load=2M, num_trans=5M) 与 iter-17A xhost_write 同；rsync 到 g3/g4 `/tmp/microbench_traces/` 即可。新生成长 trace 仅在需要 perf 抽样时（Phase 2.4 perfstat 可能要 20M trans）才必要，到时单独 gen。
-8. **QR10** (新) — Phase 4 7-group plot 是否也要 zipf 集成视图 (uniform vs zipf 对比 + 比例 heatmap, 同 iter-17A `uniform_vs_zipf_compare.png`)?
-   - **建议要**。两 dist 单独看不够，比例 heatmap 是 iter-17A Supp 2 (uniform / zipf ratio) 的核心证据形式；iter-18A 应该输出同款来印证 / 推翻 hot-key 假设在 read 路径的镜像版本。
-9. **QR11** (新) — Phase 3 "累计 ≥ 10 % 全 T 段提升 vs Phase 2.1 baseline" 这个 gate 太严吗？
-   - **建议保留**。iter-17A xhost_write 7-commit 累计 +21+22+27+36-37 % 远超 10 % 门槛；read 路径 stage 数和优化空间相当；若严肃做完所有 8 candidates 难以 ≤ 10 %。
-   - 若不达：表示 read 路径已经接近最优，应将 finding 写入总结然后照常进 Phase 4，不阻断。
-10. **QR12** (新) — Build dir 用 `build-cxl-w1-v1024`（iter-17A 同）还是新建 iter-18A 专用？
-    - **建议同 build**。V=1024 是主战 grid，编译开关 (`FUSEE_PROBE`, `FUSEE_READ_PROBE` 待加) 已支持隔离；新建 build 多余且增加 rsync 体积。
+**Plan v3 进入 frozen 状态**，下一步直接进 Phase 1 实施（建 RDTSCP probe 框架）。
 
 ---
 
@@ -370,4 +360,4 @@ iter-18A 关 iter 前必须填这张表 + 每行解释（任何 ⚠/❌ 没用�
 
 ---
 
-**Status**: 二轮草稿（user-revised）。待 QR1/QR3/QR4/QR5 答复后转 formal task plan，启动 Phase 1。
+**Status**: v3 final (all 12 QR closed 2026-05-23, user-approved)。下一步直接进 Phase 1 实施（建 RDTSCP+LFENCE probe 框架）。
