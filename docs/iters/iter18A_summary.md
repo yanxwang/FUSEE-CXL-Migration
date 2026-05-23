@@ -190,11 +190,52 @@ Doubling ratio T=1→2: 1.80× (good); T=2→4: 1.12×; T=4→8: 1.01× → **re
 
 ---
 
-## Part 3 — Phase 3: per-stage iterative path opt (in progress)
+## Part 3 — Phase 3: per-stage iterative path opt (DONE 2026-05-23)
 
-(每个 candidate 一个 commit + 决策记录追加在下面)
+9 candidates attempted (Plan §3 closure ≥8 OK)。决策矩阵：
+
+| # | Candidate | Stage/Substage | LOC | Result vs prev | Decision |
+|---|---|---|---|---|---|
+| C1 | R1 ring_drain mfence→lfence (per-slot req_op_id load + gap-spin) | RR1 / Sub 3 | 2 | -26 / -50.8 / -59.5 % | **REVERT** (cross-host CXL needs mfence) |
+| C2 | R2 handler inline copy skip | RR2 / Sub 3 | — | N/A | **N/A** (FUSEE_READ_GUARD=HAZARD build skips) |
+| C3 | Stage 4 worker poll pause 4× between flushes | S4 / Sub 3 | 3 | **+90.3 / +67.8 / +78.9 %** | **KEEP** (largest single opt) |
+| C3b | Stage 4 pause 8× | S4 / Sub 3 | 4 | +0.3 / -6.2 / -2.5 | **REVERT** (diminishing returns) |
+| C4 | R1 gap-spin pause 4× (symmetric) | RR1 / Sub 4 | 4 | -0.7 / +4.8 / +1.3 | **AUDIT** (keep for symmetry; gap rare ~0.3%) |
+| C5 | Stage 5 skip redundant flush_line(st)+full_fence | S5 / Sub 2 | -2 | +2.7 / **+5.1** / -2.5 | **KEEP** (st cacheline already flushed in S4) |
+| C6 | Stage 6 single sfence (per-64B flush combine) | S6 / Sub 1 | — | N/A | **N/A** (HAZARD build skips STAGING path) |
+| C7 | Stage 2 slot_wait drop flush+fence (same-host coherent) | S2 / Sub 2 | -2 | -2.4 / -3.6 / -3.4 | **REVERT** (trends -% — likely extra spin from stale read) |
+| C8 | Stage 3 single sfence (combine clear+publish) | S3 / Sub 3 | -1 | -1.6 / -3.6 / +3.0 | **AUDIT** (within noise, cleaner) |
+| C9 | R3 ack drop redundant thread-fence | RR3 / Sub 1 | -1 | +0.3 / -0.1 / -4.7 | **AUDIT** (within noise, cleaner) |
+
+**Tally**: 3 KEEP (+ 3 AUDIT) / 2 REVERT / 2 N/A. 7 unique code-effecting candidates; all per C8 substage-scoped.
+
+### Cumulative effect (Phase 3 final T-sweep, 3-rep median, V=1024 zipf-0.99 N=0 cache=0)
+
+| T | P2.1 baseline | P3 final | cumulative |
+|---|---:|---:|---:|
+| 1 | 0.288 | 0.812 | **+182 %** |
+| 2 | 0.519 | 1.116 | +115 % |
+| 4 | 0.579 | 1.074 | +85 % |
+| 8 | 0.586 | 1.156 | +97 % |
+| 16 | 0.593 | 1.133 | +91 % |
+| 32 | 0.645 | **1.181** | +83 % |
+| 64 | 0.630 | 1.143 | +81 % |
+
+Data: [docs/iter18A_phase3_final_20260523_060435/](../iter18A_phase3_final_20260523_060435/)
+
+**Read peak post-P3**: 1.18 Mops cluster (T=32) — **1.8× iter-15A baseline**, still ~5.6× short of iter-17A xhost_write peak 6.6 Mops/s。剩余 gap 在 Phase 4 multi-receiver 处补。
+
+### Phase 3 关键洞察
+
+1. **C3 +90% 是 iter-18A 至今最大单点优化** —— 验证了 §2.5 "Stage 4 是 queue 等待，worker 不能加速自己，但 worker 可以让 receiver 通过减少 CXL 噪声" 的假设
+2. **C1 REVERT 暴露**: iter-17A xhost_write 的 lfence opt 不能盲移植到 xhost_read — 写路径里 lfence 适用于"同 host receiver 读自己 write epoch"场景；读路径里 receiver 读 worker 的 req_op_id 是 cross-host CXL，必须 mfence。**优化要看读/写方向 + 内存归属**
+3. **C5 KEEP**: cacheline 共享布局允许跨 stage 共享 flush — Stage 4 flush ready_op_id 同时也 flush 了 st 控制字段（同 cacheline），Stage 5 不需要再 flush。**careful 利用 64B cacheline 共享是隐形优化机会**
+
+Commits: 30a02ed (C1 revert) / 818e2c7 (C3 keep) / 1d04d49 (C3b revert) / 8f5d6c1 (C4 audit) / 7c3e7a1 (C5 keep) / db4b3a2 (C7 revert) / 5f8e9c2 (C8 audit) / 8d2a4e9 (C9 audit) — 详见 git log。
 
 ---
+
+## Part 4 — Phase 4: multi-ring + multi-receiver wire (in progress)
 
 ## Part 4 — Phase 4: multi-ring + multi-receiver wire (pending)
 
