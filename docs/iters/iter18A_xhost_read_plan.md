@@ -165,21 +165,67 @@ Worker (host 0) 发起 GET(key)，key 属 host 1
 
 ---
 
-### Phase 4 — Multi-ring + multi-receiver for read（含 iter-17A 217× 退化 bug 修复）
+### Phase 4 — Multi-ring + multi-receiver for read（含 iter-17A 217× 退化 bug 修复 + 7-group × 2-dist 主对比 sweep）
 
-**目标**: 把 iter-17A 已构筑的 3D ring matrix 在 read 路径上**真正接入并验证**。
+**目标**: 把 iter-17A 已构筑的 3D ring matrix 在 read 路径上**真正接入并验证**，并跑 iter-17A xhost_write 同款 7-group × 2-distribution 对比实验。
+
+#### 4.A — Wire + 修 bug
 
 | 任务 | 交付物 |
 |---|---|
 | 4.1 | 复现 iter-17A 的 YCSB workloadc T=16 N=4 = 0.016 Mops 退化；定位根因（最可能：ReadStagingMatrix 的 ack slot index 与 ReadRingMatrix req slot index 路由不一致；或 ReadRecv 在多 shard 下 spin 在错的 ring）；RCA write-up 含具体源码行号 + 修复方案 |
 | 4.2 | 实现修复，rsync + rebuild g3/g4 |
-| 4.3 | Wire xhost_read 走 `ReadRingMatrix[*][*][shard]` 路径；shard = `compute_ring_idx(key)` 与 write 同 router |
-| 4.4 | Hash-diff 8 cell（N=0 / N=4 / N=8 × Plan A / Plan B）**必须 8/8 PASS** |
-| 4.5 | T-sweep N ∈ {0, 4, 8} × routing ∈ {worker_id, key_hash} × V=1024 zipf-0.99 3 rep |
-| 4.6 | 8-group 对比图（同 iter-17A 风格）：1=iter15A read baseline / 2=iter18A path opt N=0 (Phase 3 末) / 3-5=Plan A N=0/4/8 / 6-8=Plan B N=0/4/8 |
-| 4.7 | uniform 对照同 8-group |
+| 4.3 | Wire xhost_read 走 `ReadRingMatrix[*][*][shard]` 路径；shard = `compute_ring_idx(key)` 与 write 同 router；Plan A worker_id / Plan B key_hash 两 mode 都 wire |
+| 4.4 | Hash-diff 5 cell（按 unique code path 算：N=0、N=4-worker_id、N=4-key_hash、N=8-worker_id、N=8-key_hash）**必须 5/5 PASS**；Plan A N=0 ≡ Plan B N=0 不重测 |
 
-**HARD delivery**: 4.4 hash-diff 8/8 PASS。任何 FAIL 阻断后续。
+**HARD delivery (4.A)**: 4.4 hash-diff 5/5 PASS。任何 FAIL 阻断 4.B sweep。
+
+#### 4.B — 7-group × 2-dist 对比 sweep（参数复刻 [iter17A_scaling_8group_uniform_20260523_000353](../iter17A_scaling_8group_uniform_20260523_000353/grid.csv)）
+
+**Sweep matrix** (与 iter-17A uniform sweep 同 grid):
+
+```
+Workload   : xhost_read
+V          : 1024
+T          : {1, 2, 4, 8, 16, 32, 64}     (7 levels)
+N          : {0, 4, 8}                     (3 levels)
+Routing    : {worker_id, key_hash}         (2 modes)
+Dist       : {uniform, zipf-0.99}          (2)
+Reps       : 3 per cell
+Trace      : iter-15A xhost_read traces (复用; 见下面 §4.C trace 准备)
+```
+
+Cells/dist = 7 T × 3 N × 2 routing = 42 cells × 3 rep = **126 runs/dist** → **252 runs total**（与 iter-17A uniform sweep 126 runs 完全同结构，只是 workload 切到 xhost_read 且加 zipf-0.99 镜像）。
+
+#### 4.C — 7 个 group（横向比较行，与 iter-17A 8-group plot uniform 同 layout）
+
+| Group | 标签 | 数据来源 |
+|---|---|---|
+| **1** | xhost_read path opt N=0（Phase 3 末，single ring + path opt 集成） | 复用 4.B 的 N=0 worker_id 数据（路径等价） |
+| **2** | Plan A worker_id N=0 | 4.B N=0 worker_id |
+| **3** | Plan A worker_id N=4 | 4.B N=4 worker_id |
+| **4** | Plan A worker_id N=8 | 4.B N=8 worker_id |
+| **5** | Plan B key_hash N=0 | 4.B N=0 key_hash（与 Group 2 sanity 对照，应同 thpt） |
+| **6** | Plan B key_hash N=4 | 4.B N=4 key_hash |
+| **7** | Plan B key_hash N=8 | 4.B N=8 key_hash |
+
+Group 1 ≡ Group 2 同代码路径，分两行是为 visual sanity（path opt vs Plan A 同代码 → median 应相等，差 > 噪声即 bug）。
+
+#### 4.D — 交付物
+
+| 任务 | 交付物 |
+|---|---|
+| 4.5 | 跑完 4.B 的 252 runs → 输出 grid.csv（两份 dist：zipf / uniform） |
+| 4.6 | anomaly-scan + 5-rep verify（任意 cell median < 0.1 Mops/s OR < neighbor-geomean/10 → 重测）— §13 gate 5 强制 |
+| 4.7 | **plot 1**: 7-group thpt vs T，zipf-0.99 与 uniform 各一张（log+linear 双 panel，参 `scripts/iter17A_thpt_table_plots.py` 模板）|
+| 4.8 | **plot 2**: 7-group thpt 中位数 table 图，zipf 与 uniform 各一张 |
+| 4.9 | **plot 3**: zipf vs uniform side-by-side + uniform/zipf ratio heatmap（参 `scripts/iter17A_uniform_vs_zipf_compare.py`） |
+| 4.10 | **plot 4**: 8-group speedup heatmap vs iter-15A xhost_read baseline（如果 iter-15A 数据可比，加；否则跳过，记 `gap_to_target.md`） |
+| 4.11 | 关键 finding 写进 iter18A_summary.md：(a) Plan A vs Plan B 跨 dist 的 routing 差，(b) hot-key 集中假设在 read 路径是否成立，(c) packing dilution 在 read 路径是否复现 iter-17A Exp 3 的线性 scaling |
+
+**HARD delivery (4.B-4.D)**: 4.5 全 252 runs 完成；4.7+4.8+4.9 plot 全出（任意 plot 缺失阻断 Phase 5）；4.11 finding 写入 summary。
+
+**Phase 3 path opt regression check**: 4.B 完成后必看 N=0（= Phase 3 末状态）和 N=4 (Plan A worker_id) 的 T-sweep 比较，确保 path opt 改动**在 multi-shard 下不破**（i.e., N=0→N=4 应至少有 ≥1.5× thpt 提升 pre-saturation，与 iter-17A xhost_write 同 trend）。若 N=4 反而 < N=0 → Phase 3 某 commit 与 multi-shard 互动产生 regression → 回查 + 修复（可能需要部分 revert）。
 
 ---
 
@@ -202,12 +248,12 @@ Worker (host 0) 发起 GET(key)，key 属 host 1
 
 ```
 Phase 2  Decomp sweeps:                T 7 + V 4 + dist 4 + perfstat 3 = 18 cells × 3 rep = 54 runs (perfstat 1 rep so 51 runs)
-Phase 3  Per-stage opt smoke tests:    9 candidates × T(8/32/64) × V=1024 × zipf × 3 rep = 81 runs (estimate)
-Phase 4  Multi-ring sweep:             T(7) × N(0/4/8) × routing(2) = 42 cells × 3 rep × 2 dist = 252 runs
+Phase 3  Per-stage opt smoke tests:    8 candidates × T(8/32/64) × V=1024 × zipf × 3 rep = 72 runs (estimate; revert/audit 同样花 runs)
+Phase 4  Multi-ring sweep:             T(7) × N(0/4/8) × routing(2) = 42 cells × 3 rep × 2 dist = 252 runs (与 iter-17A uniform sweep 同 grid 结构 + 加 zipf-0.99 镜像)
 Phase 5  YCSB sanity:                  T(3) × N(2) × 3 rep × 1 workload = 18 runs
 ```
 
-总 sweep 体量 ~400 runs（不含 5-rep 重测 / hash-diff cells）。
+总 sweep 体量 ~400 runs（不含 5-rep 重测 / hash-diff cells / anomaly re-test）。
 
 ---
 
@@ -224,13 +270,36 @@ Phase 5  YCSB sanity:                  T(3) × N(2) × 3 rep × 1 workload = 18 
 
 ---
 
-## 6. 待用户确认（QR1–QR5；QR2 已经在本次 revise 中确定）
+## 6. 待用户确认（决策点；QR2 / QR3 已 resolve）
 
-1. **QR1**: iter-18A 是否独立 iter？或者 merge 进 iter-19A（YCSB validation）作单 iter？建议独立，理由：read decomp + per-stage opt + multi-ring 的代码改动量与 iter-16A/17A 相当，单 iter 单 focus 风险低。
-2. ~~**QR2**: Phase 3 路径优化设计可不可以预选 single-flush？~~ **已确定**：Phase 3 改成逐 stage 迭代，不预选；候选列表由 Phase 2 dominant stage 排序后定。
-3. **QR3** (was QR3): Phase 4 是否要做 8-group 全套对比（含 iter-15A read baseline + Plan B key_hash N=0）？或精简到 5-group（去掉冗余 Plan A N=0 ≡ Plan B N=0 + Plan B N=4 加 iter-17A 已知坏 case）？建议**全 8-group**，与 iter-17A 报告对齐方便横向比较。
-4. **QR4** (was QR4): Phase 5 YCSB sanity 用 workloadc only 还是含 workloada（50 % 写 + 50 % 读）？建议 **workloadc only**；workloada 已混入 write path，无法单独验 read。
-5. **QR5** (was QR5): 跨 iter 性能门槛设？建议 read peak ≥ 8 Mops/s（粗略推算 iter-17A write 6.6 Mops/s × 1.2 因子，read 无 inval broadcast）。**可商榷**。
+### 已决策
+- ~~**QR2** Phase 3 是否预选 single-flush opt~~ → **不预选**，Phase 3 改为逐 stage 迭代，候选清单由 Phase 2 dominant stage 排序后动态定
+- ~~**QR3** Phase 4 8-group vs 7-group~~ → **7-group**（与 iter-17A uniform sweep 同 layout：跳过 iter-15A baseline group）
+- ~~**Phase 0 是否保留**~~ → **删除**（与 Phase 2 baseline + Phase 4.1 RCA 重复）
+
+### 仍待决策
+1. **QR1** — iter-18A 是否独立 iter？还是 merge 进 iter-19A（YCSB validation）作单 iter？
+   - **建议独立**。Phase 1+2+3+4 全套代码改动量 ≈ iter-16A + iter-17A 之和，混入 iter-19A 风险高；iter-15A/16A/17A 都是单 focus，节奏稳。
+2. **QR4** — Phase 5 YCSB sanity 用 workloadc only 还是含 workloada（50%R+50%U）？
+   - **建议 workloadc only**。workloada 混 write path，无法单独验 read；workload 隔离更纯。
+3. **QR5** — read peak 性能门槛？
+   - **建议 ≥ 8 Mops/s** 集群峰值（粗推算: iter-17A write 6.6 Mops/s × 1.2 因子，read 无 inval broadcast 故应略快）。
+   - 若太激进可改 ≥ 6.6 Mops/s（与 write 持平）；保守目标但合理。
+4. **QR6** (新) — Phase 3 smoke test T grid 用 {8, 32, 64} 三点还是全 7 T？
+   - **建议 {8, 32, 64}**。iter-17A xhost_write opt 也用 3 点；够看 small/mid/sat 区，节省 (7-3)/7 = 57 % 时间；如果 keep 决策边缘可选择性补全 T。
+5. **QR7** (新) — Phase 3 8 候选清单 + Phase 2 decomp 后发现新 hotspot，允许追加 candidate 吗？
+   - **建议允许追加**，但每追加 candidate 同样走 ≤ 2 LOC + smoke + audit note 流程。
+6. **QR8** (新) — Phase 1 probe-on vs probe-off thpt 差现在硬限 ≤ 5 %。读路径 op 比写短（无 inval broadcast），probe 占比可能更高，可能突破 5 %。怎么办？
+   - **建议门槛放宽到 ≤ 10 %**；若仍突破则砍 inner sub-probe，只留 stage 边界 probe（probe 数从 ≥10 降到 ~6）。
+7. **QR9** (新) — Phase 4 是否复用 iter-15A 现有 xhost_read trace（`setup/iter15A_microbench_traces/bench_xhost_read_*`）？
+   - **建议复用**。trace gen 参数 (num_load=2M, num_trans=5M) 与 iter-17A xhost_write 同；rsync 到 g3/g4 `/tmp/microbench_traces/` 即可。新生成长 trace 仅在需要 perf 抽样时（Phase 2.4 perfstat 可能要 20M trans）才必要，到时单独 gen。
+8. **QR10** (新) — Phase 4 7-group plot 是否也要 zipf 集成视图 (uniform vs zipf 对比 + 比例 heatmap, 同 iter-17A `uniform_vs_zipf_compare.png`)?
+   - **建议要**。两 dist 单独看不够，比例 heatmap 是 iter-17A Supp 2 (uniform / zipf ratio) 的核心证据形式；iter-18A 应该输出同款来印证 / 推翻 hot-key 假设在 read 路径的镜像版本。
+9. **QR11** (新) — Phase 3 "累计 ≥ 10 % 全 T 段提升 vs Phase 2.1 baseline" 这个 gate 太严吗？
+   - **建议保留**。iter-17A xhost_write 7-commit 累计 +21+22+27+36-37 % 远超 10 % 门槛；read 路径 stage 数和优化空间相当；若严肃做完所有 8 candidates 难以 ≤ 10 %。
+   - 若不达：表示 read 路径已经接近最优，应将 finding 写入总结然后照常进 Phase 4，不阻断。
+10. **QR12** (新) — Build dir 用 `build-cxl-w1-v1024`（iter-17A 同）还是新建 iter-18A 专用？
+    - **建议同 build**。V=1024 是主战 grid，编译开关 (`FUSEE_PROBE`, `FUSEE_READ_PROBE` 待加) 已支持隔离；新建 build 多余且增加 rsync 体积。
 
 ---
 
@@ -254,11 +323,16 @@ iter-18A 关 iter 前必须填这张表 + 每行解释（任何 ⚠/❌ 没用�
 | 3.2 | 累计 keep 改动 ≥10 % 全 T 段提升 vs Phase 2.1 baseline | _填_ | ✅/⚠/❌ |
 | 4.1 | 217× 退化 RCA 含源码行 + 修复方案 | _填_ | ✅/⚠/❌ |
 | 4.2 | bug 修复 + 部署 | _填_ | ✅/⚠/❌ |
-| 4.3 | xhost_read wire 多 shard 路径通 | _填_ | ✅/⚠/❌ |
-| 4.4 | hash-diff 8/8 PASS | _填_ | ✅/⚠/❌ |
-| 4.5 | T-sweep × N × routing × zipf 3 rep | _填_ | ✅/⚠/❌ |
-| 4.6 | 8-group 对比图 zipf-0.99 | _填_ | ✅/⚠/❌ |
-| 4.7 | 8-group 对比图 uniform | _填_ | ✅/⚠/❌ |
+| 4.3 | xhost_read 走 ReadRingMatrix[*][*][shard] wire 通；Plan A worker_id 与 Plan B key_hash 两 mode 都 wire | _填_ | ✅/⚠/❌ |
+| 4.4 | hash-diff 5/5 PASS（unique code path: N=0 / N=4-wid / N=4-kh / N=8-wid / N=8-kh） | _填_ | ✅/⚠/❌ |
+| 4.5 | 7T × 3N × 2 routing × 2 dist × 3 rep = 252 runs 跑齐 | _填_ | ✅/⚠/❌ |
+| 4.6 | §13 gate 5 anomaly-scan 零 unexplained outlier | _填_ | ✅/⚠/❌ |
+| 4.7 | plot: 7-group thpt vs T (zipf 一张, uniform 一张, log+linear) | _填_ | ✅/⚠/❌ |
+| 4.8 | plot: 7-group thpt 中位数 table 图 (zipf + uniform) | _填_ | ✅/⚠/❌ |
+| 4.9 | plot: uniform vs zipf 对比图 + ratio heatmap | _填_ | ✅/⚠/❌ |
+| 4.10 | plot: speedup heatmap vs iter-15A baseline（可选） | _填_ | ✅/⚠/❌ |
+| 4.11 | iter18A_summary §"7-group findings" (Plan A/B + hot-key + packing) | _填_ | ✅/⚠/❌ |
+| 4.regression | Phase 3 path opt 在 multi-shard 不破：N=4 ≥ 1.5× N=0 pre-sat | _填_ | ✅/⚠/❌ |
 | 5.1 | YCSB workloadc T×N×3 rep 跑齐 | _填_ | ✅/⚠/❌ |
 | 5.2 | N=4 ≥ 50 % N=0 baseline | _填_ | ✅/⚠/❌ |
 
