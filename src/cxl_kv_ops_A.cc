@@ -2241,13 +2241,16 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   uint64_t my_epoch_at_send =
       cache_ ? cache_pool_bucket_epoch(cache_, key) : 0;
 
-  // Clear staging slot's ready_op_id so we don't observe prior
-  // user's stale signal. Owner will re-publish with our op_id.
+  // iter-18A C8: combine staging-clear sfence + req-publish sfence into
+  // one sfence at end of Stage 3. The two flushed lines (st->ready_op_id
+  // and e->req_op_id) are on different cachelines and have INDEPENDENT
+  // ordering requirements (clear must precede Stage 4 spin; req_op_id
+  // must precede receiver pickup) — a single store_fence at the end
+  // covers both. Saves one sfence/op.
   ReadStagingSlot *st =
       read_staging_slot(rs_, host_id_, (int)owner, (int)slot_idx);
   st->ready_op_id.store(0, std::memory_order_release);
   flush_line(&st->ready_op_id);
-  store_fence();
 
   e->key = key;
   e->resp_op_id.store(0, std::memory_order_relaxed);
