@@ -2247,8 +2247,10 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   // ordering requirements (clear must precede Stage 4 spin; req_op_id
   // must precede receiver pickup) — a single store_fence at the end
   // covers both. Saves one sfence/op.
+  // iter-18A Phase 4: route staging to per-shard slot (ring_idx) to
+  // mirror ReadRingMatrix 3D layout; fixes iter-17A 217× retreat.
   ReadStagingSlot *st =
-      read_staging_slot(rs_, host_id_, (int)owner, (int)slot_idx);
+      read_staging_slot(rs_, host_id_, (int)owner, ring_idx, (int)slot_idx);
   st->ready_op_id.store(0, std::memory_order_release);
   flush_line(&st->ready_op_id);
 
@@ -2500,7 +2502,7 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
 // Legacy resp_op_id/resp_blk_off/resp_value_len on the ReadEntry are
 // still set for protocol compatibility but no longer consulted by the
 // new reader path.
-void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
+void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slot_idx) {
   PATH_CTR(n_read_handler_served);  // iter-15A HR-2 gate anchor
   uint64_t req_op_id = e->req_op_id.load(std::memory_order_acquire);
   uint32_t b = bucket_idx(e->key);
@@ -2514,7 +2516,7 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
   int nlevel = recv_noop_level();
   if (nlevel >= 2) {
     ReadStagingSlot *st_noop =
-        read_staging_slot(rs_, src, host_id_, (int)slot_idx);
+        read_staging_slot(rs_, src, host_id_, ring_idx, (int)slot_idx);
     if (nlevel >= 3) {
       // L3: pure ack
       st_noop->key = e->key;
@@ -2561,7 +2563,7 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, uint32_t slot_idx) {
   uint64_t lookup_epoch =
       cache_ ? cache_pool_bucket_epoch(cache_, e->key) : 0;
   ReadStagingSlot *st =
-      read_staging_slot(rs_, src, host_id_, (int)slot_idx);
+      read_staging_slot(rs_, src, host_id_, ring_idx, (int)slot_idx);
 
   auto publish_staging = [&](int32_t st_status, uint32_t vlen) {
     st->key = e->key;
@@ -2779,7 +2781,7 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
         PROBE_READ_OP("XRR1E", op_id);
         // iter-11A Phase 1: pass slot_idx so read_handler can deposit
         // value bytes directly into rs_[src][me][slot_idx].
-        read_handler(e, src, slot);
+        read_handler(e, src, ring_idx, slot);
         // iter-18A Stage RR2 end ≡ Stage RR3 (ack publish) start.
         PROBE_READ_OP("XRR2E", op_id);
 

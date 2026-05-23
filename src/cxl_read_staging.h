@@ -21,9 +21,15 @@
 //     after copy. Stale = retry.
 //
 // Per-host CXL footprint (defaults: kReadMaxHosts=4,
-// kReadRingDepth=256, kReadStagingSlotBytes=1024):
+// kReadRingDepth=256, kRingShardsMax=16, kReadStagingSlotBytes=1024):
 //
-//   ReadStagingMatrix = 4 * 4 * 256 * (1024 + 64)  =  ~4.4 MiB
+//   iter-11A 2D: 4 * 4 * 256 * (1024 + 64)  =  ~4.4 MiB
+//   iter-18A 3D: 4 * 4 * 16 * 256 * (1024 + 64)  =  ~70 MiB
+//
+// iter-18A (Phase 4): shard dimension added to match ReadRingMatrix
+// 3D layout. Without it, all multi-shard ring requests map to the
+// SAME staging slot, causing race + corruption (root cause of
+// iter-17A 217× YCSB workloadc N=4 retreat).
 //
 // Slot layout per ReadStagingSlot (64-aligned for cacheline ownership):
 //   - cacheline 0 (control): { ready_epoch (atomic), key, value_size,
@@ -38,6 +44,7 @@
 #include <cstdint>
 
 #include "cxl_read_ring.h"
+#include "cxl_write_ring.h"  // kRingShardsMax
 
 namespace fusee {
 
@@ -65,11 +72,13 @@ static_assert(sizeof(ReadStagingSlot) == 64 + kReadStagingSlotBytes,
               "ReadStagingSlot must be 1 control cacheline + 1024B payload");
 
 struct ReadStagingMatrix {
-  // slots[req_host][owner_host][slot_idx] = the response staging slot
-  // for ReadRing[req_host][owner_host].entries[slot_idx]. The forwarder
-  // (owner) writes; the requester (req_host) polls + reads.
+  // iter-18A Phase 4: slots[req_host][owner_host][shard][slot_idx]
+  // mirrors ReadRingMatrix.rings[req][owner][shard].entries[slot].
+  // For each (req,owner) pair, each ring shard has its OWN staging
+  // slots, so concurrent ops on different shards never collide.
   ReadStagingSlot slots[kReadStagingMaxHosts]
                        [kReadStagingMaxHosts]
+                       [kRingShardsMax]
                        [kReadStagingDepth];
 };
 
@@ -79,8 +88,8 @@ inline std::size_t read_staging_matrix_bytes() {
 
 inline ReadStagingSlot *read_staging_slot(ReadStagingMatrix *rsm,
                                           int req_host, int owner_host,
-                                          int slot_idx) {
-  return &rsm->slots[req_host][owner_host][slot_idx];
+                                          int shard, int slot_idx) {
+  return &rsm->slots[req_host][owner_host][shard][slot_idx];
 }
 
 }  // namespace fusee

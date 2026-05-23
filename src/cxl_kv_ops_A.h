@@ -288,7 +288,9 @@ class CxlKvStoreA {
   // src is the originating host id (decoded from req_op_id high bits).
   void write_handler(WriteEntry *e, int src);
   // iter-11A Phase 1: slot_idx required for ReadStaging direct-deposit.
-  void read_handler(ReadEntry *e, int src, uint32_t slot_idx);
+  // iter-18A Phase 4: ring_idx added so ReadStaging is per-shard
+  // (fixes iter-17A multi-shard collision bug).
+  void read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slot_idx);
 
   CxlKvBucket *buckets_ = nullptr;
   uint32_t num_buckets_ = 0;
