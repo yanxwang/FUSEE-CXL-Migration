@@ -2783,7 +2783,11 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
         // iter-18A Stage RR2 end ≡ Stage RR3 (ack publish) start.
         PROBE_READ_OP("XRR2E", op_id);
 
-        std::atomic_thread_fence(std::memory_order_release);
+        // iter-18A C9: removed redundant std::atomic_thread_fence(release)
+        // before resp_op_id store. read_handler's publish_staging already
+        // ended with store_fence(); resp_op_id.store has release semantics.
+        // The thread-fence was a no-op on x86 (compiler-only barrier
+        // dominated by the prior sfence).
         e->resp_op_id.store(op_id, std::memory_order_release);
         flush_line((void *)&e->resp_op_id);
         store_fence();

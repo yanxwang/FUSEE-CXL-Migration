@@ -1,0 +1,27 @@
+[A:cfg] ring_sharding T=8 N=0 (disabled) -> shards=1 block=8 routing=worker_id
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=87224)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=87225)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=87226)
+[A:thread] Worker pinned host=1 client=4 -> cpu=4 (pid=87227)
+[A:thread] Worker pinned host=1 client=5 -> cpu=5 (pid=87228)
+[A:thread] Worker pinned host=1 client=6 -> cpu=6 (pid=87229)
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=87201)
+[A:thread] Worker pinned host=1 client=7 -> cpu=7 (pid=87230)
+[A:thread] WriteRecv0 pid=87201 tid=140631821743808 cpu=64 host=1 rings=[0]
+[A:thread] ReadRecv0 pid=87201 tid=140631813351104 cpu=65 host=1 rings=[0]
+[A:thread] InvalRecv0 pid=87201 tid=140631804958400 cpu=66 host=1 rings=[0]
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=6 entries=1024 (~1088 KiB)
+[A:thread] ReservHandler pid=87201 tid=140631754938048 pinned cpu=85 (host_id=1)
+# PATH host=1 label=after_LOAD tid=140631821957248 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999067 cp_evict=0 cp_set_stale=0 cp_lru_evict=485111 rh_served=0
+# PATH host=1 label=after_LOAD tid=140631813351104 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=4110
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999067 cp_evict=0 cp_set_stale=0 cp_lru_evict=485111 rh_served=4110
+# PATH host=1 label=after_TRANS tid=140631821957248 r0_tls=0 r2hit=194543 r2miss_local=0 r3=117957 cpool_ins_r=22057 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999067 cp_evict=0 cp_set_stale=0 cp_lru_evict=506352 rh_served=0
+# PATH host=1 label=after_TRANS tid=140631813351104 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=903014
+# PATH host=1 label=after_TRANS AGG r0_tls=0 r2hit=194543 r2miss_local=0 r3=117957 cpool_ins_r=22057 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999067 cp_evict=0 cp_set_stale=0 cp_lru_evict=506352 rh_served=903014
