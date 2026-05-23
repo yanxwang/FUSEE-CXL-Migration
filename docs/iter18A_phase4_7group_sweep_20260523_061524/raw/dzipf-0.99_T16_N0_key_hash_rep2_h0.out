@@ -1,0 +1,45 @@
+[A:cfg] ring_sharding T=16 N=0 (disabled) -> shards=1 block=16 routing=key_hash
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=111509)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=111510)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=111511)
+[A:thread] Worker pinned host=0 client=4 -> cpu=4 (pid=111512)
+[A:thread] Worker pinned host=0 client=5 -> cpu=5 (pid=111513)
+[A:thread] Worker pinned host=0 client=6 -> cpu=6 (pid=111514)
+[A:thread] Worker pinned host=0 client=7 -> cpu=7 (pid=111515)
+[A:thread] Worker pinned host=0 client=8 -> cpu=8 (pid=111516)
+[A:thread] Worker pinned host=0 client=9 -> cpu=9 (pid=111517)
+[A:thread] Worker pinned host=0 client=10 -> cpu=10 (pid=111518)
+[A:thread] Worker pinned host=0 client=11 -> cpu=11 (pid=111519)
+[A:thread] Worker pinned host=0 client=12 -> cpu=12 (pid=111520)
+[A:thread] Worker pinned host=0 client=13 -> cpu=13 (pid=111521)
+[A:thread] Worker pinned host=0 client=14 -> cpu=14 (pid=111522)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=111485)
+[A:thread] Worker pinned host=0 client=15 -> cpu=15 (pid=111523)
+[A:thread] WriteRecv0 pid=111485 tid=140103686239936 cpu=64 host=0 rings=[0]
+[A:thread] ReadRecv0 pid=111485 tid=140103677847232 cpu=65 host=0 rings=[0]
+[A:thread] InvalRecv0 pid=111485 tid=140103669454528 cpu=66 host=0 rings=[0]
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=14 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=8 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=11 entries=1024 (~1088 KiB)
+[A:thread] ReservHandler pid=111485 tid=140103619434176 pinned cpu=85 (host_id=0)
+# PATH host=0 label=after_LOAD tid=140103686453376 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=0
+# PATH host=0 label=after_LOAD tid=140103677847232 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=6679
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=6679
+YCSB opt=A cache=0 num_hosts=2 threads=16 threads_eff=16 rep=2 load_ops=2000000 load_thpt=341335 trans_ops=5000000 trans_wall_max=4.470272 trans_agg_thpt=1118499 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=8519 r_p50_ns=348 r_p99_ns=80628 first_op_ns_max=230982 first_op_ns_avg=83903 ops_to_first_ns_max=426057 ops_to_first_ns_avg=120491 # xhost_read_optA_t16_cacheoff_rep2
+# PATH host=0 label=after_TRANS tid=140103686453376 r0_tls=0 r2hit=95687 r2miss_local=0 r3=60563 cpool_ins_r=11589 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=497856 rh_served=0
+# PATH host=0 label=after_TRANS tid=140103677847232 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=940337
+# PATH host=0 label=after_TRANS AGG r0_tls=0 r2hit=95687 r2miss_local=0 r3=60563 cpool_ins_r=11589 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=497856 rh_served=940337
+# CACHE_FILL host=0 cache_buckets=131072 capacity=524288 filled=520263 stale=0 tomb=0 fill_pct=99.232

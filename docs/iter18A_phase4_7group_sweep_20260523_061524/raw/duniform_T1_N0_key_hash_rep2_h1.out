@@ -1,0 +1,12 @@
+[A:cfg] ring_sharding T=1 N=0 (disabled) -> shards=1 block=1 routing=key_hash
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=91647)
+[A:thread] WriteRecv0 pid=91647 tid=139885733209792 cpu=64 host=1 rings=[0]
+[A:thread] ReadRecv0 pid=91647 tid=139885724817088 cpu=65 host=1 rings=[0]
+[A:thread] InvalRecv0 pid=91647 tid=139885716424384 cpu=66 host=1 rings=[0]
+[A:thread] ReservHandler pid=91647 tid=139885708031680 pinned cpu=85 (host_id=1)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+# PATH host=1 label=after_LOAD tid=139885733423232 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500791 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976503 rh_served=0
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500791 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976503 rh_served=0
+# PATH host=1 label=after_TRANS tid=139885733423232 r0_tls=0 r2hit=132111 r2miss_local=0 r3=2367889 cpool_ins_r=704042 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500791 cp_evict=0 cp_set_stale=0 cp_lru_evict=2680545 rh_served=0
+# PATH host=1 label=after_TRANS tid=139885724817088 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=2367036
+# PATH host=1 label=after_TRANS AGG r0_tls=0 r2hit=132111 r2miss_local=0 r3=2367889 cpool_ins_r=704042 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500791 cp_evict=0 cp_set_stale=0 cp_lru_evict=2680545 rh_served=2367036

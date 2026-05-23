@@ -1,0 +1,44 @@
+[A:cfg] ring_sharding T=16 N=8 -> shards=2 block=8 routing=worker_id
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=112248)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=112249)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=112250)
+[A:thread] Worker pinned host=0 client=4 -> cpu=4 (pid=112251)
+[A:thread] Worker pinned host=0 client=5 -> cpu=5 (pid=112252)
+[A:thread] Worker pinned host=0 client=6 -> cpu=6 (pid=112253)
+[A:thread] Worker pinned host=0 client=7 -> cpu=7 (pid=112254)
+[A:thread] Worker pinned host=0 client=8 -> cpu=8 (pid=112255)
+[A:thread] Worker pinned host=0 client=9 -> cpu=9 (pid=112256)
+[A:thread] Worker pinned host=0 client=10 -> cpu=10 (pid=112257)
+[A:thread] Worker pinned host=0 client=11 -> cpu=11 (pid=112258)
+[A:thread] Worker pinned host=0 client=12 -> cpu=12 (pid=112259)
+[A:thread] Worker pinned host=0 client=13 -> cpu=13 (pid=112260)
+[A:thread] Worker pinned host=0 client=14 -> cpu=14 (pid=112261)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=112223)
+[A:thread] Worker pinned host=0 client=15 -> cpu=15 (pid=112262)
+[A:thread] WriteRecv0 pid=112223 tid=140136688191168 cpu=64 host=0 rings=[0]
+[A:thread] WriteRecv1 pid=112223 tid=140136679798464 cpu=65 host=0 rings=[1]
+[A:thread] ReadRecv0 pid=112223 tid=140136671405760 cpu=66 host=0 rings=[0]
+[A:thread] ReadRecv1 pid=112223 tid=140136621385408 cpu=67 host=0 rings=[1]
+[A:thread] InvalRecv0 pid=112223 tid=140136612992704 cpu=68 host=0 rings=[0]
+[A:thread] InvalRecv1 pid=112223 tid=140136604600000 cpu=69 host=0 rings=[1]
+[A:thread] ReservHandler pid=112223 tid=140136260040384 pinned cpu=85 (host_id=0)
+[A:tls] worker host=0 client=8 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=11 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=14 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+# PATH host=0 label=after_LOAD tid=140136688404608 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=0
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=0
+YCSB opt=A cache=0 num_hosts=2 threads=16 threads_eff=16 rep=2 load_ops=2000000 load_thpt=340686 trans_ops=5000000 trans_wall_max=2.444226 trans_agg_thpt=2045637 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=4947 r_p50_ns=359 r_p99_ns=45537 first_op_ns_max=121700 first_op_ns_avg=53758 ops_to_first_ns_max=236524 ops_to_first_ns_avg=78205 # xhost_read_optA_t16_cacheoff_rep2
+bash: line 1: 112223 Segmentation fault      FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=16 FUSEE_RUN_COOKIE=3059426593 FUSEE_REP=2 FUSEE_CACHE=0 FUSEE_WORKLOAD_NAME=xhost_read FUSEE_KV_SIZE=1024 FUSEE_CACHE_BUCKETS=131072 FUSEE_RING_SHARDS_FACTOR=8 FUSEE_RING_ROUTING=worker_id ./tests/protocol_a_ycsb /dev/dax0.0 /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_load /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_trans 8388608 5000000 2>&1

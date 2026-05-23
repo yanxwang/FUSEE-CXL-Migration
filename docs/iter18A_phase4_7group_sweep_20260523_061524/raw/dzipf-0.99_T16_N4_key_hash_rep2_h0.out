@@ -1,0 +1,54 @@
+[A:cfg] ring_sharding T=16 N=4 -> shards=4 block=4 routing=key_hash
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=111985)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=111986)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=111987)
+[A:thread] Worker pinned host=0 client=4 -> cpu=4 (pid=111988)
+[A:thread] Worker pinned host=0 client=5 -> cpu=5 (pid=111989)
+[A:thread] Worker pinned host=0 client=6 -> cpu=6 (pid=111990)
+[A:thread] Worker pinned host=0 client=7 -> cpu=7 (pid=111991)
+[A:thread] Worker pinned host=0 client=8 -> cpu=8 (pid=111992)
+[A:thread] Worker pinned host=0 client=9 -> cpu=9 (pid=111993)
+[A:thread] Worker pinned host=0 client=10 -> cpu=10 (pid=111994)
+[A:thread] Worker pinned host=0 client=11 -> cpu=11 (pid=111995)
+[A:thread] Worker pinned host=0 client=12 -> cpu=12 (pid=111996)
+[A:thread] Worker pinned host=0 client=13 -> cpu=13 (pid=111997)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=111984)
+[A:thread] Worker pinned host=0 client=14 -> cpu=14 (pid=111998)
+[A:thread] Worker pinned host=0 client=15 -> cpu=15 (pid=111999)
+[A:thread] WriteRecv0 pid=111984 tid=140144659871424 cpu=64 host=0 rings=[0]
+[A:thread] WriteRecv1 pid=111984 tid=140144651478720 cpu=65 host=0 rings=[1]
+[A:thread] WriteRecv2 pid=111984 tid=140144643086016 cpu=66 host=0 rings=[2]
+[A:thread] WriteRecv3 pid=111984 tid=140144593065664 cpu=67 host=0 rings=[3]
+[A:thread] ReadRecv0 pid=111984 tid=140144514430656 cpu=68 host=0 rings=[0]
+[A:thread] ReadRecv1 pid=111984 tid=140144506037952 cpu=69 host=0 rings=[1]
+[A:thread] ReadRecv2 pid=111984 tid=140144497645248 cpu=70 host=0 rings=[2]
+[A:thread] ReadRecv3 pid=111984 tid=140144489252544 cpu=71 host=0 rings=[3]
+[A:thread] InvalRecv0 pid=111984 tid=140144480859840 cpu=72 host=0 rings=[0]
+[A:thread] InvalRecv1 pid=111984 tid=140144472467136 cpu=73 host=0 rings=[1]
+[A:thread] InvalRecv2 pid=111984 tid=140144464074432 cpu=74 host=0 rings=[2]
+[A:thread] InvalRecv3 pid=111984 tid=140144245995200 cpu=75 host=0 rings=[3]
+[A:thread] ReservHandler pid=111984 tid=140144237602496 pinned cpu=85 (host_id=0)
+[A:tls] worker host=0 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=14 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=11 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=8 entries=1024 (~1088 KiB)
+# PATH host=0 label=after_LOAD tid=140144660084864 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=0
+# PATH host=0 label=after_LOAD tid=140144514430656 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=35035
+# PATH host=0 label=after_LOAD tid=140144497645248 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=33949
+# PATH host=0 label=after_LOAD tid=140144489252544 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=49292
+# PATH host=0 label=after_LOAD tid=140144506037952 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=28204
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=146480
+YCSB opt=A cache=0 num_hosts=2 threads=16 threads_eff=16 rep=2 load_ops=2000000 load_thpt=337327 trans_ops=5000000 trans_wall_max=1.364589 trans_agg_thpt=3664104 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=2983 r_p50_ns=351 r_p99_ns=44333 first_op_ns_max=235621 first_op_ns_avg=56459 ops_to_first_ns_max=306883 ops_to_first_ns_avg=84160 # xhost_read_optA_t16_cacheoff_rep2
+bash: line 1: 111984 Segmentation fault      FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=16 FUSEE_RUN_COOKIE=750525610 FUSEE_REP=2 FUSEE_CACHE=0 FUSEE_WORKLOAD_NAME=xhost_read FUSEE_KV_SIZE=1024 FUSEE_CACHE_BUCKETS=131072 FUSEE_RING_SHARDS_FACTOR=4 FUSEE_RING_ROUTING=key_hash ./tests/protocol_a_ycsb /dev/dax0.0 /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_load /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_trans 8388608 5000000 2>&1

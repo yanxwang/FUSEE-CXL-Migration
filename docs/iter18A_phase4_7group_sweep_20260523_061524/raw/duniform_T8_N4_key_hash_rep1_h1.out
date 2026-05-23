@@ -1,0 +1,29 @@
+[A:cfg] ring_sharding T=8 N=4 -> shards=2 block=4 routing=key_hash
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=97300)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=97301)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=97302)
+[A:thread] Worker pinned host=1 client=4 -> cpu=4 (pid=97303)
+[A:thread] Worker pinned host=1 client=5 -> cpu=5 (pid=97304)
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=97276)
+[A:thread] Worker pinned host=1 client=6 -> cpu=6 (pid=97305)
+[A:thread] Worker pinned host=1 client=7 -> cpu=7 (pid=97306)
+[A:thread] WriteRecv0 pid=97276 tid=139708619060928 cpu=64 host=1 rings=[0]
+[A:thread] WriteRecv1 pid=97276 tid=139708610668224 cpu=65 host=1 rings=[1]
+[A:thread] ReadRecv0 pid=97276 tid=139708602275520 cpu=66 host=1 rings=[0]
+[A:thread] ReadRecv1 pid=97276 tid=139708593882816 cpu=67 host=1 rings=[1]
+[A:thread] InvalRecv0 pid=97276 tid=139708585490112 cpu=68 host=1 rings=[0]
+[A:thread] InvalRecv1 pid=97276 tid=139708577097408 cpu=69 host=1 rings=[1]
+[A:thread] ReservHandler pid=97276 tid=139708568704704 pinned cpu=85 (host_id=1)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=6 entries=1024 (~1088 KiB)
+# PATH host=1 label=after_LOAD tid=139708619274368 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500794 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976506 rh_served=0
+# PATH host=1 label=after_LOAD tid=139708602275520 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=35841
+# PATH host=1 label=after_LOAD tid=139708593882816 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=36155
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500794 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976506 rh_served=71996
+bash: line 1: 97276 Segmentation fault      FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=1 FUSEE_NUM_THREADS=8 FUSEE_RUN_COOKIE=1185429576 FUSEE_REP=1 FUSEE_CACHE=0 FUSEE_WORKLOAD_NAME=xhost_read FUSEE_KV_SIZE=1024 FUSEE_CACHE_BUCKETS=131072 FUSEE_RING_SHARDS_FACTOR=4 FUSEE_RING_ROUTING=key_hash ./tests/protocol_a_ycsb /dev/dax0.0 /tmp/microbench_traces/bench_xhost_read_uniform_h1.spec_load /tmp/microbench_traces/bench_xhost_read_uniform_h1.spec_trans 8388608 5000000 2>&1

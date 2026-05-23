@@ -1,0 +1,14 @@
+[A:cfg] ring_sharding T=1 N=8 -> shards=1 block=1 routing=worker_id
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=93558)
+[A:thread] WriteRecv0 pid=93558 tid=140579798361792 cpu=64 host=0 rings=[0]
+[A:thread] ReadRecv0 pid=93558 tid=140579789969088 cpu=65 host=0 rings=[0]
+[A:thread] InvalRecv0 pid=93558 tid=140579781576384 cpu=66 host=0 rings=[0]
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:thread] ReservHandler pid=93558 tid=140579773183680 pinned cpu=85 (host_id=0)
+# PATH host=0 label=after_LOAD tid=140579798575232 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976246 rh_served=0
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976246 rh_served=0
+YCSB opt=A cache=0 num_hosts=2 threads=1 threads_eff=1 rep=2 load_ops=5000000 load_thpt=340765 trans_ops=5000000 trans_wall_max=19.450598 trans_agg_thpt=257061 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=9271 r_p50_ns=10669 r_p99_ns=12521 first_op_ns_max=20157 first_op_ns_avg=15308 ops_to_first_ns_max=52547 ops_to_first_ns_avg=46000 # xhost_read_optA_t1_cacheoff_rep2
+# PATH host=0 label=after_TRANS tid=140579798575232 r0_tls=0 r2hit=132975 r2miss_local=0 r3=2367025 cpool_ins_r=711253 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=2687499 rh_served=0
+# PATH host=0 label=after_TRANS tid=140579789969088 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=2367884
+# PATH host=0 label=after_TRANS AGG r0_tls=0 r2hit=132975 r2miss_local=0 r3=2367025 cpool_ins_r=711253 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=2687499 rh_served=2367884
+# CACHE_FILL host=0 cache_buckets=131072 capacity=524288 filled=524288 stale=0 tomb=0 fill_pct=100.000

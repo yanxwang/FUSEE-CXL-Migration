@@ -1,0 +1,86 @@
+[A:cfg] ring_sharding T=32 N=8 -> shards=4 block=8 routing=key_hash
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=114338)
+[A:thread] Worker pinned host=0 client=2 -> cpu=2 (pid=114339)
+[A:thread] Worker pinned host=0 client=3 -> cpu=3 (pid=114340)
+[A:thread] Worker pinned host=0 client=4 -> cpu=4 (pid=114341)
+[A:thread] Worker pinned host=0 client=5 -> cpu=5 (pid=114342)
+[A:thread] Worker pinned host=0 client=6 -> cpu=6 (pid=114343)
+[A:thread] Worker pinned host=0 client=7 -> cpu=7 (pid=114344)
+[A:thread] Worker pinned host=0 client=8 -> cpu=8 (pid=114345)
+[A:thread] Worker pinned host=0 client=9 -> cpu=9 (pid=114346)
+[A:thread] Worker pinned host=0 client=10 -> cpu=10 (pid=114347)
+[A:thread] Worker pinned host=0 client=11 -> cpu=11 (pid=114348)
+[A:thread] Worker pinned host=0 client=12 -> cpu=12 (pid=114349)
+[A:thread] Worker pinned host=0 client=13 -> cpu=13 (pid=114350)
+[A:thread] Worker pinned host=0 client=14 -> cpu=14 (pid=114351)
+[A:thread] Worker pinned host=0 client=15 -> cpu=15 (pid=114352)
+[A:thread] Worker pinned host=0 client=16 -> cpu=16 (pid=114353)
+[A:thread] Worker pinned host=0 client=17 -> cpu=17 (pid=114354)
+[A:thread] Worker pinned host=0 client=18 -> cpu=18 (pid=114355)
+[A:thread] Worker pinned host=0 client=19 -> cpu=19 (pid=114356)
+[A:thread] Worker pinned host=0 client=20 -> cpu=20 (pid=114357)
+[A:thread] Worker pinned host=0 client=21 -> cpu=21 (pid=114358)
+[A:thread] Worker pinned host=0 client=22 -> cpu=22 (pid=114359)
+[A:thread] Worker pinned host=0 client=23 -> cpu=23 (pid=114360)
+[A:thread] Worker pinned host=0 client=24 -> cpu=24 (pid=114361)
+[A:thread] Worker pinned host=0 client=25 -> cpu=25 (pid=114362)
+[A:thread] Worker pinned host=0 client=26 -> cpu=26 (pid=114363)
+[A:thread] Worker pinned host=0 client=27 -> cpu=27 (pid=114364)
+[A:thread] Worker pinned host=0 client=28 -> cpu=28 (pid=114365)
+[A:thread] Worker pinned host=0 client=29 -> cpu=29 (pid=114366)
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=114321)
+[A:thread] Worker pinned host=0 client=30 -> cpu=30 (pid=114367)
+[A:thread] Worker pinned host=0 client=31 -> cpu=31 (pid=114368)
+[A:thread] WriteRecv0 pid=114321 tid=140318919907008 cpu=64 host=0 rings=[0]
+[A:thread] WriteRecv1 pid=114321 tid=140318911514304 cpu=65 host=0 rings=[1]
+[A:thread] WriteRecv3 pid=114321 tid=140318853101248 cpu=67 host=0 rings=[3]
+[A:thread] WriteRecv2 pid=114321 tid=140318903121600 cpu=66 host=0 rings=[2]
+[A:thread] ReadRecv0 pid=114321 tid=140318844708544 cpu=68 host=0 rings=[0]
+[A:thread] ReadRecv1 pid=114321 tid=140318836315840 cpu=69 host=0 rings=[1]
+[A:thread] ReadRecv2 pid=114321 tid=140318827923136 cpu=70 host=0 rings=[2]
+[A:thread] ReadRecv3 pid=114321 tid=140318819530432 cpu=71 host=0 rings=[3]
+[A:thread] InvalRecv0 pid=114321 tid=140318811137728 cpu=72 host=0 rings=[0]
+[A:thread] InvalRecv1 pid=114321 tid=140318729041600 cpu=73 host=0 rings=[1]
+[A:thread] InvalRecv2 pid=114321 tid=140318720648896 cpu=74 host=0 rings=[2]
+[A:thread] InvalRecv3 pid=114321 tid=140318712256192 cpu=75 host=0 rings=[3]
+[A:thread] ReservHandler pid=114321 tid=140318703863488 pinned cpu=85 (host_id=0)
+[A:tls] worker host=0 client=18 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=22 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=21 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=29 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=27 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=25 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=14 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=26 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=11 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=20 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=19 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=16 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=30 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=23 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=31 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=8 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=28 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=17 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=24 entries=1024 (~1088 KiB)
+# PATH host=0 label=after_LOAD tid=140318920120448 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=0
+# PATH host=0 label=after_LOAD tid=140318819530432 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=58788
+# PATH host=0 label=after_LOAD tid=140318844708544 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=41135
+# PATH host=0 label=after_LOAD tid=140318827923136 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=40510
+# PATH host=0 label=after_LOAD tid=140318836315840 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=33594
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=1000929 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=1000929 cp_evict=0 cp_set_stale=0 cp_lru_evict=486677 rh_served=174027
+YCSB opt=A cache=0 num_hosts=2 threads=32 threads_eff=32 rep=3 load_ops=2000000 load_thpt=328330 trans_ops=5000000 trans_wall_max=1.418886 trans_agg_thpt=3523891 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=5102 r_p50_ns=410 r_p99_ns=111363 first_op_ns_max=173375 first_op_ns_avg=61517 ops_to_first_ns_max=427997 ops_to_first_ns_avg=103681 # xhost_read_optA_t32_cacheoff_rep3
+bash: line 1: 114321 Segmentation fault      FUSEE_NUM_HOSTS=2 FUSEE_HOST_ID=0 FUSEE_NUM_THREADS=32 FUSEE_RUN_COOKIE=135328152 FUSEE_REP=3 FUSEE_CACHE=0 FUSEE_WORKLOAD_NAME=xhost_read FUSEE_KV_SIZE=1024 FUSEE_CACHE_BUCKETS=131072 FUSEE_RING_SHARDS_FACTOR=8 FUSEE_RING_ROUTING=key_hash ./tests/protocol_a_ycsb /dev/dax0.0 /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_load /tmp/microbench_traces/bench_xhost_read_zipf-0.99_h0.spec_trans 8388608 5000000 2>&1

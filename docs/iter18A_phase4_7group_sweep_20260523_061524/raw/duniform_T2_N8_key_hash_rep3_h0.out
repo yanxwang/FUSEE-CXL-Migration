@@ -1,0 +1,17 @@
+[A:cfg] ring_sharding T=2 N=8 -> shards=1 block=2 routing=key_hash
+[A:thread] Worker pinned host=0 client=0 -> cpu=0 (pid=95645)
+[A:thread] Worker pinned host=0 client=1 -> cpu=1 (pid=95646)
+[A:thread] WriteRecv0 pid=95645 tid=140683570849472 cpu=64 host=0 rings=[0]
+[A:thread] ReadRecv0 pid=95645 tid=140683562456768 cpu=65 host=0 rings=[0]
+[A:thread] InvalRecv0 pid=95645 tid=140683554064064 cpu=66 host=0 rings=[0]
+[A:thread] ReservHandler pid=95645 tid=140683545671360 pinned cpu=85 (host_id=0)
+[A:tls] worker host=0 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=0 client=1 entries=1024 (~1088 KiB)
+# PATH host=0 label=after_LOAD tid=140683571062912 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976246 rh_served=0
+# PATH host=0 label=after_LOAD tid=140683562456768 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=3932
+# PATH host=0 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976246 rh_served=3932
+YCSB opt=A cache=0 num_hosts=2 threads=2 threads_eff=2 rep=3 load_ops=5000000 load_thpt=336678 trans_ops=5000000 trans_wall_max=12.365847 trans_agg_thpt=404339 w_avg_ns=0 w_p50_ns=0 w_p99_ns=0 r_avg_ns=11518 r_p50_ns=13441 r_p99_ns=16297 first_op_ns_max=30992 first_op_ns_avg=25651 ops_to_first_ns_max=101826 ops_to_first_ns_avg=66561 # xhost_read_optA_t2_cacheoff_rep3
+# PATH host=0 label=after_TRANS tid=140683571062912 r0_tls=0 r2hit=51159 r2miss_local=0 r3=1198841 cpool_ins_r=364708 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=2340954 rh_served=0
+# PATH host=0 label=after_TRANS tid=140683562456768 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=2396535
+# PATH host=0 label=after_TRANS AGG r0_tls=0 r2hit=51159 r2miss_local=0 r3=1198841 cpool_ins_r=364708 local_w=2500535 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500534 cp_evict=0 cp_set_stale=0 cp_lru_evict=2340954 rh_served=2396535
+# CACHE_FILL host=0 cache_buckets=131072 capacity=524288 filled=524288 stale=0 tomb=0 fill_pct=100.000

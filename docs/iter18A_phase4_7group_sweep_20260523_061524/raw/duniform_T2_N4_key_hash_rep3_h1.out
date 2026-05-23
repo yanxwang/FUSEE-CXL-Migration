@@ -1,0 +1,15 @@
+[A:cfg] ring_sharding T=2 N=4 -> shards=1 block=2 routing=key_hash
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=94174)
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=94175)
+[A:thread] WriteRecv0 pid=94174 tid=139930262779584 cpu=64 host=1 rings=[0]
+[A:thread] ReadRecv0 pid=94174 tid=139930254386880 cpu=65 host=1 rings=[0]
+[A:thread] InvalRecv0 pid=94174 tid=139930245994176 cpu=66 host=1 rings=[0]
+[A:thread] ReservHandler pid=94174 tid=139930237601472 pinned cpu=85 (host_id=1)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+# PATH host=1 label=after_LOAD tid=139930262993024 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500795 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976507 rh_served=0
+# PATH host=1 label=after_LOAD tid=139930254386880 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=4606
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500795 cp_evict=0 cp_set_stale=0 cp_lru_evict=1976507 rh_served=4606
+# PATH host=1 label=after_TRANS tid=139930262993024 r0_tls=0 r2hit=51561 r2miss_local=0 r3=1198439 cpool_ins_r=366751 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500795 cp_evict=0 cp_set_stale=0 cp_lru_evict=2343258 rh_served=0
+# PATH host=1 label=after_TRANS tid=139930254386880 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=2397604
+# PATH host=1 label=after_TRANS AGG r0_tls=0 r2hit=51561 r2miss_local=0 r3=1198439 cpool_ins_r=366751 local_w=2500802 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2500795 cp_evict=0 cp_set_stale=0 cp_lru_evict=2343258 rh_served=2397604

@@ -1,0 +1,19 @@
+[A:cfg] ring_sharding T=4 N=8 -> shards=1 block=4 routing=key_hash
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=108747)
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=108746)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=108748)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=108749)
+[A:thread] WriteRecv0 pid=108746 tid=140626640860864 cpu=64 host=1 rings=[0]
+[A:thread] ReadRecv0 pid=108746 tid=140626632468160 cpu=65 host=1 rings=[0]
+[A:thread] InvalRecv0 pid=108746 tid=140626624075456 cpu=66 host=1 rings=[0]
+[A:thread] ReservHandler pid=108746 tid=140626574055104 pinned cpu=85 (host_id=1)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+# PATH host=1 label=after_LOAD tid=140626641074304 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999070 cp_evict=0 cp_set_stale=0 cp_lru_evict=485114 rh_served=0
+# PATH host=1 label=after_LOAD tid=140626632468160 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=12724
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999070 cp_evict=0 cp_set_stale=0 cp_lru_evict=485114 rh_served=12724
+# PATH host=1 label=after_TRANS tid=140626641074304 r0_tls=0 r2hit=396328 r2miss_local=0 r3=228672 cpool_ins_r=40806 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999070 cp_evict=0 cp_set_stale=0 cp_lru_evict=524315 rh_served=0
+# PATH host=1 label=after_TRANS tid=140626632468160 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=999981
+# PATH host=1 label=after_TRANS AGG r0_tls=0 r2hit=396328 r2miss_local=0 r3=228672 cpool_ins_r=40806 local_w=999071 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=999070 cp_evict=0 cp_set_stale=0 cp_lru_evict=524315 rh_served=999981
