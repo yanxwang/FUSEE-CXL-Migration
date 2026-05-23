@@ -138,7 +138,31 @@ RAP attack vector A1 预测：Plan B 在 Zipf-0.99 下，hot key 通过 fnv1a ha
 - T=64 (shards=16): A vs B 差 198% — 16 个 receivers 中 1 个 hot key 全占
 - **Plan B 退化严重程度 ∝ shards 数**，与 hot-key 集中模型完全吻合
 
-进一步 Supp 2 (uniform vs Zipf flip) 和 Supp 3 (per-receiver counter) 验证未做：Plan B sweep 数据已经足够强地证实假设，无需重复实验。
+**Supp 2 (uniform vs Zipf distribution-flip) — 后续补做**:
+
+完整 7-group uniform xhost_write sweep (`docs/iter17A_scaling_8group_uniform_20260523_000353/`)
+跟 zipf-0.99 同 cell 直接对比（uniform/zipf ratio）：
+
+| Cell | Plan B zipf | Plan B uniform | **u/z ratio** |
+|---|---:|---:|---|
+| T=32 N=4 (B kh) | 1.514 | **4.706** | **3.11×** |
+| T=64 N=4 (B kh) | 2.222 | **5.208** | **2.34×** |
+| T=64 N=8 (B kh) | 2.101 | **5.206** | **2.48×** |
+
+| Cell | Plan A zipf | Plan A uniform | u/z ratio |
+|---|---:|---:|---|
+| T=32 N=4 (A wid) | 2.663 | 5.525 | 2.08× |
+| T=64 N=4 (A wid) | 6.628 | 5.982 | 0.90× |
+| T=64 N=8 (A wid) | 6.001 | 5.441 | 0.91× |
+
+**Plan B 在 uniform 下被"治好"**（hot key 不存在 → key_hash 均匀分布到所有 receivers），同 cell throughput 提升 2-3 倍。**Plan A 在 uniform 下小幅变化**：T=32 翻倍（无 bucket lock contention），T=64 略降（uniform 散列 cache miss 多于 zipf 局部性）。
+
+**Plan A vs Plan B 差距在 uniform 下急剧缩小**：
+- zipf-0.99 T=64 N=4: A 比 B 领先 +198%
+- uniform T=64 N=4: A 比 B 领先仅 +15%
+
+→ Plan A 的优势**主要来自抗 hot key**，并非 routing 算法本身。这进一步证实 hot-key 集中假设是 Plan B 退化的根因。
+Supp 3 (per-receiver counter) 未做：uniform 数据已强证假设，无需再做。
 
 ### 2.4 Scaling 上限分析
 
