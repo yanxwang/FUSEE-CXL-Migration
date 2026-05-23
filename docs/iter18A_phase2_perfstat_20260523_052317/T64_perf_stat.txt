@@ -1,0 +1,13 @@
+
+ Performance counter stats for thread id '77905':
+
+       13246582836      cycles                                                                
+         456131693      instructions                     #    0.03  insn per cycle            
+           5240983      cache-misses                     #   92.68% of all cache refs         
+           5655082      cache-references                                                      
+           4988917      LLC-loads                                                             
+           4719725      LLC-load-misses                  #   94.60% of all LL-cache accesses  
+             31821      branch-misses                                                         
+
+       4.011545528 seconds time elapsed
+

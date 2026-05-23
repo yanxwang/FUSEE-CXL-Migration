@@ -1,0 +1,210 @@
+--- T=1 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T1
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T1
+# worker threads: 4, total events: 1863984
+# receiver threads: 4, total events: 1815262
+# worker complete ops: 509
+# receiver complete ops: 99629
+# w↔r paired ops: 509
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T1.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           509        1260       525.0       702.5       554.0
+Stage2           509        2664      1110.0      1419.2      1137.2
+Stage3           509         252       105.0       239.2       107.2
+Stage4           509       11272      4696.7      8006.7      4819.7
+Stage5           509        4012      1671.7      2006.7      1699.4
+Stage6           509        4428      1845.0      2235.8      1897.5
+StageW           509       24036     10015.0     13733.3     10215.0
+StageR1          509        5598      2332.5      5396.7      2439.8
+StageR2          509        3110      1295.8      4561.7      1354.8
+StageR3          509          36        15.0        20.8        66.4
+StageR           509        8804      3668.3      8279.2      3861.0
+RTT              509       15208      6336.7      9513.3      6354.0
+
+=== Event counters ===
+  XRR1Z_count          = 95740
+  gap encounter rate = 96.0965% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=2 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T2
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T2
+# worker threads: 5, total events: 1420928
+# receiver threads: 5, total events: 1380848
+# worker complete ops: 499
+# receiver complete ops: 97284
+# w↔r paired ops: 497
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T2.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           497        1258       524.2       890.0       548.2
+Stage2           497        2670      1112.5      1315.8      1127.5
+Stage3           497         252       105.0       265.8       110.4
+Stage4           497       12020      5008.3     10622.5      5445.1
+Stage5           497        4032      1680.0      4747.5      1733.8
+Stage6           497        4430      1845.8      4014.2      2020.7
+StageW           497       24740     10308.3     16878.3     10985.7
+StageR1          497        7616      3173.3      6406.7      3147.9
+StageR2          497        2138       890.8      1552.5       968.2
+StageR3          497          38        15.8        20.0        56.9
+StageR           497        9714      4047.5      8155.0      4173.0
+RTT              497       15386      6410.8     13092.5      6812.7
+
+=== Event counters ===
+  XRR1Z_count          = 21366
+  gap encounter rate = 21.9625% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=4 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T4
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T4
+# worker threads: 7, total events: 1311889
+# receiver threads: 7, total events: 1270149
+# worker complete ops: 515
+# receiver complete ops: 39113
+# w↔r paired ops: 452
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T4.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           452        1256       523.3       943.3       553.0
+Stage2           452        2610      1087.5      1344.2      1093.6
+Stage3           452         256       106.7       280.0       103.9
+Stage4           452       24626     10260.8     15059.2     10013.8
+Stage5           452        3966      1652.5      2018.3      1670.3
+Stage6           452        4476      1865.0      4393.3      2254.1
+StageW           452       38060     15858.3     21419.2     15688.7
+StageR1          452        7628      3178.3      3563.3      3158.5
+StageR2          452        1498       624.2      4249.2       844.6
+StageR3          452          36        15.0        20.0        52.0
+StageR           452        9200      3833.3      7871.7      4055.2
+RTT              452       28454     11855.8     17664.2     11633.5
+
+=== Event counters ===
+  XRR1Z_count          = 699
+  gap encounter rate = 1.7871% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=8 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T8
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T8
+# worker threads: 11, total events: 1285549
+# receiver threads: 11, total events: 1245555
+# worker complete ops: 496
+# receiver complete ops: 15854
+# w↔r paired ops: 373
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T8.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           373        1236       515.0       859.2       532.3
+Stage2           373        2604      1085.0      1438.3      1137.6
+Stage3           373         270       112.5       293.3       126.8
+Stage4           373       52928     22053.3     28257.5     22013.6
+Stage5           373        3806      1585.8      2042.5      1526.9
+Stage6           373        6890      2870.8      6817.5      2614.0
+StageW           373       67252     28021.7     35008.3     27951.2
+StageR1          373        7576      3156.7      3519.2      3146.7
+StageR2          373        1470       612.5      1608.3       740.6
+StageR3          373          38        15.8        20.0        57.4
+StageR           373        9120      3800.0      7358.3      3944.6
+RTT              373       57696     24040.0     31251.7     24006.6
+
+=== Event counters ===
+  XRR1Z_count          = 35
+  gap encounter rate = 0.2208% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=16 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T16
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T16
+# worker threads: 19, total events: 1276655
+# receiver threads: 19, total events: 1236738
+# worker complete ops: 488
+# receiver complete ops: 7113
+# w↔r paired ops: 347
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T16.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           347        1242       517.5       843.3       523.0
+Stage2           347        2618      1090.8      1379.2      1099.4
+Stage3           347          76        31.7       236.7        81.7
+Stage4           347      114338     47640.8     56435.0     47412.5
+Stage5           347        3850      1604.2      1978.3      1559.2
+Stage6           347        7476      3115.0      5335.0      2834.5
+StageW           347      129032     53763.3     61969.2     53510.4
+StageR1          347        7602      3167.5      3622.5      3199.2
+StageR2          347        1450       604.2      1396.7       702.0
+StageR3          347          38        15.8        18.3        15.6
+StageR           347        9156      3815.0      7200.8      3916.8
+RTT              347      119754     49897.5     58226.7     49593.6
+
+=== Event counters ===
+  XRR1Z_count          = 12
+  gap encounter rate = 0.1687% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=32 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T32
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T32
+# worker threads: 35, total events: 1298973
+# receiver threads: 35, total events: 1238135
+# worker complete ops: 472
+# receiver complete ops: 3382
+# w↔r paired ops: 291
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T32.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           291        1192       496.7      1127.5       541.4
+Stage2           291        2532      1055.0      1461.7      1071.0
+Stage3           291         176        73.3      4357.5       124.6
+Stage4           291      242738    101140.8    108110.0    100638.0
+Stage5           291        3142      1309.2      1894.2      1396.4
+Stage6           291        7758      3232.5      5916.7      3198.1
+StageW           291      258284    107618.3    115451.7    106969.4
+StageR1          291        7624      3176.7      3500.0      3156.0
+StageR2          291        1460       608.3      1453.3       654.9
+StageR3          291          36        15.0      4960.0        84.7
+StageR           291        9118      3799.2      8909.2      3895.6
+RTT              291      248810    103670.8    111644.2    103073.8
+
+=== Event counters ===
+  XRR1Z_count          = 10
+  gap encounter rate = 0.2957% of receiver ops
+    exhausted = 0.0% of gaps
+--- T=64 decomp ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h0/T64
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/probe_h1/T64
+# worker threads: 67, total events: 1691778
+# receiver threads: 27, total events: 1279127
+# worker complete ops: 494
+# receiver complete ops: 1672
+# w↔r paired ops: 327
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_T_sweep_20260523_044157/decomp_T64.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+Stage1           327        1130       470.8      1230.8       543.7
+Stage2           327        2402      1000.8      5292.5      1092.9
+Stage3           327         268       111.7       274.2       127.2
+Stage4           327      473352    197230.0    206224.2    195651.3
+Stage5           327        2934      1222.5      1887.5      1357.3
+Stage6           327        7870      3279.2      8457.5      3673.1
+StageW           327      489264    203860.0    214510.0    202445.4
+StageR1          327        7022      2925.8      3615.0      2982.5
+StageR2          327        1358       565.8      1415.8       631.7
+StageR3          327          38        15.8        20.8        16.2
+StageR           327        8458      3524.2      7240.0      3630.4
+RTT              327      480688    200286.7    210570.8    198815.0
+
+=== Event counters ===
+  XRR1Z_count          = 10
+  gap encounter rate = 0.5981% of receiver ops
+    exhausted = 0.0% of gaps

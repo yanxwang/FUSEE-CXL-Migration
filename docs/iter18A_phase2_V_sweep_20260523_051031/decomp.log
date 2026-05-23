@@ -1,0 +1,60 @@
+--- V=64 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h0/V64
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h1/V64
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/decomp_V64.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- V=256 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h0/V256
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h1/V256
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/decomp_V256.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- V=512 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h0/V512
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h1/V512
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/decomp_V512.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- V=1024 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h0/V1024
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/probe_h1/V1024
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_V_sweep_20260523_051031/decomp_V1024.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===

@@ -1,0 +1,60 @@
+--- dist=uniform ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h0/uniform
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h1/uniform
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/decomp_uniform.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- dist=zipf-0.5 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h0/zipf-0.5
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h1/zipf-0.5
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/decomp_zipf-0.5.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- dist=zipf-0.99 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h0/zipf-0.99
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h1/zipf-0.99
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/decomp_zipf-0.99.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===
+--- dist=zipf-1.5 ---
+# loading worker traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h0/zipf-1.5
+# loading receiver traces from /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/probe_h1/zipf-1.5
+# worker threads: 0, total events: 0
+# receiver threads: 0, total events: 0
+# worker complete ops: 0
+# receiver complete ops: 0
+# w↔r paired ops: 0
+
+wrote per-op CSV: /home/yanwang/FUSEE/docs/iter18A_phase2_dist_sweep_20260523_051545/decomp_zipf-1.5.csv
+
+=== Aggregates (median of N paired ops) ===
+metric             n     p50_cyc      p50_ns      p99_ns      avg_ns
+
+=== Event counters ===

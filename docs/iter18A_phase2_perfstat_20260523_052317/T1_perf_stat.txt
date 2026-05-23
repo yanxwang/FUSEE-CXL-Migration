@@ -1,0 +1,13 @@
+
+ Performance counter stats for thread id '77545':
+
+       14862891988      cycles                                                                
+         377104348      instructions                     #    0.03  insn per cycle            
+           5233158      cache-misses                     #   75.84% of all cache refs         
+           6900143      cache-references                                                      
+           5250355      LLC-loads                                                             
+           4206307      LLC-load-misses                  #   80.11% of all LL-cache accesses  
+            423973      branch-misses                                                         
+
+       4.017987319 seconds time elapsed
+

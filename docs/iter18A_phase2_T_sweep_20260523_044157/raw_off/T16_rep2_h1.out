@@ -1,0 +1,43 @@
+[A:cfg] ring_sharding T=16 N=0 (disabled) -> shards=1 block=16 routing=worker_id
+[A:thread] Worker pinned host=1 client=1 -> cpu=1 (pid=67932)
+[A:thread] Worker pinned host=1 client=2 -> cpu=2 (pid=67933)
+[A:thread] Worker pinned host=1 client=3 -> cpu=3 (pid=67934)
+[A:thread] Worker pinned host=1 client=4 -> cpu=4 (pid=67935)
+[A:thread] Worker pinned host=1 client=5 -> cpu=5 (pid=67936)
+[A:thread] Worker pinned host=1 client=6 -> cpu=6 (pid=67937)
+[A:thread] Worker pinned host=1 client=7 -> cpu=7 (pid=67938)
+[A:thread] Worker pinned host=1 client=8 -> cpu=8 (pid=67939)
+[A:thread] Worker pinned host=1 client=9 -> cpu=9 (pid=67940)
+[A:thread] Worker pinned host=1 client=10 -> cpu=10 (pid=67941)
+[A:thread] Worker pinned host=1 client=11 -> cpu=11 (pid=67942)
+[A:thread] Worker pinned host=1 client=12 -> cpu=12 (pid=67943)
+[A:thread] Worker pinned host=1 client=13 -> cpu=13 (pid=67944)
+[A:thread] Worker pinned host=1 client=14 -> cpu=14 (pid=67945)
+[A:thread] Worker pinned host=1 client=0 -> cpu=0 (pid=67913)
+[A:thread] Worker pinned host=1 client=15 -> cpu=15 (pid=67946)
+[A:thread] WriteRecv0 pid=67913 tid=139973500020416 cpu=64 host=1 rings=[0]
+[A:thread] ReadRecv0 pid=67913 tid=139973491627712 cpu=65 host=1 rings=[0]
+[A:thread] InvalRecv0 pid=67913 tid=139973483235008 cpu=66 host=1 rings=[0]
+[A:tls] worker host=1 client=1 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=2 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=4 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=6 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=5 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=3 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=12 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=0 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=9 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=15 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=8 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=13 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=11 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=7 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=10 entries=1024 (~1088 KiB)
+[A:tls] worker host=1 client=14 entries=1024 (~1088 KiB)
+[A:thread] ReservHandler pid=67913 tid=139973474842304 pinned cpu=85 (host_id=1)
+# PATH host=1 label=after_LOAD tid=139973500233856 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2498684 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2498653 cp_evict=0 cp_set_stale=0 cp_lru_evict=1974366 rh_served=0
+# PATH host=1 label=after_LOAD tid=139973491627712 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=22002
+# PATH host=1 label=after_LOAD AGG r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=2498684 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2498653 cp_evict=0 cp_set_stale=0 cp_lru_evict=1974366 rh_served=22002
+# PATH host=1 label=after_TRANS tid=139973500233856 r0_tls=0 r2hit=32586 r2miss_local=0 r3=123664 cpool_ins_r=4594 local_w=2498684 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2498653 cp_evict=0 cp_set_stale=0 cp_lru_evict=1978960 rh_served=0
+# PATH host=1 label=after_TRANS tid=139973491627712 r0_tls=0 r2hit=0 r2miss_local=0 r3=0 cpool_ins_r=0 local_w=0 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=0 cp_evict=0 cp_set_stale=0 cp_lru_evict=0 rh_served=1991775
+# PATH host=1 label=after_TRANS AGG r0_tls=0 r2hit=32586 r2miss_local=0 r3=123664 cpool_ins_r=4594 local_w=2498684 fwd_w=0 local_w_blk_fwd=0 local_w_stg_fwd=0 cpool_ins_w=2498653 cp_evict=0 cp_set_stale=0 cp_lru_evict=1978960 rh_served=1991775
