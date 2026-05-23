@@ -2755,7 +2755,11 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
         if (op_id == 0) {
           PROBE_READ_OP("XRR1Z", head);
           for (int gap_iter = 0; gap_iter < 4096 && op_id == 0; gap_iter++) {
-            __builtin_ia32_pause();
+            // iter-18A C4: pause 4× before flushing — symmetric to worker
+            // C3 (Stage 4): reduces CXL polling pressure on the req_op_id
+            // line so peer's worker store can settle.
+            __builtin_ia32_pause(); __builtin_ia32_pause();
+            __builtin_ia32_pause(); __builtin_ia32_pause();
             flush_line((void *)&e->req_op_id);
             full_fence();
             op_id = e->req_op_id.load(std::memory_order_acquire);
