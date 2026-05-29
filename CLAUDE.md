@@ -253,11 +253,21 @@ All new iter scripts, sweeps, and benchmarks should target g1/g2 unless
 specifically reproducing iter-1A through iter-18A data (which used g3/g4).
 
 - `g1` (192.168.128.71), `g2` (192.168.128.72): **NEW default** —
-  dual nodes sharing CXL Type-3 memory expander. Same access pattern
-  as g3/g4 (root login, `/dev/dax0.0` devdax, PXE-ephemeral rootfs).
+  dual nodes sharing CXL Type-3 memory expander via `/dev/dax0.0`
+  (the **shared** device — both hosts attach the same CXL line and
+  coherence is via the switch). 256 GiB on each side of dax0.0 (g3/g4
+  was 512 GiB; if 512 GiB is needed, see private dax1.0 note below).
+  Root login, PXE-ephemeral rootfs, kernel 6.15.0-uintr (same family as g3/g4).
   Hardware baseline TBD — re-run `mlc` if a "distance to ceiling"
   number is needed; do not assume the g3/g4 baseline transfers without
   verification.
+
+  **g1 has an additional private device `/dev/dax1.0` (512 GiB) —
+  direct-attached CXL module on g1 only, NOT shared with g2.** Do NOT
+  use dax1.0 for benchmarks that require cross-host CXL coherence
+  (the entire FUSEE protocol family is cross-host). dax1.0 is for
+  single-host CXL experiments only. By default `scripts/reconfig_dax_slave.sh`
+  reconfigures dax0.0 only; pass `--dev dax1.0` to override (g1 only).
 - `g3` (192.168.128.73), `g4` (192.168.128.74): legacy / fallback.
   Dual 86-core Intel Xeon nodes sharing a CXL Type-3 memory expander
   via PCIe switch. Device `/dev/dax0.0`, 512 GiB devdax. Kernel
