@@ -248,12 +248,30 @@ Overall throughput-improvement plan is in
 
 ## Hosts
 
-- `g3`, `g4`: dual 86-core Intel Xeon nodes sharing a CXL Type-3
-  memory expander via PCIe switch. Device `/dev/dax0.0`, 512 GiB
-  devdax. Kernel 6.15.0 after the PXE rebuild.
+**Default experiment platform (2026-05-29 onward): `g1` + `g2`.**
+All new iter scripts, sweeps, and benchmarks should target g1/g2 unless
+specifically reproducing iter-1A through iter-18A data (which used g3/g4).
+
+- `g1` (192.168.128.71), `g2` (192.168.128.72): **NEW default** —
+  dual nodes sharing CXL Type-3 memory expander. Same access pattern
+  as g3/g4 (root login, `/dev/dax0.0` devdax, PXE-ephemeral rootfs).
+  Hardware baseline TBD — re-run `mlc` if a "distance to ceiling"
+  number is needed; do not assume the g3/g4 baseline transfers without
+  verification.
+- `g3` (192.168.128.73), `g4` (192.168.128.74): legacy / fallback.
+  Dual 86-core Intel Xeon nodes sharing a CXL Type-3 memory expander
+  via PCIe switch. Device `/dev/dax0.0`, 512 GiB devdax. Kernel
+  6.15.0 after the PXE rebuild. mlc baseline: DRAM 174.8 ns / 393 GB/s,
+  CXL 607.8 ns / 51.78 GB/s (iter-1A through iter-18A data).
 - `~/FUSEE_CXL/` on each host is the sync target; source lives on
   the workstation under `/home/yanwang/FUSEE/` and is rsync'd over.
 - Rebuild after sync: `cd ~/FUSEE_CXL/build-cxl && make -j16 <targets>`.
+- Post-PXE recovery sequence (run for **g1/g2** by default; for g3/g4
+  only when reproducing legacy data):
+  `scripts/rekey_slave.sh <host>` → `scripts/bootstrap_slave.sh <host>`
+  → `daxctl reconfigure-device --mode=devdax --force dax0.0` →
+  `chmod 666 /dev/dax0.0`. Credentials in
+  `/home/yanwang/fusee_dev_credentials.md` (local-only).
 
 ## Commit hygiene
 
@@ -307,15 +325,4 @@ Files: `src/cxl_kv_ops_A*.{h,cc}`, `src/cxl_directory*`, `src/cxl_sharding*`,
 
 5. **§XI PR review checklist** pasted in PR description for protocol A
    changes. Each invariant ✓/✗ + each AP check + G1–G5 results.
-6. **P2 Iter retrospective spec-drift audit** — every iter retro must
-   reverse-trace each I/AP to a code location. Missing/wrong = user-escalate.
-7. **P3 Spec changes go through user** — if implementation can't satisfy
-   an invariant, STOP and ask user to revise spec. NEVER silently change
-   spec to make non-compliant implementation valid. This is the exact
-   Finding-1 failure mode.
-
-### What this section is NOT
-
-- "Read the spec before coding" — that was the old E1 line. **Removed**;
-  zero strength in practice. Spec compliance is enforced at commit/PR/sweep
-  boundaries by H1–H4 + P1 (RAP), not by Claude self-discipline.
+6. **P2 Iter retrospective spec-dri

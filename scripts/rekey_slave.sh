@@ -5,7 +5,9 @@
 # baking the secret into the repo.
 #
 # Usage:
-#   scripts/rekey_slave.sh <host>     # e.g. g3 or g4
+#   scripts/rekey_slave.sh <host>
+#     default platform (2026-05-29+): g1 or g2
+#     legacy (iter-1A through iter-18A repro): g3 or g4
 #
 # Requires: expect (for non-interactive password typing) and the
 # credentials file at $CREDENTIALS_FILE (default /home/yanwang/fusee_dev_credentials.md).
@@ -25,7 +27,7 @@ if [[ ! -r "$cred_file" ]]; then
 fi
 
 # Parse the password for the host from the markdown table.
-# Table rows look like:   | g3    | root    | Haidilao666  | ...
+# Table rows look like:   | g1    | root    | 123456  | ...
 pw=$(awk -v h="$host" 'BEGIN{FS="|"} /^\|/ { gsub(/ /, "", $2); if ($2==h) { gsub(/ /, "", $4); print $4; exit } }' "$cred_file")
 if [[ -z "$pw" ]]; then
   echo "error: no password entry for $host in $cred_file" >&2

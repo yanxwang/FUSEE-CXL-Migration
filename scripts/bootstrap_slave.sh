@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Re-bootstrap a PXE-ephemeral benchmark slave (g3 or g4) from the local
-# persistent machine. Safe to re-run after every PXE reboot.
+# Re-bootstrap a PXE-ephemeral benchmark slave from the local persistent
+# machine. Safe to re-run after every PXE reboot.
+#
+# Default platform (2026-05-29+): g1 / g2.
+# Legacy / iter-1A-through-18A reproduction: g3 / g4.
 #
 # Run this FROM /home/yanwang (the persistent orchestrator), not from the
 # slave itself. The slave's homedir is on local NVMe and gets wiped on
@@ -12,8 +15,9 @@
 #   scripts/bootstrap_slave.sh <host> [branch]
 #
 # Example:
-#   scripts/bootstrap_slave.sh g3
-#   scripts/bootstrap_slave.sh g4 feat/cxl-migration
+#   scripts/bootstrap_slave.sh g1                       # default platform
+#   scripts/bootstrap_slave.sh g2 feat/cxl-migration
+#   scripts/bootstrap_slave.sh g3                       # legacy / iter repro
 #
 # What it does:
 #   1. Refresh the bundle from our local working copy (~/FUSEE).
@@ -50,9 +54,9 @@ if ! timeout 6 ssh -o BatchMode=yes -o ConnectTimeout=4 \
   cat <<EOF >&2
 error: cannot reach $host without a password.
   This is expected right after a PXE reboot — the slave's ~/.ssh/authorized_keys
-  was wiped. Re-seat your key with:
-      ssh-copy-id root@$host
-  (password for the slave is in /home/yanwang/fusee_dev_credentials.md, NOT committed).
+  was wiped. Run the rekey script first (it reads the password from
+  /home/yanwang/fusee_dev_credentials.md, NOT committed):
+      scripts/rekey_slave.sh $host
   Then re-run: scripts/bootstrap_slave.sh $host
 EOF
   exit 2
