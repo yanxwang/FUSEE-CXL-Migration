@@ -9,15 +9,25 @@
 > anti-patterns); **this** is the "what + how" (current implementation
 > shape).
 >
-> **Snapshot point**: end of iter-11A (2026-05-11).
+> **Snapshot point**: end of iter-18A (2026-05-23).
 
 This doc has two layers and one cross-cutting reference:
 - **Part I — System overview**: plain language, no code.
-- **Part II — Per-stage pseudo-code dictionary**: indexed by stage tag
-  (W1..W12, R0_tls_hit, R1..R6, I1..I8, F1..F7, D1..D5). When a probe
-  trace says "stage W7 p99 = 300 µs", you open Part II §W7 and
-  immediately see what W7 does in sub-steps + which CXL/DRAM primitives
-  are involved.
+- **Part II — Per-stage pseudo-code dictionary**: indexed by stage tag.
+  Two stage families coexist:
+  - **YCSB-path stages** (legacy, iter-5A → iter-15A): `W1..W12`,
+    `R0_tls_hit, R1..R6`, `I1..I8`, `F1..F7`, `D1..D5`. Cover the full
+    user-facing read/write/invalidate/forward roundtrips that YCSB +
+    cache hierarchy exercises.
+  - **Microbench-path stages** (iter-16A → iter-18A): `XWS1..5, XWR1..3`
+    (xhost_write, 8 stages); `XRS1..6, XRR1..3` (xhost_read, 9 stages).
+    Cover the cross-host-only fast path used by `bench_xhost_write` /
+    `bench_xhost_read`, where cache layers are bypassed (`FUSEE_CACHE=0`)
+    so the CXL ring + receiver substrate dominates the timeline. These
+    are the canonical decomposition for receiver-side scaling work.
+  Stage families are independent — a single benchmark run emits ONE
+  family depending on whether `FUSEE_PROBE=1` (XW/XR) or
+  `FUSEE_PROBE_PATH=1` (W/R/I/F/D) is set.
 - **Part III — Cross-cutting reference**: CXL primitive cost cheat sheet,
   synchronization contracts, known failure modes.
 
@@ -60,22 +70,50 @@ This doc has two layers and one cross-cutting reference:
 
 H ≤ 8 (hard cap from sharer_bitmap = 8 bits). Currently H = 2 on g3+g4.
 
-## I.2 The roles (per host) — iter-9A redo through iter-11A
+## I.2 The roles (per host) — iter-9A redo through iter-18A
 
-Workers are processes; the 6 named system threads live in the host's primary client process.
+Workers are processes; the named system threads live in the host's
+primary client process. iter-17A Part 2 turned the **3 single
+receiver/sender threads into per-shard pools** (`WriteRecv[k]`,
+`ReadRecv[k]`, `InvalRecv[k]` for shard k ∈ [0, actual_shards)) packed
+onto a 22-CPU pool.
+
+**Shard count formula** (iter-17A):
+- `N = FUSEE_RING_SHARDS_FACTOR` (env, default 4; N=0 = single-shard baseline)
+- `actual_shards = (N == 0) ? 1 : ceil(T / N)`
+- example: T=64 N=4 → 16 shards; T=16 N=4 → 4 shards; T=64 N=0 → 1 shard
+
+**Routing plan** (`FUSEE_RING_ROUTING` env):
+- **Plan A `worker_id`** (default, winner for both write and read):
+  worker `i` always uses ring shard `i / N`. Even spread; no key
+  hashing cost. **Best for zipf**: hot-key writes from one worker stay
+  on one shard, avoiding cross-shard fan-in.
+- **Plan B `key_hash`**: shard = `fnv1a(key) % actual_shards`. Even
+  spread under uniform; collapses under zipf because hot key always
+  routes to one shard → that receiver saturates.
 
 | # | Role | Count per host | What it owns | CPU | Spawn site |
 |---|---|---|---|---|---|
-| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`). Each worker has its own `TlsCache` L1 (iter-10A Phase 1) pointed at via thread-local `g_thread_tls`. | cpu 0..(T-1) (pinned) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
-| 2 | **WriteSender** | 1 | Drains aggregator slots[Write][*]; sole producer on `WriteRing[me][*]`. (Default OFF — workers go direct to the CXL ring; opt in via `FUSEE_USE_AGGREGATOR=1`.) iter-10A Phase 3 added 4 batch policies P0/P1/P2/P3 via `FUSEE_BATCH_POLICY`; **B0 (worker-direct, no aggregator) wins by 20×** so the default stays direct. | cpu 64 (pinned) | spawned in `enable_senders(spawn=true)` |
-| 3 | **WriteReceiver** | 1 | Drains incoming `WriteRing[*][me]`. Handles op 1/2/3 (UPDATE/INSERT/DELETE) from peer host workers. Reads value bytes from `ForwardStaging[src][me][slot_idx]` then calls `execute_write_local` (full W1..W12) on behalf of the forwarder. | cpu 65 (pinned) | spawned in `enable_write_ring(spawn=true)` |
-| 4 | **ReadSender** | 1 | Drains aggregator slots[Read][*]; sole producer on `ReadRing[me][*]`. (Default OFF, see WriteSender.) | cpu 66 (pinned) | `enable_senders(spawn=true)` |
-| 5 | **ReadReceiver** | 1 | Drains incoming `ReadRing[*][me]`. Handles op 4 (CACHE_REGISTER) **forwarder-pool-direct path (iter-11A Phase 1)**: under directory lock sets sharer bit, reads value bytes from local pool, writes them **directly** into `ReadStaging[req_host][me][slot_idx].value_bytes` along with `lookup_epoch` (C13 tag), then publishes `staging.ready_op_id = req_op_id`. Reader polls staging instead of doing a second `pool_->read`. | cpu 67 (pinned) | `enable_read_ring(spawn=true)` |
-| 6 | **InvalSender** | 1 | Drains aggregator slots[Inval][*]; sole producer on `InvalRing[me][*]` for worker-originated invalidates. (Default OFF.) | cpu 68 (pinned) | `enable_senders(spawn=true)` |
-| 7 | **InvalReceiver** | 1 | Drains incoming `InvalRing[*][me]`. Handles op 5 (INVALIDATE) from peer writers; calls `cache_pool_set_stale(key)` (bumps bucket epoch under seqlock CAS → invalidates same-bucket TLS entries on this host); ACKs. CRUCIALLY does NOT call `execute_write_local` and holds NO directory lock — breaks the iter-4A-redo deadlock cycle. **Single-thread** (iter-11A Phase 2 shipped a `1 dispatcher + 8 workers` design that PASSed hash-diff 20/20 but regressed w_p99 26×; reverted in commit 5664945 — see iter-12A backlog #4 for redesign). | cpu 69 (pinned) | `enable_invalidate(spawn=true)` |
-| 8 | (Implicit) primary client process | 1 | Sets up CXL region + DRAM regions pre-fork; owns the 6 background threads above; itself runs as worker. | (its main thread is pinned per row 1) | The first process started per host (`FUSEE_HOST_ID=0/1`, `FUSEE_NUM_THREADS=T` → forks `T-1` children). |
+| 1 | **Worker** | T (1..64) | Issues KV ops (`insert/update/remove/search`). Each worker has its own `TlsCache` L1 (iter-10A Phase 1) pointed at via thread-local `g_thread_tls`. Computes its shard at first ring touch (Plan A) or per-op (Plan B). | cpu 0..(T-1) (pinned) | Each is a fork-child process of the YCSB driver; primary client (host 0 client 0) is also a worker. |
+| 2 | **WriteSender** | 1 (legacy, removed iter-17A Phase 4) | — | — | Removed: workers always go direct to `WriteRing[me][*][shard]` in iter-17A+. |
+| 3 | **WriteRecv[k]** | `actual_shards` × packing_ratio | Drains incoming `WriteRing[*][me][k]` for shards in `k`'s ring_indices slice. Handles op 1/2/3 (UPDATE/INSERT/DELETE) from peer host workers. Reads value bytes from `ForwardStaging[src][me][shard][slot_idx]` then calls `execute_write_local` (full W1..W12) on behalf of the forwarder. Packing: each thread handles `ceil(actual_shards / threads_per_type)` rings via per-thread `ring_indices` vector. | one of cpu 64..85 (iter-17A 22-core pool) | `enable_write_ring(spawn=true)` |
+| 4 | **ReadSender** | 1 (legacy, removed iter-17A Phase 4) | — | — | Removed; workers direct to `ReadRing[me][*][shard]`. |
+| 5 | **ReadRecv[k]** | `actual_shards` × packing_ratio | Drains incoming `ReadRing[*][me][k]`. Handles op 4 (CACHE_REGISTER) via **forwarder-pool-direct path (iter-11A Phase 1)** extended to **per-shard ReadStaging slots (iter-18A Phase 4 fix)**: under directory lock sets sharer bit, reads value bytes from local pool, writes them directly into `ReadStaging[req_host][me][shard][slot_idx].value_bytes` along with `lookup_epoch` (C13 tag), publishes `staging.ready_op_id = req_op_id`. Reader polls staging at the same `[shard][slot]` it sent the request from. | one of cpu 64..85 | `enable_read_ring(spawn=true)` |
+| 6 | **InvalSender** | 1 (legacy, removed iter-17A Phase 4) | — | — | Removed; workers direct to `InvalRing[me][*][shard]`. |
+| 7 | **InvalRecv[k]** | `actual_shards` × packing_ratio | Drains incoming `InvalRing[*][me][k]`. Handles op 5 (INVALIDATE); calls `cache_pool_set_stale(key)` (bumps bucket epoch under seqlock CAS); ACKs. Does NOT call `execute_write_local`, holds NO directory lock. | one of cpu 64..85 | `enable_invalidate(spawn=true)` |
+| 8 | **ReservHandler** | 1 | Spinner thread for kvs reservation / cache pool maintenance. iter-17A Phase 4 fix: pin to **cpu 85 (last CPU)** — was unpinned since iter-9A, OS scheduled to worker CPUs → stole cycles → 50 % N=0 baseline regression. Pin fix +83-105 % vs iter-15A. | cpu 85 (pinned) | `enable_kvs_reservation()` |
+| 9 | (Implicit) primary client process | 1 | Sets up CXL region + DRAM regions pre-fork; owns the named background threads above; itself runs as worker. | (its main thread is pinned per row 1) | First process per host (`FUSEE_HOST_ID=0/1`, `FUSEE_NUM_THREADS=T` → forks `T-1` children). |
 
-At T=64: each host has **64 worker processes + 6 background threads on primary's process** = 70 schedulable entities. Workers pinned to cpu 0..63, system threads pinned to cpu 64..69, spare cpu 70..85. **All threads CPU-pinned per iter-9A C3** (verified by the `[A:thread]` startup log — see `tests/protocol_a_ycsb.cc`).
+**iter-17A receiver pool layout** (`compute_receiver_layout` in
+`src/cxl_kv_ops_A.cc`): 22-core pool (cpu 64..85) divided into three
+groups based on `actual_shards`:
+- `pool_size = 86 - max(T, 64) = 22` at T=64
+- `threads_per_type = pool_size / 3 = 7` (write gets +1 = 8 since `pool_size % 3 == 1`)
+- T=64 N=4 default: 8 WriteRecv + 7 ReadRecv + 7 InvalRecv = 22 threads, each handles `16 / threads_per_type ≈ 2-3` ring shards (write packing 2, read/inval packing 2-3)
+- T=16 N=4: 4 shards, no packing needed; 4 WriteRecv + 4 ReadRecv + 4 InvalRecv = 12 threads (10 idle CPUs)
+- `FUSEE_FORCE_THREADS_PER_TYPE` env (iter-17A Exp 3) overrides default for packing-decouple experiments; caveats: `t_w + t_r + t_i > pool_size` wraps modulo → CPU oversubscription → throughput collapse
+
+At T=64 N=4: each host has **64 worker processes + 22 receiver threads + 1 ReservHandler** = 87 schedulable entities. Workers pinned cpu 0..63, receivers pinned cpu 64..85 by `compute_receiver_layout`, ReservHandler cpu 85. **All threads CPU-pinned**.
 
 **Aggregator routing (Phase 2.C, opt-in)**: when `FUSEE_USE_AGGREGATOR=1`,
 workers enqueue ops into per-(ring_kind, worker) DRAM slots and spin on a
@@ -104,11 +142,11 @@ default and aggregator-path batching is iter-12A backlog #11).
 |---|---|---|---|---|
 | **Hashtable** | CXL | one copy | Authoritative key→slot map. B buckets × S=7 slots × 16 B/slot. iter-9A: slot.value encodes a pool `blk_off` (size class + 8-bit fingerprint + offset bits packed via `cxl_slot_pack`); pool block starts with a 4-B `value_len` header followed by value bytes. | `B × S × 16 B` (8 MB at B=65536) |
 | **KV blockpool** | CXL | partitioned: H segments, each owned by one host | Value bytes prefixed by 4-B `value_len` header. Single size class per pool (256 / 512 / 1024 B). Within a host's segment only that host's workers allocate via `pool_->alloc()` (`bump.fetch_add(1)` on a CXL cursor — AP16 hazard: no `flush_line` after the RMW, see III.3). | workload-dependent (~512 MB/host at MAX_OPS=200k KV=1024) |
-| **WriteRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 1/2/3 (UPDATE/INSERT/DELETE) only. `[H][H]` rings, depth 256 each, **128-B entry** (req on cl 1, resp on cl 2; tail and head on SEPARATE cachelines per iter-9A redo Phase 2 fix). C2-compliant: NO value bytes inline, just `(key, op_kind, value_len, staging_off, staging_gen)`. | `~H² × 256 × 128 B` |
-| **ReadRingMatrix** | CXL | per ordered pair: SPSC | iter-9A redo Phase 2.A — carries op 4 (CACHE_REGISTER) only. Same 128-B 2-cacheline layout as WriteRing. Req `(key)`. **iter-11A Phase 1**: the ring response is just a slot-free signal; the actual value bytes ride on `ReadStagingMatrix` (next row) — reader no longer does a second `pool_->read`. | `~H² × 256 × 128 B` |
-| **ForwardStagingMatrix** | CXL | per (src_host, dst_host, slot_idx) | iter-9A redo Phase 2.B — value-bytes arena for op 1/2 (writes). Slot 1:1 with WriteRing slots (same `slot_idx`); each slot holds up to `kForwardStagingSlotBytes` (1024 B) value bytes. Lifetime tracked by ring slot reuse — no separate allocator. | `~H² × 256 × 1024 B` (~4 MiB) |
-| **ReadStagingMatrix** | CXL | per (req_host, owner_host, slot_idx) | **iter-11A Phase 1** — owner-forwarder→reader value-bytes arena for op 4 (CACHE_REGISTER) responses. `ReadStagingSlot` = 1 control cacheline {`atomic<uint64_t> ready_op_id`, `lookup_epoch`, `key`, `value_size`, `status`, _pad} + 1024-B `value_bytes`. Owner's `read_handler` writes value bytes + `lookup_epoch` (C13 tag) here directly, then publishes `ready_op_id = req_op_id`; reader polls `ready_op_id`. Eliminates the iter-10A second `pool_->read` roundtrip. | `~4.4 MiB` (`H² × 256 × 1088 B` at H=4) |
-| **InvalRingMatrix** | CXL | per ordered pair: SPSC | Carries `OP_INVALIDATE` only (separate from Write/Read rings — see I.7 deadlock argument). `[H][H]` rings, depth 256 each, **128-B entry** (2-cacheline split, head/tail on separate cachelines per iter-9A redo Phase 2 fix). | `~H² × 256 × 128 B` |
+| **WriteRingMatrix** | CXL | per (src, dst, shard): SPSC | iter-9A redo Phase 2.A original + **iter-17A Phase 1+2 promoted to 3D `rings[H][H][actual_shards]`** (was 2D). Carries op 1/2/3 only. `actual_shards = ceil(T/N)` (N=`FUSEE_RING_SHARDS_FACTOR`); each ring depth 256, **128-B entry** (req on cl 1, resp on cl 2; tail and head on separate cachelines). C2-compliant: NO value bytes inline, just `(key, op_kind, value_len, staging_off, staging_gen)`. | `~H² × actual_shards × 256 × 128 B`; at H=4 actual_shards=16: ~67 MiB |
+| **ReadRingMatrix** | CXL | per (src, dst, shard): SPSC | iter-9A redo Phase 2.A + **iter-17A 3D promotion**. Carries op 4 (CACHE_REGISTER) only. Same 128-B 2-cacheline layout. **iter-11A Phase 1**: ring response = slot-free signal; value bytes ride on `ReadStagingMatrix`. Worker→shard mapping: Plan A `i / N`, Plan B `fnv1a(key) % actual_shards`. | `~H² × actual_shards × 256 × 128 B` |
+| **ForwardStagingMatrix** | CXL | per (src, dst, shard, slot_idx) | iter-9A redo Phase 2.B + **iter-17A 4D promotion `slots[H][H][actual_shards][256]`**. Value-bytes arena for op 1/2 (writes). Slot 1:1 with WriteRing slots at same `[shard][slot_idx]`; each slot holds up to `kForwardStagingSlotBytes` (1024 B). Lifetime tracked by ring slot reuse. | `~H² × actual_shards × 256 × 1024 B`; at H=4 actual_shards=16: ~64 MiB |
+| **ReadStagingMatrix** | CXL | per (req, owner, **shard**, slot_idx) | **iter-11A Phase 1** original (3D `[req][owner][slot]`) + **iter-18A Phase 4 promoted to 4D `[req][owner][shard][slot]`** to fix the iter-17A `217×` collapse on multi-shard read (root cause: when actual_shards>1, all shards' responses wrote to the SAME staging slot → race + corrupt → XRS4T timeout). `ReadStagingSlot` = 1 control cacheline {`atomic<uint64_t> ready_op_id`, `lookup_epoch`, `key`, `value_size`, `status`, _pad} + 1024-B `value_bytes`. `read_handler()` + `read_staging_slot()` take `ring_idx` param. | `~H² × actual_shards × 256 × 1088 B`; at H=4 actual_shards=16: ~70 MiB (was 4.4 MiB pre-iter-18A) |
+| **InvalRingMatrix** | CXL | per (src, dst, shard): SPSC | iter-9A + **iter-17A 3D promotion**. Carries `OP_INVALIDATE` only (separate channel — I.7 deadlock argument). Same 128-B 2-cacheline entry as Write/Read. | `~H² × actual_shards × 256 × 128 B` |
 | **AggregatorRegion** | DRAM | `MAP_SHARED` across same-host workers | iter-9A redo Phase 2.C — per-(ring_kind, worker) DRAM slots + value buffers. Used only when `FUSEE_USE_AGGREGATOR=1`. | ~204 KiB (DRAM) |
 | **SlotDirectory** | DRAM | `MAP_SHARED` across same-host workers | Per-(bucket, slot) coherence state: `sharer_bitmap` (8-bit, one per host), `state` (SHARED / INVALID / …), host-local `pthread_spinlock`, `version` (bumped on every commit). | `B × S × 16 B` |
 | **KvCachePool (L2)** | DRAM | `MAP_SHARED` across same-host workers | Open-addressed bucket array. `KvCacheBucket` = host-local spinlock (legacy, unused after iter-10A Phase 2) + **`std::atomic<uint64_t> epoch`** (iter-10A Phase 1.B — bumped on insert/evict/set_stale; TLS readers compare against this) + 4 `KvCacheEntry` slots. Each entry has `std::atomic<uint32_t> seq` (**iter-10A Phase 2 seqlock CAS**: even = stable, odd = mid-update; CAS even→odd to claim, store back even+1 to publish; readers re-load seq after value copy and treat mismatch as miss-retry). | ~8 MB (1024 entry default) |
@@ -1039,6 +1077,187 @@ responder_handle(e):
 
 ---
 
+## II.7 xhost_write microbench stages (XW family — iter-16A)
+
+**Source**: `src/cxl_kv_ops_A.cc :: forward_write_direct()` (worker side)
++ `write_receiver_loop()` / `write_handler()` (receiver side). Gated by
+`-DFUSEE_PROBE=1` (orthogonal to the YCSB-path `FUSEE_PROBE_PATH=1`).
+
+Stage decomposition built for `bench_xhost_write` — pure cross-host
+write microbench, `FUSEE_CACHE=0` (no L1/L2), value bytes ride
+`ForwardStaging` (C2-compliant). All 6 logical YCSB outcomes collapse
+to one: every op is "cross-host miss → forward → ack". The stage
+breakdown isolates `worker spin = receiver work` so latency on either
+side can be reasoned about independently.
+
+**8 stages = 5 worker (XWS) + 3 receiver (XWR)**. Invariant
+`∑(Stage1..5) = StageW` and `∑(R1..R3) = StageR` enforced by sanity
+check (Phase 1.5 of iter-16A: 99.3-99.8 % closure across T={1, 8, 64}).
+
+| # | Stage | Substages (sites) | Probe tag | Healthy ns @ T=8 V=1024 |
+|---|---|---|---|---:|
+| **XWS1** | slot_reserve | atomic `fetch_add(tail)` on CXL ring + flush + sfence | XWS1S → XWS1E | ~530 |
+| **XWS2** | slot_wait | wait-for-slot-free spin: flush + fence + atomic load `req_op_id == 0` loop (C-spin counter XWS2R) | XWS1E → XWS2E + XWS2R | ~1150 |
+| **XWS3** | value_xfer | memcpy value to `ForwardStaging[me][dst][shard][slot_idx].bytes` + per-CL flush + sfence (CPU-side cost only — actual CXL propagation hides in XWS5) | XWS2E → XWS3E | ~30 (CPU-side; actual W=1024 CXL writeback ~10 µs absorbed in XWS5) |
+| **XWS4** | ctrl_publish | fill `req_op_id, key, op_kind, value_len, staging_off, staging_gen` on cl 1 + flush + sfence | XWS3E → XWS4E | ~20 |
+| **XWS5** ⭐ | **ack_wait** | flush(cl 2) + fence + atomic load `resp_op_id == op_id` loop + pause (XWS5T timeout counter) | XWS4E → XWS5E + XWS5T | **~14 000** (dominates 88 % StageW @ T=8; **scales 5k → 140 k T=1→64**) |
+| **StageW** | (∑ XWS1..5) | end-to-end worker spin | computed | ~15 900 |
+| **XWR1** | ring_drain | per-src `flush(ring->tail) + mfence + load` outer + flush(entry) + load `req_op_id != 0` inner (XWR1Z gap-tolerance counter from iter-12A Phase 1.6) | XWR1S → XWR1E + XWR1Z | ~1900 |
+| **XWR2** | handler | `write_handler` substages: bucket flush+scan (CXL) + dir lock + `cache_pool_lookup` + size-class branch + W1-W12 owner-side write path (executes full `execute_write_local`!) | XWR1E → XWR2E | ~600-1200 (receiver IS the owner's W1..W12 — for owner-self writes XWR2 = full W path) |
+| **XWR3** | ack_publish | release fence + `resp_op_id` store on cl 2 + flush(cl 2) + sfence (head++ inside loop; not probed) | XWR2E → XWR3E | ~15 |
+| **StageR** | (∑ XWR1..3) | end-to-end receiver work | computed | ~1900-3700 (V- and dist-invariant; iter-16A confirms receiver is NOT saturated by own work) |
+| **XWRTT** | derived | StageW − StageR = pure CXL roundtrip + wait time | computed | RTT/StageW = **99 %** @ T=64 (worker is almost entirely waiting for receiver-emitted ack to propagate via CXL) |
+
+### Key iter-16A findings (stage-level)
+
+- **XWS5 (ack_wait) dominates 72-99 % StageW** at T=1..64 — single
+  receiver = queue bottleneck. Worker can't optimize its own waiting.
+- **StageR stays 1.8-3.7 µs across all T** — receiver does fixed work
+  per op, doesn't saturate; the wait is "ack hasn't propagated to me
+  yet via CXL".
+- **V-invariant**: V=64 vs V=1024 → same thpt → **not CXL-BW-bound**.
+  The 1024-B value CXL write completes async during XWS5; XWS3 only
+  measures CPU-side memcpy cost (~30 ns).
+- **dist-invariant under single receiver**: hot-bucket lock contention
+  doesn't surface (all bucket locks serialize on the single receiver
+  thread anyway). Surfaced again when iter-17A landed multi-receiver
+  (Plan B / zipf collapse).
+- **H9 single-flush fix** (`publish_slot_cow` simplified from 2-phase
+  to 1-phase since key+value sit on same 16-B cacheline): **+22 % all T**.
+
+### Sites in code
+
+- Worker: `forward_write_direct` in `src/cxl_kv_ops_A.cc` — 5 probe
+  pairs (XWS1S/E .. XWS5S/E) wrap the 5 stages
+- Receiver: `write_receiver_loop` + `write_handler` — 3 probe pairs
+- Probe macros: `PROBE_OP(tag, op_id)` gated by `FUSEE_PROBE`
+- Per-thread mmap'd ring buffer 512 MB (was 128 MB pre-iter-16A —
+  T=1 with 15M events overflowed)
+
+→ `src/cxl_probe.h` (macros), `src/cxl_kv_ops_A.cc` (sites),
+`scripts/iter16A_xhost_decomp_analyze.py` (trace → CSV → stage
+medians)
+
+---
+
+## II.8 xhost_read microbench stages (XR family — iter-18A)
+
+**Source**: `src/cxl_kv_ops_A.cc :: forward_read_direct()` (worker) +
+`read_receiver_loop()` / `read_handler()` (receiver). Gated by
+`-DFUSEE_PROBE=1 -DFUSEE_READ_PROBE=1` (independent of XW; both can run
+together).
+
+Stage decomposition for `bench_xhost_read` — pure cross-host read
+microbench, `FUSEE_CACHE=0`, value bytes ride `ReadStaging`
+(iter-11A Phase 1 forwarder-pool-direct, extended to 4D in iter-18A
+Phase 4). 1 more worker stage than XW because the read path has a
+distinct `cleanup_validate` (XRS5) for C13 epoch check + ring slot
+free, then `value_recv` (XRS6) for staging memcpy.
+
+**9 stages = 6 worker (XRS) + 3 receiver (XRR)**. Invariant
+`∑(Stage1..6) = StageW` enforced (iter-18A Phase 1.5: 99.3-99.8 %
+closure).
+
+| # | Stage | Substages (sites) | Probe tag | Healthy ns @ T=8 V=1024 zipf-0.99 N=0 |
+|---|---|---|---|---:|
+| **XRS1** | slot_reserve | `fetch_add(tail)` on CXL ring + flush + sfence | XRS1S → XRS1E | ~520 |
+| **XRS2** | slot_wait | wait-for-slot-free spin: flush + fence + atomic load loop (XRS2R counter) | XRS1E → XRS2E + XRS2R | ~1080 |
+| **XRS3** | req_publish | clear `staging[req][owner][shard][slot].ready_op_id = 0` + flush + sfence; capture `my_epoch_at_send` (C13); write entry `key, req_op_id` to ring cl 1 + flush + sfence | XRS2E → XRS3E | ~110 |
+| **XRS4** ⭐ | **ack_wait** | flush(`staging.ready_op_id`) + fence + atomic load + pause loop (XRS4T timeout counter, **200 ms cap iter-11A**) | XRS3E → XRS4E + XRS4T | **~22 000** (dominates 47-97 % StageW; **scales 5k → 197 k T=1→64**) |
+| **XRS5** | cleanup_validate | clear `e->req_op_id = 0` + flush + sfence (free ring slot) + C13 check `staging.lookup_epoch >= my_epoch_at_send` (return -3 if reject) + status check | XRS4E → XRS5E | ~1600 |
+| **XRS6** | value_recv | per-CL flush(`staging.value_bytes + off`) loop (16 flushes at V=1024) + mfence + memcpy(out_buf, staging.value_bytes, vlen) | XRS5E → XRS6E | ~2900 (V-dependent CPU-side memcpy; CXL fetch absorbed by flushes) |
+| **StageW** | (∑ XRS1..6) | end-to-end worker spin | computed | ~28 000 |
+| **XRR1** | ring_drain | flush(ring->tail) + mfence outer + per-slot flush(entry) + load `req_op_id != 0` inner (XRR1Z gap counter, XRR1X bytes-read counter) | XRR1S → XRR1E + XRR1Z, XRR1X | ~3100 (78-83 % StageR) |
+| **XRR2** | handler | `read_handler` substages: bucket flush+scan + dir lock + sharer_bitmap set + `cache_pool_lookup` (if cache=on) + size-class branch + write value bytes + `lookup_epoch` (C13 tag) into `staging[req][me][shard][slot]` + flush staging cachelines + sfence | XRR1E → XRR2E | ~600 (16-21 % StageR) |
+| **XRR3** | ack_publish | release fence + `staging.ready_op_id.store(req_op_id)` + flush + sfence (note: in read path, ack publish writes to **staging**, not to ring entry cl 2 — ring slot is freed by worker in XRS5) | XRR2E → XRR3E | ~15 (< 1 % StageR) |
+| **StageR** | (∑ XRR1..3) | end-to-end receiver work | computed | ~3700 (V-invariant, dist-invariant in single-receiver) |
+| **XRRTT** | derived | StageW − StageR | computed | 98 % StageW @ T=64 (worker ≡ waiting) |
+
+### Key iter-18A findings (stage-level)
+
+- **XRS4 (ack_wait) dominates 47-97 % StageW** (same shape as XWS5).
+  Worker can't optimize its own waiting; opt target is **receiver
+  throughput or polling cadence**.
+- **C3 worker pause 4× between flushes in XRS4** = **+68-90 % thpt
+  @ T=1/8/64** (iter-18A Phase 3 biggest single win) — aggressive
+  worker polling generates CXL bus contention that masks receiver's
+  ack writeback; pacing the worker lets the ack propagate.
+- **C1 R1 ring_drain mfence→lfence** = **REVERT -26/-50/-59 %** —
+  unlike iter-17A XW where Stage 6 mfence→lfence won +21-27 %, in
+  the read path the receiver reads worker's `req_op_id` from a
+  cross-host CXL cacheline; mfence is required for that direction
+  to drain pending CXL invalidates. **iter-17A xhost_write lfence
+  opts cannot be blindly ported to xhost_read** — rule: per `flush_line
+  + fence + load`, lfence safe iff load is single-field + loop-tolerant
+  of stale OR value-semantics resilient AND target cacheline is
+  same-host coherent. Cross-host = mfence.
+- **dist-direction OPPOSITE to write**: read zipf > uniform by 25-34 %
+  (uniform 0.50 / zipf-0.99 0.63 / zipf-1.5 0.67 Mops single-recv).
+  Hot-key cacheline stays in receiver L3 → next read hits cache →
+  no CXL re-fetch. Write zipf < uniform 5 % because hot-key cross-host
+  coherence ping-pong eats CXL BW.
+- **V-invariant** (same as XW): V=64 vs V=1024 → thpt same.
+  XRS6 16× flush+memcpy at V=1024 is small absolute time (~3 µs); not
+  BW-bound.
+- **perfstat: IPC = 0.022-0.034, LLC miss 70-95 %** — receiver almost
+  entirely memory-stalled on CXL. Receiver IS the bottleneck; scaling
+  lever = add receiver threads (Phase 4 multi-receiver).
+
+### iter-17A multi-shard read 217× collapse — RCA + fix (Phase 4)
+
+**Root cause** (found by code reading 2026-05-23, before any sweep):
+- `ReadRingMatrix.rings` was 3D `[req][owner][shard][slot]` (iter-17A
+  promoted)
+- `ReadStagingMatrix.slots` stayed 2D `[req][owner][slot]` (iter-11A
+  legacy) — **missing shard dimension**
+- When N>0 → `actual_shards>1`, all shards' responses wrote to the
+  same staging slot → race + value corruption → C13 check rejects
+  EVERY response → workers spin XRS4T to 200 ms timeout → 217× collapse
+  on YCSB workloadc T=16 N=4
+
+**Fix** (`src/cxl_read_staging.h`, `src/cxl_kv_ops_A.{h,cc}` — 5 LOC + 2 callsites):
+- `ReadStagingMatrix.slots` → 4D `[req][owner][shard][slot]`
+- `read_staging_slot()` signature gains `ring_idx`
+- `read_handler()` signature gains `ring_idx`
+- 3 callsites (1 in `forward_read_direct`, 2 in `read_handler`) thread
+  the shard index through
+- Memory: 4.4 MiB → ~70 MiB CXL (still tiny vs 512 GiB dax)
+
+After fix:
+- Phase 4.3 hash-diff 5 unique paths × T=16 V=1024 zipf-0.99: 5/5 PASS,
+  N=4 worker_id = 4.098 Mops (vs iter-17A bug 0.016 = **257× lift**)
+- Phase 4 full 7-group sweep: **5.203 Mops peak @ T=64 N=4 Plan A**
+  (79 % of iter-17A xhost_write peak 6.6)
+- Phase 5 YCSB workloadc T=64 N=4 cache=1: **53.9 Mops cluster**
+  = **2.7× of 20 Mops/s target** (read path no longer YCSB-C bottleneck)
+
+### Sites in code
+
+- Worker: `forward_read_direct` — 6 probe pairs (XRS1S/E .. XRS6S/E)
+- Receiver: `read_receiver_loop` + `read_handler` — 3 probe pairs
+- Probe macro: `PROBE_READ_OP(tag, op_id)` gated by `FUSEE_READ_PROBE`
+  (independent gate from `FUSEE_PROBE` so XW and XR probes can be
+  toggled independently)
+- Same 512 MB per-thread mmap'd ring buffer infrastructure as XW
+
+→ `src/cxl_probe.h` (`PROBE_READ_OP`), `src/cxl_kv_ops_A.cc` (probe
+sites), `scripts/iter18A_*_decomp_*.py` (analyzer + viz)
+
+---
+
+## II.9 Cheat sheet — which stage family to read
+
+| You see in a probe trace … | Open … |
+|---|---|
+| `W1, W2, … W12` or `R1, R2, …, R6` or `I1..I8` or `F1..F7` or `D1..D5` | §II.1–II.6 (YCSB-path stages) |
+| `XWS1..5, XWR1..3` | §II.7 (xhost_write microbench) |
+| `XRS1..6, XRR1..3` | §II.8 (xhost_read microbench) |
+| Stage with `T` suffix (e.g. XRS4T, XWS5T) | Timeout counter for that stage's spin |
+| Stage with `R` suffix (e.g. XRS2R) | C-spin retry counter |
+| Stage with `Z` / `X` suffix (e.g. XRR1Z, XRR1X) | Receiver-side gap-tolerance / bytes-read counter |
+
+---
+
 # Part III — Cross-Cutting Reference
 
 ## III.1 CXL primitive cost cheat sheet
@@ -1114,7 +1333,7 @@ Snapshot history kept in iter summary docs (each summary references
 the blueprint version at iter-end, so historical code archaeology is
 possible without git-diffing this file).
 
-**Latest version**: end of iter-11A (2026-05-11).
+**Latest version**: end of iter-18A (2026-05-23).
 
 ## iter-8A blueprint changes summary
 
@@ -1200,3 +1419,183 @@ possible without git-diffing this file).
   was supposed to relieve, but bigger linear scan added +2.4 µs/
   insert). `kCacheEntriesPerBucket` stays 4. Hot-key replication is
   iter-12A backlog #5.
+
+## iter-12A blueprint changes summary (2026-05-16/17)
+
+- Part I.3 (ring matrix init): `enable_write_ring` /
+  `enable_read_ring` / `enable_invalidate` ALWAYS `memset+flush_region`
+  the ring matrix on attach — previously gated by `if (init_region)`
+  which left host-1's L1/L2/L3 holding a stale dirty `ring->head`
+  from a prior process run. On `init=false` reattach, the receiver's
+  non-flushed read of `head` could observe a terminal value >
+  `tail`, causing the inner `while(head<tail)` to never enter →
+  every cross-host op timed out at 5ms. **Phase 5 fix** (Bug A):
+  60/60 WIN post-fix, median thpt +3.5-30×.
+- Part II.5/II.6 (receiver loops): added **gap-tolerance** 4096-iter
+  in-place spin before breaking the inner loop (Phase 1.6) — handles
+  producer-publish-vs-consumer-poll races where consumer reaches a
+  not-yet-published entry. Previously the receiver bailed at first
+  empty slot → spurious idle gaps under bursty traffic. iter-12A
+  Phase 1.7: 13/13 cells improved 16-269×.
+- Part III.3 failure modes: new "host-1 stale ring->head cache" mode
+  (Bug A above) added with fix pointer.
+
+## iter-13A blueprint changes summary (2026-05-17)
+
+- Part I.3 + Part I.4 (read path copy elimination): new file
+  `src/cxl_read_guard.h` ships **HAZARD pointer**-protected direct
+  pool read. ReadReceiver no longer copies pool bytes into
+  `ReadStaging.value_bytes`; instead it publishes the pool `blk_off`
+  + a HAZARD slot the reader observes. Reader reads from the pool
+  block directly with the HAZARD slot held. RCU variant also
+  implemented as comparison; HAZARD won by 1.3 %. Net effect on
+  YCSB headline: ~break-even (read r_avg -31 % at T=4 was offset
+  by per-op CXL store overhead at peak). Read path is now
+  bandwidth-independent of value size in receiver work.
+- Part I.5 (write path copy elimination, Phase 2 W1): per-host
+  **reserved blockpool segments** added — each host pre-reserves N
+  blocks from its blockpool segment at startup so cross-host writes
+  publish a `blk_off` pointing into the writer's reserved range
+  instead of copying value bytes into `ForwardStaging`. Receiver's
+  `write_handler` reads value bytes from the writer-host's reserved
+  pool range. Implementation in `src/cxl_kv_blockpool.cc` reserve
+  table.
+- Part II.6 (responder handler): now branches on
+  `value_size > kForwardStagingThreshold` and uses HAZARD direct
+  read for big values (W1+HAZARD path); fallback to staging copy
+  for small values where setup cost dominates.
+
+## iter-14A blueprint changes summary (2026-05-19)
+
+- Part II (all stages): **path-counter instrumentation** added
+  (`src/cxl_path_counters.h`) — atomic counters per W/R/I/F/D
+  stage entry/exit, accumulated per worker thread. Output via
+  `dump_path_counters_csv()` at shutdown. Used for ground-truth
+  attribution studies (P3 path_decomp + P5 case classification)
+  without requiring full probe-on builds.
+- Part II.2 (R2 cache_pool_lookup): LRU-sample variant (F2)
+  prototyped + **ROLLED BACK**. R2hit anomaly (0.23 µs p50 vs
+  spec 0.03 µs) is real but not throughput-load-bearing — W10's
+  MESI ping-pong on 1088-B `KvCacheEntry` dominates instead.
+- Part II.1 (W4-W6): cross-host write self-invalidate prototype
+  (F1) + **ROLLED BACK**. RAP overestimated invalidate frequency
+  because `sharer_bitmap` resets to `{owner}` per write; most
+  cross-host writes have no peer-sharers to invalidate.
+
+## iter-15A blueprint changes summary (2026-05-20)
+
+- **Critical correctness fix** to `protocol_a_ycsb.cc`: forked child
+  workers now correctly re-attach `wr_, rr_, ir_, fs_, rs_, rsv_`
+  pointers post-`fork()`. Previously children inherited a fresh
+  `CxlKvStoreA store` with default-null member pointers; their
+  `forward_*_direct` returned -10 silently, making **all "T>1
+  xhost thpt" prior measurements FAKE** (~1/64 of reported number).
+  All sweep data from iter-9A through iter-14A xhost paths invalidated;
+  iter-15A re-established the baseline.
+- **Pool cursor cross-rep staleness fix** (Bug 2): non-primary host's
+  L1/L2/L3 retained the previous rep's `pool.bump.fetch_add` cursor
+  value (no flush_line in the RMW — AP16 hazard), causing
+  intermittent half-empty LOAD inserts → bimodal cells. Fix:
+  flush + sfence around `bump.fetch_add`.
+- Part II.7 (NEW xhost microbench paths landed): `bench_xhost_write`
+  / `bench_xhost_read` testbenches added in
+  `tests/cxl_kv_bench_mp.cc`. These bypass cache layers (FUSEE_CACHE=0)
+  and pure-cross-host stress the ring + receiver substrate — set up
+  the stage for iter-16A's stage decomposition framework. Trace gen
+  script `scripts/iter14A_gen_microbench_traces.py` was updated with
+  hash fix to match production hashing.
+- Part I.3 (TlsCache): default changed to OFF (`FUSEE_TLS_SIZE=0` env
+  default) after 2-tier cache study (iter-15A 353fbe1). The L1 TLS
+  hit path is fast (~50-300 ns) but the cost of populating + epoch
+  validation under contention turned out to slow down workload-c at
+  T≥32. Workloads that benefit can opt in via env.
+
+## iter-16A blueprint changes summary (2026-05-21)
+
+- **NEW Part II.7 — xhost_write microbench stage decomp** (XW
+  family): 8 stages (5 worker XWS1..5 + 3 receiver XWR1..3), 15
+  probe tags, 11 derived latencies, 4 event counters. See §II.7 for
+  details. Probe macro `PROBE_OP(tag, op_id)` gated by `FUSEE_PROBE`
+  (orthogonal to legacy `FUSEE_PROBE_PATH`). Per-thread mmap ring
+  bumped 128 → 512 MB.
+- Part II.1 W9 (`publish_slot_cow`): **H9 single-flush fix** —
+  collapsed 2-phase `(value=X; flush; sfence; key=Y; flush; sfence)`
+  to single `(slot=full16B; flush; sfence)` since key+value sit on
+  the same 16-B slot cacheline. **+22 % all T** (T=8 0.554 → 0.676 Mops).
+- Part III.1 (cost cheat sheet): receiver-side StageR stays 1.8-3.7
+  µs across all T → receiver is NOT saturated by own work
+  (idle waiting for ring activity at high T). This validates the
+  "RTT = StageW × 99 % at T=64" finding which sets up iter-17A
+  multi-receiver work.
+
+## iter-17A blueprint changes summary (2026-05-22)
+
+- **Part I.2 large rewrite** — multi-receiver pool replaces 6
+  single-thread workers/receivers/senders:
+  - Receivers fan out to `WriteRecv[k] / ReadRecv[k] / InvalRecv[k]`
+    for shard k ∈ [0, actual_shards)
+  - `compute_receiver_layout()` divides 22-CPU pool (cpu 64..85)
+    into 3 groups (writes get +1 slot when pool_size % 3 == 1)
+  - **Senders REMOVED**: workers always go direct to ring shards;
+    aggregator path / `FUSEE_USE_AGGREGATOR=1` no longer wired
+- Part I.3 — ring matrices promoted to 3D `[H][H][actual_shards]`
+  for Write/Read/Inval; `ForwardStaging` to 4D
+  `[H][H][actual_shards][slot]`. `actual_shards = (N==0)?1:ceil(T/N)`
+  controlled by `FUSEE_RING_SHARDS_FACTOR` env. Memory: 4 MiB →
+  ~67 MiB CXL at H=4 actual_shards=16.
+- Part I.2 — `FUSEE_RING_ROUTING={worker_id, key_hash}` env adds
+  Plan A vs Plan B routing. Plan A wins by 198 % on zipf T=64 N=4
+  (hot-key collapses Plan B's single shard).
+- Part I.2 — **ReservHandler pin fix**: was unpinned since iter-9A,
+  pinned to cpu 85 in iter-17A. **+83-105 % N=0 baseline lift**
+  vs iter-15A — the unpinned spinner was stealing worker CPU cycles.
+- Part II.1 stage 5/6 path opts (worker spin):
+  - W5/W6 `mfence → lfence` opt (+21-23 %)
+  - W6 lfence at A+C sites (+21-27 %), B site rejected
+  - Derived theorem: `flush_line + lfence + load` safe ⇔ (single-
+    field load) ∧ (loop-self-healing ∨ value-semantics-stale-safe).
+    Multi-field loads on same cacheline must still mfence.
+- Part II (bucket double-flush removal): `H7` defensive bucket
+  re-flush after `slot_directory_lock` removed (no functional
+  purpose given no re-scan after lock). **+36-37 % T=8/64**.
+- Part III.3 — **known bug (deferred to iter-18A)**: multi-shard
+  read path collapses 134-217× on YCSB workload-a/b/c/d/f at N≥4
+  (xhost_write was the only path with end-to-end multi-shard test).
+  Root cause + fix landed iter-18A Phase 4 — see §II.8 RCA block.
+
+## iter-18A blueprint changes summary (2026-05-23)
+
+- **NEW Part II.8 — xhost_read microbench stage decomp** (XR
+  family): 9 stages (6 worker XRS1..6 + 3 receiver XRR1..3). Probe
+  macro `PROBE_READ_OP(tag, op_id)` gated by `FUSEE_READ_PROBE`
+  (independent of `FUSEE_PROBE`). See §II.8.
+- **Part I.3 + Part II.8 — `ReadStagingMatrix` promoted from 3D to
+  4D** (`slots[req][owner][shard][slot]`) — fixes iter-17A 217×
+  multi-shard read collapse. Without the shard dimension, multiple
+  shards' ring responses mapped to the same staging slot → race +
+  C13 reject storm → XRS4T timeout. 5 LOC + 2 callsites
+  (`read_staging_slot()` and `read_handler()` both take `ring_idx`).
+  Memory: 4.4 MiB → ~70 MiB CXL at H=4 actual_shards=16.
+- Part II.8 worker-side opt **C3 pause 4× in XRS4** (+68-90 % T=1/8/64):
+  aggressive worker polling generated CXL bus contention masking
+  receiver ack writeback; pacing the worker lets ack propagate.
+  iter-18A's biggest single-stage opt.
+- Part II.8 rule on lfence porting: **iter-17A write-path lfence opts
+  CANNOT be blindly ported to read path**. C1 (ring_drain mfence→lfence
+  in XRR1) **REVERTED** -26/-50/-59 % — receiver reads worker's
+  `req_op_id` from cross-host CXL line, requires mfence to drain
+  pending invalidates. Lfence rule sharpened: applies iff
+  same-host coherent target OR cross-host with single-field +
+  loop-self-healing semantics.
+- Part II.8 stage-level dist observation **reversed from write
+  path**: in xhost_read, **zipf > uniform 25-34 %** (hot-key
+  cacheline reuse in receiver L3); in xhost_write zipf < uniform
+  5 % (hot-key cross-host coherence ping-pong eats CXL BW).
+- Part III.3 — read-path multi-shard 217× failure mode REMOVED
+  (fixed); Plan A vs Plan B gap in read path is only +25 % (vs
+  +198 % in write) because read doesn't trigger cross-host
+  invalidate ping-pong on hot key.
+- YCSB workload-c validation post-iter-18A Phase 4 fix: T=64 N=4
+  cache=on = **53.9 Mops cluster = 2.7× of 20 Mops/s target**.
+  Read path no longer the YCSB-C bottleneck. xhost_write peak still
+  at 6.628 Mops cluster (iter-17A); write path is next iter target.
