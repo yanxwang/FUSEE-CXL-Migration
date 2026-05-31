@@ -1,0 +1,13 @@
+id,V,T,build,scenario,keydist,rep,thpt_Mops,r_p50_us,r_p99_us,r0_tls,r2hit,r2miss_local,cpool_ins_r,cp_lru_evict,wallclock_s
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-0.99,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-0.99,1,37.932,2.807,16.901,0,0,78125,0,9,18
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-0.99,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-0.99,2,38.163,2.793,17.077,0,0,78125,0,9,18
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-0.99,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-0.99,3,38.002,2.788,17.290,0,0,78125,0,9,18
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-1.5,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-1.5,1,17.393,5.679,42.842,0,0,78125,0,0,18
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-1.5,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-1.5,2,17.392,5.680,42.751,0,0,78125,0,0,18
+ph2_1b_build-cxl-w1-v1024-nocache_zipf-1.5,1024,64,build-cxl-w1-v1024-nocache,local_read,zipf-1.5,3,17.445,5.872,41.244,0,0,78125,0,0,19
+ph2_1b_build-cxl-w1-v1024_zipf-0.99,1024,64,build-cxl-w1-v1024,local_read,zipf-0.99,1,47.586,0.295,14.499,0,31333,46792,0,3954862,23
+ph2_1b_build-cxl-w1-v1024_zipf-0.99,1024,64,build-cxl-w1-v1024,local_read,zipf-0.99,2,47.038,0.294,14.935,0,31356,46769,0,3954878,22
+ph2_1b_build-cxl-w1-v1024_zipf-0.99,1024,64,build-cxl-w1-v1024,local_read,zipf-0.99,3,47.644,0.294,14.423,0,31343,46782,0,3954861,23
+ph2_1b_build-cxl-w1-v1024_zipf-1.5,1024,64,build-cxl-w1-v1024,local_read,zipf-1.5,1,16.351,0.222,53.757,0,17278,60847,0,3949947,22
+ph2_1b_build-cxl-w1-v1024_zipf-1.5,1024,64,build-cxl-w1-v1024,local_read,zipf-1.5,2,16.245,0.213,48.274,0,17300,60825,0,3949928,22
+ph2_1b_build-cxl-w1-v1024_zipf-1.5,1024,64,build-cxl-w1-v1024,local_read,zipf-1.5,3,16.279,0.209,50.142,0,17277,60848,0,3949950,22
