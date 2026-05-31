@@ -2915,15 +2915,21 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   CxlKvBucket *bucket = &buckets_[b];
   // iter-19A Phase 2 mechanism isolation:
   //   FUSEE_LR_DEL_OWNER_FLUSH=1 → skip the defensive flush+mfence on
-  //     owner-self miss path. Justification: owner is sole writer of
-  //     its own hashtable buckets (cross-host writes route via
-  //     OP_WRITE_FORWARD → owner's WriteReceiver), same-host MESI
-  //     handles read-after-write coherence; the flush is over-
-  //     defensive for this branch. Build B diagnostic / iter-20A fix.
+  //     owner-self miss path (full removal, Build B baseline).
+  //   FUSEE_LR_DEL_FLUSH_ONLY=1  → remove only the 2 flush_line calls,
+  //     keep full_fence. Tests whether clflushopt CXL re-fetch storm
+  //     is the cause.
+  //   FUSEE_LR_DEL_FENCE_ONLY=1  → remove only full_fence, keep the 2
+  //     flush_line calls. Tests whether mfence-induced pipeline stall
+  //     / global memory ordering is the cause.
 #if !FUSEE_LR_DEL_OWNER_FLUSH
+#if !FUSEE_LR_DEL_FLUSH_ONLY
   flush_line(bucket);
   flush_line((char *)bucket + 64);
+#endif
+#if !FUSEE_LR_DEL_FENCE_ONLY
   full_fence();
+#endif
 #endif
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (bucket->slots[s].key == key) {
