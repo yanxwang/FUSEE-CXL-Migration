@@ -37,11 +37,33 @@ constexpr uint32_t kCacheValueMaxBytes = FUSEE_CACHE_VALUE_MAX;
 constexpr uint64_t kCacheKeyEmpty       = 0;     // sentinel
 constexpr uint64_t kCacheKeyTomb        = ~0ULL; // tombstone (after evict)
 
+// iter-19A Phase 2 mechanism isolation: FUSEE_LRU_PAD=1 moves
+// lru_epoch onto its own cacheline (separate from seq/key/stale/value_size).
+// Eliminates MESI ping-pong on read critical path (cacheline 0 becomes
+// pure-read). Cost: +64 B per entry (1088 → 1152 B).
+#ifndef FUSEE_LRU_PAD
+#define FUSEE_LRU_PAD 0
+#endif
+
 struct alignas(64) KvCacheEntry {
-  std::atomic<uint64_t> key;          // 8 B; kCacheKeyEmpty / kCacheKeyTomb / real key
-  std::atomic<uint8_t>  stale;        // 1 B; release-store on invalidate
+  // Cacheline 0 — read-hot fields (key/stale/seq/value_size are pure-read
+  // on cache_pool_lookup HIT path in steady state).
+  std::atomic<uint64_t> key;          // 8 B
+  std::atomic<uint8_t>  stale;        // 1 B
   uint8_t  _pad_a[3];
   uint32_t value_size;                // 4 B
+#if FUSEE_LRU_PAD
+  std::atomic<uint32_t> seq;          // 4 B
+  uint32_t _pad_seq;                  // 4 B
+  uint8_t _pad_cl0_end[40];           // fill cacheline 0 (no lru_epoch here)
+  // Cacheline 1 — lru_epoch on its OWN cacheline. RMW on every HIT
+  // ping-pongs this cacheline but readers don't read it during lookup.
+  alignas(64) std::atomic<uint64_t> lru_epoch;
+  uint8_t _pad_lru[56];               // pad to 64 B
+  // Cacheline 2+ — value_bytes (1024 B = 16 cachelines)
+  alignas(64) uint8_t value_bytes[kCacheValueMaxBytes];
+  // total = 64 + 64 + 1024 = 1152 B
+#else
   std::atomic<uint64_t> lru_epoch;    // 8 B; relaxed RMW on hit
   // iter-10A Phase 2: per-entry seqlock — even = stable / readable,
   // odd = mid-update / inserter exclusively owns. CAS even→odd to
@@ -52,6 +74,7 @@ struct alignas(64) KvCacheEntry {
   uint32_t _pad_seq;                  // 4 B
   uint8_t  value_bytes[kCacheValueMaxBytes];  // 1024 B inline
   // total = 8 + 4 + 4 + 8 + 4 + 4 + 1024 = 1056 B; alignas pads to 1088
+#endif
 };
 
 // Bucket = chain of N entries; collision resolved by linear scan.

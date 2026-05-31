@@ -98,10 +98,15 @@ bool cache_pool_lookup(KvCachePool *pool, uint64_t key, uint8_t *out,
       continue;
     }
     if (value_size) *value_size = sz;
-    // LRU touch (relaxed RMW). iter-14A F2: when FUSEE_LRU_SAMPLE=1,
-    // sample 1/64 hits via rdtsc low bits to remove MESI ping-pong on
-    // cacheline 0 of KvCacheEntry under hot Zipf multi-reader.
-#if FUSEE_LRU_SAMPLE
+    // iter-19A Phase 2 mechanism isolation:
+    //   FUSEE_LR_DEL_LRU_TOUCH=1 → skip lru_epoch RMW entirely (Build A
+    //     diagnostic; breaks LRU semantics but isolates the contention
+    //     source for benchmark measurement).
+    //   FUSEE_LRU_SAMPLE=1     → only do RMW 1/64 of the time (iter-14A
+    //     F2 default-off, iter-20A candidate to flip default-on).
+#if FUSEE_LR_DEL_LRU_TOUCH
+    // diagnostic: skip lru_epoch touch entirely
+#elif FUSEE_LRU_SAMPLE
     if ((__rdtsc() & 0x3FULL) == 0) {
       uint64_t ge = pool->global_epoch.load(std::memory_order_relaxed);
       e->lru_epoch.store(ge, std::memory_order_relaxed);

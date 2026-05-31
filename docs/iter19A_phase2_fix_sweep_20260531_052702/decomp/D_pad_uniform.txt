@@ -1,0 +1,25 @@
+# loading probe traces from /tmp/lr_probes_D_pad_uniform_rep1
+# threads: 67, events: 15202889
+
+=== iter-19A local_read stage decomp ===
+
+Total ops paired: 1242980
+  HIT  ops:     259241  (20.86 %)
+  MISS ops:     983739  (79.14 %)
+  HIT partial drops:  0
+  MISS partial drops: 1247225
+
+CPU TSC frequency assumed: 2.4 GHz
+
+─── HIT path (LRS1 + LRS2) ───
+    LRS1:   n=    259241  p50=      16.7 ns  p99=      20.8 ns  avg=      42.8 ns
+    LRS2:   n=    259241  p50=     580.0 ns  p99=    8589.2 ns  avg=    1911.3 ns
+  StageW:   n=    259241  p50=     615.8 ns  p99=    9772.5 ns  avg=    1996.9 ns
+
+─── MISS path (LRS1 + LRS2 + LRS3 + LRS4) ───
+    LRS1:   n=    983739  p50=      16.7 ns  p99=      20.8 ns  avg=      43.1 ns
+    LRS2:   n=    983739  p50=     237.5 ns  p99=    8734.2 ns  avg=    1576.0 ns
+    LRS3:   n=    983739  p50=    2034.2 ns  p99=    5315.8 ns  avg=    2225.0 ns
+    LRS4:   n=    983739  p50=     768.3 ns  p99=    1598.3 ns  avg=     783.6 ns
+  StageW:   n=    983739  p50=    3310.8 ns  p99=   14287.5 ns  avg=    4778.4 ns
+

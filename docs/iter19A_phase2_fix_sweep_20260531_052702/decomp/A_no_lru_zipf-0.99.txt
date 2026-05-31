@@ -1,0 +1,25 @@
+# loading probe traces from /tmp/lr_probes_A_no_lru_zipf-0.99_rep1
+# threads: 67, events: 11767428
+
+=== iter-19A local_read stage decomp ===
+
+Total ops paired: 463439
+  HIT  ops:     368053  (79.42 %)
+  MISS ops:      95386  (20.58 %)
+  HIT partial drops:  0
+  MISS partial drops: 470297
+
+CPU TSC frequency assumed: 2.4 GHz
+
+─── HIT path (LRS1 + LRS2) ───
+    LRS1:   n=    368053  p50=      16.7 ns  p99=      20.0 ns  avg=      42.2 ns
+    LRS2:   n=    368053  p50=     274.2 ns  p99=    8590.0 ns  avg=    2106.3 ns
+  StageW:   n=    368053  p50=     310.0 ns  p99=   10285.8 ns  avg=    2192.7 ns
+
+─── MISS path (LRS1 + LRS2 + LRS3 + LRS4) ───
+    LRS1:   n=     95386  p50=      16.7 ns  p99=      20.0 ns  avg=      43.1 ns
+    LRS2:   n=     95386  p50=    4633.3 ns  p99=   11830.8 ns  avg=    3273.1 ns
+    LRS3:   n=     95386  p50=    3068.3 ns  p99=    6014.2 ns  avg=    2732.5 ns
+    LRS4:   n=     95386  p50=     675.8 ns  p99=    1364.2 ns  avg=     695.9 ns
+  StageW:   n=     95386  p50=    7564.2 ns  p99=   17010.0 ns  avg=    6897.4 ns
+

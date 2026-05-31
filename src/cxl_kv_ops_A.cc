@@ -2913,9 +2913,18 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   PROBE_LR_OP("LRS3S", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
+  // iter-19A Phase 2 mechanism isolation:
+  //   FUSEE_LR_DEL_OWNER_FLUSH=1 → skip the defensive flush+mfence on
+  //     owner-self miss path. Justification: owner is sole writer of
+  //     its own hashtable buckets (cross-host writes route via
+  //     OP_WRITE_FORWARD → owner's WriteReceiver), same-host MESI
+  //     handles read-after-write coherence; the flush is over-
+  //     defensive for this branch. Build B diagnostic / iter-20A fix.
+#if !FUSEE_LR_DEL_OWNER_FLUSH
   flush_line(bucket);
   flush_line((char *)bucket + 64);
   full_fence();
+#endif
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (bucket->slots[s].key == key) {
       uint64_t encoded = bucket->slots[s].value;
