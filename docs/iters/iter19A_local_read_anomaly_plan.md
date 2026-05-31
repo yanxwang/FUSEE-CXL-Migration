@@ -336,14 +336,41 @@ ACCEPT — 先 full probe; 若 thpt 退 > 25% 改 sample-based.
 
 ---
 
-## 5. Open Questions (待 user 决定)
+## 5. Open Questions (CLOSED 2026-05-31)
 
-- **QR1**: Phase 1.3 hugepages 实验如果 confirm，是否进 iter-20A 默认 ship？还是只 env opt-in？ (默认 ship 需要 sysctl 配套文档；opt-in 不影响 production)
-- **QR2**: Phase 2.5 LRU evict 若 confirm hot-key-evict-storm，hot key affinity (skip cache) 是 protocol-level 改动 — 是否需要走 RAP 才算 sanctioned? (yes per CLAUDE.md §XIII)
-- **QR3**: Phase 0 baseline 若发现两个 anomaly 在 g1/g2 不复现 (e.g., 不同 CPU model 不同 LLC size 改变曲线)，是否要回 g3/g4 跑 baseline (assume g3/g4 还在 + kernel ok)? 还是只 RCA 现象偏差?
-- **QR4**: probe-on 数据如果显示 stage decomp 跟 iter-15A 假设不匹配，是否扩 Phase 2 加 perf record callgraph 进一步 attribution? 还是 ship 现 finding + 留 iter-20A?
-- **QR5**: cxl_cache_pool 编译期 kCacheEntriesPerBucket 改成 runtime 参数 (Phase 1.2 需要 4 个 build)? 或保持 编译期 + 4 个 build artifact?
-- **QR6**: phase1.1 PMU sampling rate (perf record -F 99/-F 999)? 99 Hz 影响小但 5s window 只 ~500 sample / tid; 999 Hz 更多 sample 但 perturb 更大。
+- **QR1 — hugepages 默认 ship vs opt-in**: ✅ **opt-in env + auto-fallback**.
+  `FUSEE_CACHE_HUGEPAGES=1` 才 enable; mmap MAP_HUGETLB 失败时打印 warning
+  并 fall back 到 4K pages。CLAUDE.md / blueprint 加文档建议 "cache_pct
+  ≥ 10 % 时强烈推荐 hugepages + sysctl 预 reserve"。conservative default
+  与 iter-15A TLS L1 默认 off 同 pattern。
+- **QR2 — hot-key skip cache 是否走 RAP**: ✅ **YES, walk through RAP,
+  lightweight**. CLAUDE.md §XIII 触发 (optimization + 默认行为修改);
+  RAP 强迫定义清楚 "什么算 hot" + 6 AV 半小时搞完。**iter-19A 本身只
+  产生 RAP doc, 不 ship code** — implementation 留 iter-20A.
+- **QR3 — Phase 0 不复现, fallback g3/g4 vs RCA**: ✅ **stay g1/g2 +
+  HARD gate**. g1/g2 是 production target; ratio gate 判断 (anomaly A
+  ratio = cache_pct=100/cache_pct=1 thpt; anomaly B ratio = zipf-1.5
+  / zipf-0.99 thpt; iter-15A 基准 A=0.40, B=0.31).
+    - 两 ratio 都 ≥ 0.6 → anomaly 显著弱化 → **iter-19A 停 anomaly
+      study, 改写 "平台敏感性" report**
+    - 任一在 0.3-0.6 → 部分复现 → 进 Phase 1/2
+    - ≤ 0.3 → 完全复现 → 照原 plan
+- **QR4 — stage decomp 不匹配 5 假设, 加 callgraph vs defer**: ✅
+  **加 Phase 2.7 bounded callgraph**. 触发条件: phase 2.4 5 个 hypothesis
+  全 refute / 全 stage 都不显著涨。Phase 2.7 跑一次 `perf record -F 99
+  --callgraph dwarf` 5 s + perf report 给出 top 3 frame + verdict。
+  **不允许说 "deferred, more study needed"** — 必须给出 verdict,
+  哪怕是 "top frame = X, 未知机制" (per iter-15A 失败模式).
+- **QR5 — kCacheEntriesPerBucket runtime vs 4 builds**: ✅ **4 个
+  compile-time build**. Runtime 引入 branch overhead 污染想测的量级
+  (loop unroll vs runtime loop ~5-10 ns/lookup ≈ Phase 1.2 sensitivity);
+  4 build 切换成本 2 分钟 vs phase 跑数小时, ROI 极佳; 若某 epb 值
+  winner, 直接此 build 部署不用 二次工作。
+- **QR6 — Phase 1.1 PMU 工具 / sampling rate**: ✅ **stat for 1.1 +
+  record -F 99 for 2.7**. Phase 1.1 用 `perf stat -p $tid -e <counters>`
+  (硬件 counter, sampling rate N/A); Phase 2.2 c2c 用 `perf c2c record
+  -a` 默认 -F 99; Phase 2.7 callgraph 用 `perf record -F 99 --callgraph
+  dwarf`, 仅当 top frame 占 < 20 % 才升级 -F 999 二次 sample.
 
 ---
 
