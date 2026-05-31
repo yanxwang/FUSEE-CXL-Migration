@@ -78,7 +78,11 @@ bool cache_pool_lookup(KvCachePool *pool, uint64_t key, uint8_t *out,
   for (int i = 0; i < kCacheEntriesPerBucket; i++) {
     auto *e = &bk->entries[i];
     uint32_t s1 = e->seq.load(std::memory_order_acquire);
-    if (s1 & 1) continue;  // mid-update, skip — caller may retry whole search
+    if (s1 & 1) {
+      // iter-19A: mid-update by writer → reader retry (B-H2 metric)
+      fusee_path_ctr_lrs2r_retry();
+      continue;  // mid-update, skip — caller may retry whole search
+    }
     if (e->key.load(std::memory_order_acquire) != key) continue;
     if (e->stale.load(std::memory_order_acquire) != 0) return false;
     uint32_t sz = e->value_size;
@@ -86,6 +90,8 @@ bool cache_pool_lookup(KvCachePool *pool, uint64_t key, uint8_t *out,
     std::memcpy(out, e->value_bytes, sz);
     uint32_t s2 = e->seq.load(std::memory_order_acquire);
     if (s1 != s2) {
+      // iter-19A: seq advanced mid-memcpy → torn read, reader retry (B-H2 metric)
+      fusee_path_ctr_lrs2r_retry();
       // Entry got modified mid-read; the bytes we copied may be torn.
       // Treat as miss — caller will fall through to forward_read /
       // owner-self path and re-populate.
@@ -151,6 +157,8 @@ int cache_pool_insert(KvCachePool *pool, uint64_t key,
     // Claim target via CAS even → odd.
     uint32_t s_old = target->seq.load(std::memory_order_acquire);
     if (s_old & 1) {
+      // iter-19A: target mid-update by another writer (B-H1 thundering herd metric)
+      fusee_path_ctr_lrs4r_retry();
       // Already mid-update by someone else. Spin-pause + retry from scan.
       __builtin_ia32_pause();
       continue;
@@ -158,6 +166,8 @@ int cache_pool_insert(KvCachePool *pool, uint64_t key,
     if (!target->seq.compare_exchange_weak(
             s_old, s_old + 1, std::memory_order_acquire,
             std::memory_order_relaxed)) {
+      // iter-19A: CAS race lost (B-H1 thundering herd metric)
+      fusee_path_ctr_lrs4r_retry();
       // Lost the CAS race. Retry.
       __builtin_ia32_pause();
       continue;

@@ -390,6 +390,9 @@ void fusee_path_counters_dump(FILE *fp, int host_id, const char *label);
 void fusee_path_ctr_cache_evict();
 void fusee_path_ctr_cache_set_stale();
 void fusee_path_ctr_cache_lru_evict();
+// iter-19A Phase 2.4: LRS retry counters
+void fusee_path_ctr_lrs2r_retry();
+void fusee_path_ctr_lrs4r_retry();
 
 }  // namespace fusee
 

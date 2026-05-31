@@ -108,6 +108,9 @@ struct PathCounters {
   uint64_t n_cache_pool_evict              = 0;  // cache_pool_evict() events (explicit physical delete)
   uint64_t n_cache_pool_set_stale          = 0;  // cache_pool_set_stale() events (lazy invalidate)
   uint64_t n_cache_pool_lru_evict          = 0;  // cache_pool_insert chose LRU slot (implicit eviction)
+  // iter-19A Phase 2.4: LRS retry counters (sub-1 KB hot path)
+  uint64_t n_lrs2r_retry                   = 0;  // cache_pool_lookup seqlock CAS retry (B-H2 metric)
+  uint64_t n_lrs4r_retry                   = 0;  // cache_pool_insert CAS retry (B-H1 thundering herd metric)
   // iter-15A microbench HR-2: receiver-side READ counter — symmetric to
   // n_local_write_with_blk_forwarded on the write path. Single-threaded
   // (receiver in primary), so survives fork — accurate cluster anchor for
@@ -142,14 +145,16 @@ void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
       "# PATH host=%d label=%s tid=%lu "
       "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
       "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu "
-      "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu\n",
+      "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu "
+      "lrs2r=%lu lrs4r=%lu\n",
       host_id, lbl, g_path_registry_tids[i],
       p->n_tls_hit, p->n_r2hit, p->n_r2miss_local, p->n_r3, p->n_cache_pool_insert_from_read,
       p->n_local_write_worker, p->n_forward_write,
       p->n_local_write_with_blk_forwarded, p->n_local_write_staging_forwarded,
       p->n_cache_pool_insert_from_write,
       p->n_cache_pool_evict, p->n_cache_pool_set_stale, p->n_cache_pool_lru_evict,
-      p->n_read_handler_served);
+      p->n_read_handler_served,
+      p->n_lrs2r_retry, p->n_lrs4r_retry);
     agg.n_tls_hit                        += p->n_tls_hit;
     agg.n_r2hit                          += p->n_r2hit;
     agg.n_r2miss_local                   += p->n_r2miss_local;
@@ -164,19 +169,23 @@ void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
     agg.n_cache_pool_set_stale           += p->n_cache_pool_set_stale;
     agg.n_cache_pool_lru_evict           += p->n_cache_pool_lru_evict;
     agg.n_read_handler_served            += p->n_read_handler_served;
+    agg.n_lrs2r_retry                    += p->n_lrs2r_retry;
+    agg.n_lrs4r_retry                    += p->n_lrs4r_retry;
   }
   fprintf(fp,
     "# PATH host=%d label=%s AGG "
     "r0_tls=%lu r2hit=%lu r2miss_local=%lu r3=%lu cpool_ins_r=%lu "
     "local_w=%lu fwd_w=%lu local_w_blk_fwd=%lu local_w_stg_fwd=%lu cpool_ins_w=%lu "
-    "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu\n",
+    "cp_evict=%lu cp_set_stale=%lu cp_lru_evict=%lu rh_served=%lu "
+    "lrs2r=%lu lrs4r=%lu\n",
     host_id, lbl,
     agg.n_tls_hit, agg.n_r2hit, agg.n_r2miss_local, agg.n_r3, agg.n_cache_pool_insert_from_read,
     agg.n_local_write_worker, agg.n_forward_write,
     agg.n_local_write_with_blk_forwarded, agg.n_local_write_staging_forwarded,
     agg.n_cache_pool_insert_from_write,
     agg.n_cache_pool_evict, agg.n_cache_pool_set_stale, agg.n_cache_pool_lru_evict,
-    agg.n_read_handler_served);
+    agg.n_read_handler_served,
+    agg.n_lrs2r_retry, agg.n_lrs4r_retry);
   fflush(fp);
 }
 
@@ -188,6 +197,8 @@ void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
 void fusee_path_ctr_cache_evict()     { PATH_CTR(n_cache_pool_evict); }
 void fusee_path_ctr_cache_set_stale() { PATH_CTR(n_cache_pool_set_stale); }
 void fusee_path_ctr_cache_lru_evict() { PATH_CTR(n_cache_pool_lru_evict); }
+void fusee_path_ctr_lrs2r_retry()     { PATH_CTR(n_lrs2r_retry); }
+void fusee_path_ctr_lrs4r_retry()     { PATH_CTR(n_lrs4r_retry); }
 
 #else
 #define PATH_CTR(field) do {} while (0)
@@ -197,6 +208,8 @@ void fusee_path_counters_dump(FILE *fp, int host_id, const char *label) {
 void fusee_path_ctr_cache_evict()     {}
 void fusee_path_ctr_cache_set_stale() {}
 void fusee_path_ctr_cache_lru_evict() {}
+void fusee_path_ctr_lrs2r_retry()     {}
+void fusee_path_ctr_lrs4r_retry()     {}
 #endif
 
 // iter-16A receiver-NOOP study (per docs/microbench_xhost_spec.md §D).
@@ -2808,8 +2821,10 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
 
 int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
                         uint32_t *out_len) {
+  PROBE_LR_OP("LRS1S", key);
   if (key == kEmptyKey) return -1;
   PROBE_PATH("R1", key);
+  PROBE_LR_OP("LRS1E", key);
 
   // iter-10A Phase 1.C: TLS L1 lookup (per-worker private DRAM, 0
   // cross-core MESI traffic on hit). Only enabled if worker called
@@ -2838,7 +2853,9 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
 #if !FUSEE_DISABLE_CACHE_POOL
   uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
+  PROBE_LR_OP("LRS2S", key);
   if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
+    PROBE_LR_OP("LRS2H", key);  // HIT tag
     PROBE_PATH("R2hit", key);
     PATH_CTR(n_r2hit);
     // populate TLS L1 with the freshly-fetched value + current epoch
@@ -2854,6 +2871,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     PROBE_PATH("R6", key);
     return 0;
   }
+  PROBE_LR_OP("LRS2M", key);  // MISS tag
 #endif
   PROBE_PATH("R2miss", key);
 
@@ -2892,6 +2910,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
 
   // Owner-self miss: direct CXL bucket scan + own pool fetch.
   PATH_CTR(n_r2miss_local);
+  PROBE_LR_OP("LRS3S", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
   flush_line(bucket);
@@ -2919,10 +2938,13 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
           }
         }
       }
+      PROBE_LR_OP("LRS3E", key);
       if (out_len) *out_len = vlen;
       uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
       if (out_buf && copy_len > 0) std::memcpy(out_buf, v, copy_len);
+      PROBE_LR_OP("LRS4S", key);
       cache_pool_insert(cache_, key, v, vlen);
+      PROBE_LR_OP("LRS4E", key);
       // Populate TLS L1 with new epoch.
       if (g_thread_tls) {
         uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);

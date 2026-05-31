@@ -171,6 +171,21 @@ inline void probe_flush() {
 #define FUSEE_READ_PROBE 0
 #endif
 
+// FUSEE_LOCAL_READ_PROBE gates iter-19A local_read stage probes
+// (LRS1..LRS4). Independent of FUSEE_READ_PROBE (xhost) and
+// FUSEE_PROBE_PATH (legacy R*/W*). Default OFF.
+//
+// Stages (see docs/iters/iter19A_local_read_anomaly_plan.md §Phase 2.4):
+//   LRS1 entry         : hash + bucket idx                (always)
+//   LRS2 cache_lookup  : cache_pool seqlock CAS reader    (always)
+//        H/M tag on exit; LRS2R retry counter (path ctr)
+//   LRS3 cxl_miss      : bucket flush+scan + pool->read   (MISS only)
+//   LRS4 populate      : cache_pool_insert CAS            (MISS only)
+//        LRS4R retry counter (path ctr) -- B-H1 thundering herd metric
+#ifndef FUSEE_LOCAL_READ_PROBE
+#define FUSEE_LOCAL_READ_PROBE 0
+#endif
+
 #if FUSEE_PROBE
 #define PROBE(tag)        ::fusee::probe_ring()->emit(tag, 0)
 #define PROBE_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
@@ -190,6 +205,14 @@ inline void probe_flush() {
 #define PROBE_READ_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
 #else
 #define PROBE_READ_OP(tag, op) do {} while (0)
+#endif
+
+// iter-19A: local_read stage probes (LRS1..LRS4). Gated by
+// FUSEE_LOCAL_READ_PROBE.
+#if FUSEE_PROBE && FUSEE_LOCAL_READ_PROBE
+#define PROBE_LR_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
+#else
+#define PROBE_LR_OP(tag, op) do {} while (0)
 #endif
 
 #endif  // FUSEE_CXL_PROBE_H_
