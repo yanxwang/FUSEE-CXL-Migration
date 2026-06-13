@@ -19,15 +19,14 @@ import matplotlib.pyplot as plt
 STUDY_ROOT = "docs/study_cxl_write_atomicity"
 OUT_PATH = os.path.join(STUDY_ROOT, "atomicity_chart.png")
 
-# Collect all (n, store, mode) -> (K, INTL) from all raw.csv.
-# Prefer the latest cell for each (n, store, fence, mode) key — verification
-# cells (K=10000) win over baseline (K=1000).
-records = {}
+# Collect ALL (n, store, mode) measurements — keep every rep, not just the
+# highest-K. We'll aggregate later: for the line, use the highest-K rep;
+# for variance dots, scatter every 100K-trial rep.
+all_records = defaultdict(list)
 for csv_path in sorted(glob.glob(f"{STUDY_ROOT}/phase*_*/raw.csv")):
     with open(csv_path) as f:
         r = csv.DictReader(f)
         for row in r:
-            # Phase 1's older CSV lacks the 'mode' column; default to barrier.
             try:
                 n = int(row["n"])
                 K = int(row["K"])
@@ -41,20 +40,30 @@ for csv_path in sorted(glob.glob(f"{STUDY_ROOT}/phase*_*/raw.csv")):
             mode = row.get("mode") or "barrier"
             fence = row.get("fence", "?")
             align = row.get("align", "aligned")
-            # Only the most interesting variant: aligned, clflush_sfence,
-            # same_cl. Skip exotic combos.
             if align != "aligned" or fence != "clflush_sfence":
                 continue
-            key = (n, store, mode)
-            # Keep highest K (verification > baseline).
-            if key not in records or records[key][0] < K:
-                records[key] = (K, intl)
+            all_records[(n, store, mode)].append((K, intl))
 
-# Series keyed by (store, mode).
+# Line series: highest-K rep per (n, store, mode).
+records = {}
+for key, reps in all_records.items():
+    K_max = max(r[0] for r in reps)
+    # Among the highest-K reps, take the median INTL.
+    high_K_reps = [r for r in reps if r[0] == K_max]
+    high_K_reps.sort(key=lambda r: r[1])
+    median = high_K_reps[len(high_K_reps) // 2]
+    records[key] = median
+
+# Variance dots: every individual rep at K >= 10000.
+variance_dots = defaultdict(list)
+for (n, store, mode), reps in all_records.items():
+    for K, intl in reps:
+        if K >= 10000:
+            variance_dots[(store, mode)].append((n, K, intl))
+
 series = defaultdict(list)
 for (n, store, mode), (K, intl) in records.items():
     series[(store, mode)].append((n, K, intl))
-
 for k in series:
     series[k].sort(key=lambda x: x[0])
 
@@ -72,16 +81,25 @@ for key, pts in series.items():
     ls, color, label = style[key]
     ns = [p[0] for p in pts]
     intl_pct = [100.0 * p[2] / p[1] for p in pts]
-    # Mark verified-K=10K with a star.
     K_max = max(p[1] for p in pts)
-    label_full = f"{label} (max K = {K_max})"
+    label_full = f"{label} (median, max K={K_max})"
     ax.plot(ns, intl_pct, ls, color=color, label=label_full,
             linewidth=2, markersize=7)
 
-# Atomic-boundary annotation: vertical line at N=192 (3 cachelines).
+# Scatter every K≥10K individual rep at low alpha to show variance.
+for key, pts in variance_dots.items():
+    if key not in style:
+        continue
+    _, color, _ = style[key]
+    ns = [p[0] for p in pts]
+    intl_pct = [100.0 * p[2] / p[1] for p in pts]
+    ax.scatter(ns, intl_pct, color=color, alpha=0.4, s=22, zorder=3)
+
+# Quasi-atomic boundary: vertical line between 3-CL and 4-CL writes.
+# ~1000x cliff in INTL rate, not a strict step.
 ax.axvline(192, color="black", linestyle=":", alpha=0.5,
-           label="3-CL atomic boundary (N=192)")
-ax.text(195, 25, "3 CL ←→ 4 CL\nstrict-atomic boundary",
+           label="3-CL ←→ 4-CL boundary (~1000× rate cliff)")
+ax.text(195, 25, "3 CL ←→ 4 CL\n~1000× rate cliff",
         fontsize=9, alpha=0.7)
 
 # Cacheline annotations at top.

@@ -16,22 +16,30 @@
 // contention at T=64, p99=691 µs — measured iter-9A path_decomp Phase 0).
 //
 // The write-atomicity study at docs/study_cxl_write_atomicity/FINDINGS.md
-// established two new facts about g1/g2 hardware:
+// established (after 100K-trial variance reps that CORRECTED an earlier
+// claim) the following g1/g2 hardware properties:
 //
-//   (A) cross-host writes of up to 3 cachelines (192 B) issued via
-//       cacheable + clflushopt + sfence are STRICTLY ATOMIC — the peer
-//       sees either the entire writer's payload or nothing of it. 10K
-//       trials at N=192 measured 0 interleave events.
+//   (A) Cross-host writes of N ≤ 192 B (3 cachelines) via cacheable +
+//       clflushopt + sfence show a SMALL BUT NON-ZERO interleave rate:
+//       ~0.013 % median, up to 1.7 % under run-state-dependent timing.
+//       Strictly atomic is NOT a property of any size at this trial
+//       count — the earlier "0/10000" was a sampling artifact.
 //
-//   (B) cross-host non-temporal (movnti) stores are STRICTLY ATOMIC at
-//       any size up to a 4 KB page, with atomicity granularity at the
-//       8 B chunk level. 10K trials at N={128, 192, 256, 1024} all
-//       measured 0 interleave events.
+//   (B) Cross-host non-temporal (movnti) writes at N=1024 B show
+//       interleave rate ~0.063 % at 100K verification — ~5× lower than
+//       memcpy at N=192. But still non-zero.
 //
-// LFM v2 exploits (A): a single 192 B "slot publish" carries all of a
-// host's lock-attempt state across hosts in one PCIe burst with strict
-// overwrite semantics. Lamport's algorithm collapses from 4+
-// clflushopt+mfence per lock to 1 clflushopt + 1 sfence per lock.
+//   (C) The 3-CL ←→ 4-CL boundary IS REAL: at N≥256 the rate jumps to
+//       15-31 % — ~1000 × higher than N=192. Below 4 CL the rate stays
+//       in the 0.01 % band (with occasional spikes); at 4 CL+ the
+//       hardware no longer attempts to keep the publication atomic.
+//
+// LFM v2 exploits (A) + (C) with ALGORITHMIC torn-publish detection:
+// the slot is laid out so each of the 3 cachelines carries an identical
+// `publish_seq` field; the reader rejects (and retries) any observation
+// where the 3 sequence values disagree. Steady-state cost is the same
+// as the original Path A design (1 clflushopt + 1 sfence per lock);
+// retry overhead is amortized ~50 ns/lock under worst-case 1.7 % rate.
 //
 // Expected microbenchmark gain (estimated from LFM v1 path decomp):
 //   - Uncontended lock acquire: 3 µs (v1) → 1.0–1.2 µs (v2)   ~3× speedup
@@ -44,30 +52,47 @@
 //
 // Each host owns exactly ONE 192 B slot in the LFM region. Slot layout:
 //
+// To enable torn-publish detection without giving up the 3-CL atomic
+// window, each cacheline carries a `publish_seq` field at its FIRST
+// 8 B offset. The publisher writes the same publish_seq into all three
+// cachelines (then memcpy'd + flushed as a 3-CL burst). The reader,
+// after pulling all three cachelines, verifies seq[0]==seq[1]==seq[2];
+// if not, the publish was torn and the read is retried.
+//
 //   struct alignas(64) FuseeLfmV2Slot {
-//     // ---- Cacheline 0: claim header ----
-//     uint64_t magic;          // 0x4C464D 56 32 00 ('LFMV2\0\0\0') for sanity
-//     uint64_t seq;            // monotonic acquire counter (Lamport's ticket)
-//     uint64_t host_rank;      // == this host's ID; used by Lamport tie-break
-//     uint64_t bid;            // local lock-attempt id (b[host] in classical
-//                              // Lamport notation); 0 = idle, !=0 = trying or
-//                              // in critical section
-//     uint64_t epoch;          // optional: ABA guard
-//     uint64_t _rsv0[3];       // 64 B alignment
+//     // ---- Cacheline 0 ----
+//     uint64_t publish_seq_0;  // SAME value in all 3 CLs after a publish
+//     uint64_t magic;          // 0x4C464D56320000xx for slot index xx sanity
+//     uint64_t host_rank;      // == this host's ID; for Lamport tie-break
+//     uint64_t bid;            // Lamport b[host]; 0=idle, !=0=trying/in-CS
+//     uint64_t epoch;          // ABA guard for release/re-acquire
+//     uint64_t _rsv0[3];       // pad to 64 B
 //
-//     // ---- Cacheline 1: claim_set bitmap ----
-//     // A 512-bit bitmap of which other hosts (slot indices) we observed
-//     // as "in critical section" during our last poll. Used by §3.2 below
-//     // for a fast "any peer holds the lock?" check.
-//     uint64_t claim_set[8];
+//     // ---- Cacheline 1 ----
+//     uint64_t publish_seq_1;  // must equal publish_seq_0 (torn check)
+//     uint64_t claim_set[7];   // 448-bit bitmap of "peers in CS observed"
 //
-//     // ---- Cacheline 2: reserved / version / metadata ----
-//     // For future extension (e.g., adaptive backoff hint, owner address).
+//     // ---- Cacheline 2 ----
+//     uint64_t publish_seq_2;  // must equal publish_seq_0 (torn check)
 //     uint64_t version;        // increments per release; debugging aid
-//     uint64_t last_grant_ns;  // when this host last entered CS, for fairness
-//     uint64_t _rsv2[6];
+//     uint64_t last_grant_ns;  // when this host last entered CS, fairness
+//     uint64_t _rsv2[5];
 //   };
 //   static_assert(sizeof(FuseeLfmV2Slot) == 192, "slot must be exactly 3 CL");
+//
+// Torn-publish detection (reader side):
+//
+//   bool slot_is_consistent(const FuseeLfmV2Slot &s) {
+//     return s.publish_seq_0 == s.publish_seq_1 &&
+//            s.publish_seq_1 == s.publish_seq_2 &&
+//            s.magic         == (kFuseeLfmV2Magic | s.host_rank);
+//   }
+//
+// Statistical handling:
+//   - At median rate (~10⁻⁴) virtually all reads pass first try.
+//   - At worst-case (~1.7 %), <2 % of reads need a 1-retry; the retry
+//     overhead is 1 clflushopt + 1 mfence + 24 byte memcpy ≈ 1-3 µs.
+//   - Amortized retry penalty < 50 ns per lock acquire.
 //
 // All 3 cachelines of a slot are written together as ONE atomic publication:
 //
@@ -225,22 +250,29 @@ constexpr std::size_t kFuseeLfmV2MaxHosts  = 8;
 constexpr uint64_t    kFuseeLfmV2Magic     = 0x4C464D5632000000ULL;  // 'LFMV2\0\0\0'
 
 struct alignas(64) FuseeLfmV2Slot {
-  // CL 0
+  // CL 0 — publish_seq_0 at offset 0 for the torn-publish check
+  uint64_t publish_seq_0;
   uint64_t magic;
-  uint64_t seq;
   uint64_t host_rank;
   uint64_t bid;
   uint64_t epoch;
   uint64_t _rsv0[3];
-  // CL 1
-  uint64_t claim_set[8];
-  // CL 2
+  // CL 1 — publish_seq_1 must equal publish_seq_0
+  uint64_t publish_seq_1;
+  uint64_t claim_set[7];
+  // CL 2 — publish_seq_2 must equal publish_seq_0
+  uint64_t publish_seq_2;
   uint64_t version;
   uint64_t last_grant_ns;
-  uint64_t _rsv2[6];
+  uint64_t _rsv2[5];
 };
 static_assert(sizeof(FuseeLfmV2Slot) == kFuseeLfmV2SlotBytes,
               "FuseeLfmV2Slot must be exactly 3 cachelines (192 B)");
+
+inline bool slot_is_consistent(const FuseeLfmV2Slot &s) {
+  return s.publish_seq_0 == s.publish_seq_1 &&
+         s.publish_seq_1 == s.publish_seq_2;
+}
 
 struct alignas(64) FuseeLfmV2RegionHeader {
   uint64_t magic;

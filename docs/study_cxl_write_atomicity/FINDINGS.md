@@ -9,21 +9,32 @@ hosts.
 
 ---
 
-## §1 TL;DR
+## §1 TL;DR — CORRECTED after 100 K-trial variance reps
 
 On g1/g2 cross-host CXL writes to a shared address, the **interleave
-probability** depends sharply on the **store instruction** used and the
-**number of cachelines touched**:
+probability** depends sharply on the **number of cachelines touched**.
+There is a **~1000× cliff** between 3-cacheline and 4-cacheline writes:
 
-| Write idiom | Atomic-overwrite range | First interleave at |
-|---|---|---|
-| `memcpy` + `clflushopt` + `sfence` | **≤ 3 cachelines (≤ 192 B)** | 4+ CL (≥ 224 B) |
-| `movnti` (non-temporal 8 B) + `sfence` | **All sizes tested** (1 B – 1024 B) | NOT observed in 10⁴+ trials |
+| Write idiom | Best-case INTL rate | Worst-case INTL rate | Floor |
+|---|---|---|---|
+| `memcpy` + `clflushopt` + `sfence`, N ≤ 192 B (≤ 3 CL) | **3 × 10⁻⁵** | **1.7 × 10⁻²** | non-zero |
+| `memcpy` + `clflushopt` + `sfence`, N ≥ 256 B (≥ 4 CL) | **1.5 × 10⁻¹** | **3.1 × 10⁻¹** | always high |
+| `movnti` (non-temporal 8 B) + `sfence`, N up to 1024 B | **6 × 10⁻⁴** | (1 long run only) | low |
 
-**Implication for LFM v2**: a flag-cell of up to **192 B can be atomically
-published** between hosts using the cacheable+`clflushopt` idiom, or **any
-size** if the writer uses non-temporal stores. The widely-held "all
-cross-host CXL writes interleave" intuition is wrong on this hardware.
+(Ranges from 5 independent 100K-trial runs of each cell — see §3.)
+
+**Strict "0 interleave" never observed** at the 100K-trial level. 10K-trial
+null results turned out to be sampling artifacts.
+
+**The 3-CL ←→ 4-CL boundary is REAL** — N=192 worst run was 1.68 %, but
+N=256 best run was 14.8 %. That's still a 9× gap at the worst-case
+boundary, and ~1000× at the typical-case boundary.
+
+**Implication for LFM v2**: a 192 B (3-CL) flag cell is the best
+publishing primitive available **provided** the algorithm includes a
+per-cacheline sequence-tag check that triggers retry on torn read.
+N ≥ 256 publishes are useless without protocol-level recovery, and even
+1-byte writes have a non-zero (but rare) interleave at the byte level.
 
 ---
 
@@ -93,16 +104,54 @@ critical sizes (see Phase 3 verification dataset).
 | 512 | 8 | 127 – 167 | – | interleave-possible |
 | 1024 | 16 | 93 – 263 | **4 313 / 10 000 (43.1 %)** | interleave-possible |
 
-Critically, **N = 128 (2 cachelines) is NOT strictly atomic**: 5 interleave
-events in 10 K trials sets P(interleave) at ~5 × 10⁻⁴ ± 2 × 10⁻⁴, i.e.,
-~50 failures per 10⁶ ops. The first 1 K-trial cells showed this signal
-faintly (5 events in two runs) but it was within the noise band; the
-10 K-trial cell confirms it is real.
+### 3.1.1 100K-trial variance reps (CRITICAL CORRECTION)
 
-Conversely, **N = 192 (3 cachelines) IS strictly atomic** under this idiom
-to the 10 K-trial detection floor. The jump in interleave probability
-between N=192 and N=256 (0 → 15.8 %) is the **boundary** that defines
-the LFM-v2 atomic flag size.
+The 10K-trial Phase 3 cells reported 0 interleave events at N=192. After
+adding K=100 000 trials and running the cell 5 independent times, the
+true picture emerged:
+
+| N (memcpy barrier) | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Median |
+|---|---|---|---|---|---|---|
+| 192 | 7  | 463 | 3 | 13 | 1680 | **13 (0.013 %)** |
+| 256 | 23505 | 31258 | 14783 | — | — | **23505 (23.5 %)** |
+
+Two structural observations:
+
+(1) **No size is strictly atomic** at the 100 K-trial level. The 10K
+    null at N=192 was a sampling artifact — the underlying rate is
+    closer to 0.01 % with occasional spikes to 1.7 %, and even a
+    1.7 % spike contains ~1700 events that 0/10 000 sampling could
+    miss.
+
+(2) **The 4-CL cliff is REAL**. N=192 worst case (1.7 %) is still 9×
+    below N=256 best case (15 %). At typical case it's ~2000× lower.
+    This is a robust hardware-level boundary, not a fluke.
+
+The variance source at N=192 is **run-state-dependent timing**:
+between runs the OS / cache / thermal state drifts, shifting how much
+g1's clflushopt burst and g2's clflushopt burst overlap at the CXL
+controller. When the bursts overlap by a few hundred ns, ~0.01 %
+interleave. When they overlap by µs (rare), ~1.7 % interleave.
+
+The boundary table (using **worst-case observed rate**, since LFM v2
+will be exposed to all run states):
+
+| N (bytes) | CL touched | Worst-case INTL rate | Bucket |
+|---|---|---|---|
+| 1 - 64   | 1            | < 10⁻³ (1-2 events per 1000)| sub-‰ floor |
+| 96, 160  | 2-3 partial  | < 10⁻³                       | sub-‰ floor |
+| 128      | 2            | ~1.8 % (worst run 1759/100K) | sub-% spike-prone |
+| **192**  | **3**        | **~1.7 % (worst run 1680/100K)** | **best 3-CL choice** |
+| 224      | 4 partial    | 6.9 %                        | high |
+| 256      | 4            | **31 %**                     | high |
+| 384      | 6            | 7.8 % - 26 %                 | high |
+| 512      | 8            | 17 %                         | high |
+| 1024     | 16           | 43 %                         | high |
+
+The N=128 worst case (1.8 %) is essentially the same as N=192 worst case
+(1.7 %), so 128 vs 192 is a wash from a worst-case-rate perspective. But
+N=192 gives 50 % more state per atomic publish, so it's the better LFM-v2
+choice.
 
 The handful of N values that show a single OW_A swap (N=2, 8, 32, 64, 128)
 do NOT show INTERLEAVE in the per-cacheline breakdown — when host A wins,
@@ -155,16 +204,19 @@ write path must include `clflushopt` (or use non-temporal stores).
 
 ## §4 What we did NOT observe
 
-- **Zero CORRUPTION events** across all variants and sizes — every byte
-  ever observed at the target had a top nibble in {0xA, 0xB, 0xC},
-  i.e., the position-index field always matched. Conclusion: byte-level
-  writes are atomic on the CXL → no torn-byte cases at all.
-- **Zero interleave under `movnti`** in barrier mode at every N tested.
-  Strong evidence that the CXL controller's per-8-byte ordering is
-  fully respected for non-temporal stores.
-- **Zero interleave at N ≤ 192 B** under cacheable+`clflushopt`. The
-  3-cacheline atomic window is a robust property of the XConn switch /
-  PCIe controller pair on this generation of hardware.
+- **Zero CORRUPTION events** across ~700 000 total trials. Every byte
+  ever observed at the target had a top nibble in {0xA, 0xB, 0xC} and
+  the position-index field always matched. Byte-level writes are
+  themselves atomic on the CXL → no torn-byte cases at all.
+- **Strict zero-interleave at any size — RETRACTED**. The 10K-trial
+  Phase 3 cells reported 0 events at N=192 and 0 events at N=1024 movnti,
+  but 100K verification showed both have a small but non-zero rate
+  (192 memcpy: ~0.013 % median, 1024 movnti: 0.063 %). Strict
+  atomicity is not a property of this hardware at the trial counts
+  we can measure.
+- **Zero interleave under barrier mode at N ≤ 96 B (single cacheline)**
+  in the 1 K-trial sweep — but this is at the 10⁻³ detection floor;
+  100K trials at these sizes were not run.
 
 ---
 
@@ -191,13 +243,19 @@ write path must include `clflushopt` (or use non-temporal stores).
 
 ## §6 Implications for LFM v2 design
 
-Two viable paths emerge for the lighter-weight LFM:
+LFM v2 cannot rely on strict hardware atomicity — every size shows a
+non-zero interleave rate at 100K-trial resolution. The design must
+include **algorithmic torn-publish detection + retry**. The atomicity
+study answers WHAT size minimizes the retry rate; the algorithm has to
+handle the residual rate.
 
-### Path A: 192-byte flag cell with `memcpy + clflushopt + sfence`
+### Path A: 192-byte flag cell with `memcpy + clflushopt + sfence` + seq-tag check
 
-A flag-cell of up to 192 bytes (3 × 64-byte cachelines) is **published
-atomically** between hosts using the existing cacheable+flush idiom.
-This is the smallest behavioral change from LFM v1.
+A flag-cell of 192 bytes (3 × 64-byte cachelines) gives the **lowest
+sustained interleave rate** observed at multi-cacheline sizes
+(~0.013 % median, ~1.7 % worst case). Each cacheline carries a
+`publish_seq` field; the reader detects a torn publish when two
+cachelines have different `publish_seq` values, and retries.
 
 Layout for a 192 B slot (`alignas(64)`):
 
@@ -217,25 +275,29 @@ Lamport's algorithm collapses from ~4 clflushopt+mfence per lock
 state is published in one 3-cacheline flush. Expected savings:
 ~1-2 µs per lock acquisition on g1/g2.
 
-### Path B: arbitrary-size flag with `movnti + sfence`
+### Path B: 8-byte chunk publishes with `movnti + sfence` + per-chunk seq
 
-If the LFM v2 datapath can be reworked to use non-temporal stores
-exclusively, the flag-cell can be **any size** up to the dax page
-boundary, with atomicity guaranteed at the 8-byte chunk level. Useful
-if the design wants to share a giant 4 KB flag cell across N hosts
-for a richer consensus structure.
+`movnti` writes are 8-byte non-temporal stores that go directly to the
+CXL controller. The 100K verification at N=1024 movnti gave 0.063 %
+interleave — about 5× lower than memcpy at N=192. Path B uses many
+8-byte movnti writes per publish, each with its own sequence tag.
 
-Tradeoff: `movnti` writes bypass the cache, so the writer can't
-quickly re-read its own write. For LFM v1, the writer reads back to
-verify; with v2-Path-B you'd need a separate read of the post-flush
-value from CXL.
+Tradeoff: more per-publish overhead (8-byte movnti × M is slower than
+3 cacheline-flush operations), but each 8-byte chunk has its own
+torn-detection check, and 5× lower base interleave rate.
 
 ### Recommended starting point
 
-**Path A**. Strictly fewer code changes, lock acquire latency
-decreases by ~40 % per probe-decomp model, and the 192 B atomic
-publication unit gives plenty of room for current LFM state without
-needing the algorithm change Path B implies.
+**Path A with mandatory torn-publish detection.** Each of the 3
+cachelines in the 192 B slot carries an identical `publish_seq`
+field; the reader rejects (and retries) any observation where the
+three sequences differ.
 
-A design sketch lives at
+Expected effective latency:
+- Steady-state acquire (no retry): ~1.0–1.2 µs (vs LFM v1 ~3 µs → ~3 ×)
+- Worst-case retry overhead at 1.7 % rate × ~3 µs penalty per retry
+  ≈ ~50 ns amortized — still a ~3 × speedup at worst case.
+- Median 0.013 % rate → essentially no observable retry overhead.
+
+A design sketch with the seq-tag scheme lives at
 [src/cxl_fusee_lfm_v2.h](../../src/cxl_fusee_lfm_v2.h).
