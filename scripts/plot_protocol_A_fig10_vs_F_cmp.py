@@ -4,20 +4,20 @@ against the FUSEE-CXL (LFM) baseline measured under the same
 g1+g2 testbed (docs/protocol_F_fig10_1024B_20260608_062956/microbench_cdf.png).
 
 Overlays Protocol F's rep1 µs distribution on each of the 4 panels in
-docs/protocol_A_fig10_20260609_192025/results/microbench_cdf.png. Protocol A
+docs/protocol_A_fig10_20260613_025510/results/microbench_cdf.png. Protocol A
 uses the saturated color (matches single-protocol plot); Protocol F uses the
 same-family lighter shade.
 
 Outputs:
-  docs/protocol_A_fig10_20260609_192025/results/microbench_cdf_cmp.png
-  docs/protocol_A_fig10_20260609_192025/results/microbench_summary_cmp.csv
+  docs/protocol_A_fig10_20260613_025510/results/microbench_cdf_cmp.png
+  docs/protocol_A_fig10_20260613_025510/results/microbench_summary_cmp.csv
 """
 import os, csv
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-A_DIR = "docs/protocol_A_fig10_20260609_192025/results"
+A_DIR = "docs/protocol_A_fig10_20260613_025510/results"
 F_DIR = "docs/protocol_F_fig10_1024B_20260608_062956"
 OUT   = os.path.join(A_DIR, "microbench_cdf_cmp.png")
 
@@ -30,8 +30,8 @@ OPS = [
 ]
 
 def load(path):
-    """Accepts int OR float entries (A files are float-µs after iter-21A zero
-    replacement; F files are int-µs). Returns sorted µs floats."""
+    """Accepts int, float, OR ns-encoded ints. Returns sorted µs floats.
+    Auto-detect by median: median > 100 ⇒ ns; else µs."""
     if not os.path.exists(path):
         return []
     vals = []
@@ -41,7 +41,13 @@ def load(path):
             if not line: continue
             try: vals.append(float(line))
             except ValueError: pass
-    return sorted(vals)
+    if not vals:
+        return []
+    vals.sort()
+    median = vals[len(vals) // 2]
+    if median > 100:
+        return [v / 1000.0 for v in vals]
+    return vals
 
 def pct(v, p):
     if not v: return 0.0

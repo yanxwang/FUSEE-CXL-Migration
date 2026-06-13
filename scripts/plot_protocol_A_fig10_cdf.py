@@ -37,9 +37,11 @@ OPS = [
 ]
 
 def load(path):
-    """Load latencies in µs. Accepts int (legacy gettimeofday) or float (post-fix:
-    sub-µs 0s replaced with 0.7-0.9 µs random). Auto-detects ns-encoded files
-    (max > 100000) and divides by 1000. Returns sorted µs floats."""
+    """Load latencies in µs. Accepts int (legacy gettimeofday µs) or float
+    (post-fix: sub-µs 0s replaced with 0.7-0.9 µs random) or ns ints
+    (iter-22A clock_gettime build). Auto-detects ns-encoded files by
+    looking at the MEDIAN value: median > 100 ⇒ ns (since real µs medians
+    sit in single-digit µs). Returns sorted µs floats."""
     if not os.path.exists(path):
         return []
     raw = []
@@ -51,9 +53,11 @@ def load(path):
             except ValueError: pass
     if not raw:
         return []
-    if max(raw) > 100000:  # ns-encoded
-        return sorted(v / 1000.0 for v in raw)
-    return sorted(raw)
+    raw.sort()
+    median = raw[len(raw) // 2]
+    if median > 100:  # very likely ns-encoded
+        return [v / 1000.0 for v in raw]
+    return raw
 
 def pct(sorted_vals, p):
     if not sorted_vals: return 0.0
