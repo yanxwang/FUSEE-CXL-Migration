@@ -833,6 +833,10 @@ int main(int argc, char **argv) {
       printf("FIG10 done host=%d N=%lu results_in=results/\n", host_id,
              fig_keys_per_client);
     }
+    // Stop receiver threads before falling out of scope — otherwise
+    // ~CxlKvStoreA sees joinable std::thread members and triggers
+    // std::terminate. Match the YCSB-path teardown at line ~1154.
+    store.stop();
     return 0;
   }
 
@@ -983,6 +987,8 @@ int main(int argc, char **argv) {
              ins_tpt, sea_tpt, upd_tpt, del_tpt, host_id, num_threads);
       fflush(stderr);
     }
+    // See Fig 10 path: must stop receiver threads before scope exit.
+    store.stop();
     return 0;
   }
 
