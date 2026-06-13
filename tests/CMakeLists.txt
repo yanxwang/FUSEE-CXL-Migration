@@ -28,7 +28,9 @@ foreach(t cxl_mm_test cxl_mm_mp_test cxl_bucket_lock_test
          protocol_a_ycsb protocol_a_rw_race_test
          protocol_a_invariant_check
          cxl_primitive_bench
-         cxl_write_atomicity_probe)
+         cxl_write_atomicity_probe
+         cxl_false_sharing_probe
+         cxl_concurrent_reader_probe)
     add_executable(${t} ${t}.cc)
     target_link_libraries(${t} fusee_cxl)
     target_compile_options(${t} PRIVATE -mclflushopt -mavx512f)
