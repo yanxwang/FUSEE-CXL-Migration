@@ -203,6 +203,12 @@ the 20 Mops/s bar, and the remaining gap must be analyzed (latency
 decomposition, identification of dominant stage) before declaring
 a phase done. See `docs/design_goals.md` §"Analysis discipline".
 
+## Project design rationale (paper seed)
+
+The project-level motivation, lineage placement (Clover→FUSEE / PolarDB-MP→PolarCXLMem→FUSEE-CXL), the 5-challenge framing (C1–C5), and the C4/C5 choice-tree justifications live in **[docs/project_motivation_and_design_rationale.md](docs/project_motivation_and_design_rationale.md)**. This is the seed document for the future paper's Intro/Background/Motivation sections and the canonical reference for "why FUSEE-CXL is designed this way."
+
+Whenever a design proposal touches partition policy, directory/invalidation, the CXL message ring, the DRAM cache, or any C4/C5 mechanism, **read that document first** and check whether the proposal preserves or violates its argument. Performance numbers reported in iter summaries should map back to the §8.2 lineage table; if a number disagrees with the table, either update the table or correct the iter.
+
 ## Canonical benchmark procedure
 
 For any `scaling_ycsb` experiment, read `docs/scaling_ycsb_spec.md`

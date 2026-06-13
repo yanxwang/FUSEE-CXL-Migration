@@ -204,7 +204,10 @@ Phase 1 Exp 1 (this iter) 跑 B_no_flush × cache_pct sweep:
 
 ---
 
-## iter-20A backlog (FINAL prioritized)
+## iter-20A backlog (initial v3 draft — superseded below)
+
+(Kept for historical context; the Phase 1c update at the end of this file
+replaces this list.)
 
 ### Tier 1 — ship Anomaly B fix
 
@@ -213,7 +216,7 @@ Phase 1 Exp 1 (this iter) 跑 B_no_flush × cache_pct sweep:
 3. **Smoke**: hash-diff + 4-dist sweep + cross-host correctness verification
 4. **Expected gain**: 5.9× zipf-1.5, +20-50 % zipf-0.99/0.5, +1-10 % uniform
 
-### Tier 2 — finish Anomaly A RCA
+### Tier 2 — finish Anomaly A RCA  *(EXECUTED as Phase 1c — see update below)*
 
 1. **Exp A2 isolated TRANS-phase PMU**:
    - Increase TRANS_OPS so TRANS dominates perf-stat window (need 200M+)
@@ -234,3 +237,88 @@ Even after B-H3 fix, `cache_pool_lookup` HIT at zipf-1.5 stays at 6 µs (Phase 2
 - ❌ FUSEE_LRU_SAMPLE (iter-14A F2 rollback was right)
 - ❌ FUSEE_LRU_PAD (cacheline separation gives 0 benefit)
 - ❌ B-H2-direction fixes in general
+
+---
+
+## 2026-06-01 Phase 1c update — Tier 2 Anomaly A executed; RCA & backlog rewritten
+
+Tier 2 above (Anomaly A residual RCA via TRANS-PMU + synthetic DRAM bench)
+**was executed in full** as iter-19A Phase 1c. Full experiment data,
+hypothesis matrix, and per-test verdicts are in
+[iter19A_phase1b_anomaly_a_rca.md](iter19A_phase1b_anomaly_a_rca.md). All
+sweep dirs are under `docs/iter19A_phase1c_*` (one per experiment).
+
+### Anomaly A — Phase 1c findings condensed
+
+**12 of 13 hypotheses ruled out**:
+
+| # | Hypothesis | Primary refutation |
+|---|---|---|
+| H1 | LLC capacity miss | Synthetic DRAM bench: working set ↑ thpt ↑ (210 → 290 Mops c1 → c100) |
+| H2 | TLS overhead | r0_tls = 0; H12 disabling TLS gives -1.6% |
+| H3 | LRU touch ping-pong | BD build: -14% p50, 0% thpt change |
+| H4 | Probe ring writes | BD-nopr build: 0% change |
+| H5 | B-H3 flush storm (as Anomaly A residual) | Already removed in bnoflush; residual persists |
+| H6 | First-touch page fault | M1 pre-touch: 0% change |
+| H7 | THP collapse events | THP=never: ratio unchanged (5% to single cell) |
+| H8 | PT walk hits DRAM | walk time only 0.5% of total cycles either model |
+| H9 | Kernel page fault storm (synth_fork) | **Pre-test 1: FUSEE kernel% = 4.5%, not 97%** |
+| H10 | first_op barrier variance | M1 pre-touch also pre-faults; no effect |
+| H11 | spec_trans 80 MB walk → L3 thrash | Pre-test 2 pre-slice: +1.7% only |
+| H12 | TLS branch always-fall-through cost | TLS=0: -1.6% (noise) |
+
+**H13 PROVEN as proximate mechanism, source UNIDENTIFIED**:
+FUSEE per op touches **20× more cache lines** than pthread synth at the
+same workload (47 L1m vs 2.3, 32 L2m vs 1.6, 2.77 L3m vs 0.13 at c100
+T=64). Math: memory wait 1.7 µs/op + compute 2 µs/op = 3.7 µs ≈ measured
+r_avg 3.61 µs. The SPECIFIC code path that contributes the extra 45 L1
+misses per op was not isolated in this phase.
+
+### Why synth_fork misled us on the mechanism
+
+Synth_fork c100 T=64 shows **97% kernel time + 4M minor page faults**
+because khugepaged fails to coalesce 2M hugepages when 64 forked workers
+simultaneously touch a 9 GB shared anon mmap. This IS a real cliff for
+the fork + shared + large-mmap pattern.
+
+**FUSEE accidentally avoids it** via protocol_a_ycsb's primary post-fork
+worker doing a **sequential 9 GB CACHE_FILL** phase before TRANS starts.
+During CACHE_FILL only one process writes, khugepaged has time + low
+contention to coalesce 2M pages. By TRANS start, hugepages are formed and
+the fault storm doesn't materialize → FUSEE kernel% stays at 4.5%.
+
+This means **CACHE_FILL is a hidden THP-mitigation that future refactors
+must preserve**. If someone "optimizes" by lazifying or splitting it,
+FUSEE will fall off the synth_fork cliff. iter-20A should add a defensive
+comment near `cache_pool_init` documenting this implicit role.
+
+### Methodological lesson — synth is for hypothesis, not confirmation
+
+The Phase 1c Pre-test 1 PMU on FUSEE itself caught that synth_fork's
+mechanism doesn't apply to FUSEE BEFORE we committed to a 200-400 LOC
+fork → pthread refactor based on the synth's 36× gap. The Phase 1c work
+was therefore high-value not because it solved Anomaly A (it didn't),
+but because **it prevented a misdirected major refactor**. Synth-as-proxy
+needs proxy verification before driving engineering decisions.
+
+### Revised iter-20A backlog (replaces the 4-tier list above)
+
+| # | Action | Priority | Source |
+|---|---|---|---|
+| 1 | **Ship B-H3 fix via RAP** (3 LOC owner-self flush removal) | high | Tier 1 above, unchanged |
+| 2 | **Isolate H13's 20× cache-miss source** in FUSEE `search()` HIT path | **🔥 highest** | NEW. Method: per-segment `__rdtsc()` + L1 miss PMU; or strip one wrapper at a time and re-measure. Half-day work + small src instrumentation. |
+| 3 | **Document CACHE_FILL's hidden THP-mitigation role** at `cxl_cache_pool.cc::cache_pool_init` | medium | NEW. ~5 LOC defensive comment; prevents future regression onto the synth_fork cliff |
+| 4 | Ship `FUSEE_TRANS_PRESLICE=1` default (already in code) | low | NEW. Marginal +1.7%, no downside |
+| 5 | Default `FUSEE_TLS_SIZE=0` + drop `FUSEE_LRU_SAMPLE` / `FUSEE_LRU_PAD` | low | Tier 4 above, expanded with TLS-disable from Phase 1c |
+| 6 | LRS2 HIT slowdown investigation | low | Tier 3 above, unchanged but lower priority than H13 |
+| 7 | ~~fork → pthread worker migration~~ | **DROPPED** | NEW. synth_fork proxy doesn't match FUSEE; bad ROI |
+| 8 | ~~MAP_HUGETLB 1 GB pages~~ | **DROPPED** | NEW. Was a kernel-fault patch; FUSEE isn't kernel-bound |
+
+### iter-19A complete close-out
+
+- **Anomaly B**: fully RCA'd, fix verified, ship pending (backlog #1).
+- **Anomaly A**: symptom characterized + proximate mechanism identified
+  (20× cache miss per op) + 12 alternative hypotheses ruled out;
+  specific source code path **not yet isolated**, iter-20A top priority.
+- **Bonus deliverable**: hidden THP-mitigation role of CACHE_FILL
+  documented (backlog #3).

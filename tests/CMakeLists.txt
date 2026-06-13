@@ -40,6 +40,24 @@ foreach(t sharding_test directory_test cache_pool_test blockpool_freelist_test p
     target_compile_options(${t} PRIVATE -O2 -g)
 endforeach()
 
+# Protocol F (FUSEE-on-CXL) unit tests — see docs/protocol_F_design_and_plan.md.
+# Tests that touch the CXL flush primitives (pool) are compiled with
+# -mclflushopt; pure-DRAM tests (index cache) are not, so they run on the
+# workstation Broadwell-EP CPU without SIGILL.
+foreach(t cxl_fusee_kvpair_pool_test cxl_kv_ops_F_test
+         cxl_kv_ops_F_concurrent_test cxl_kv_ops_F_2host_hashdiff
+         cxl_kv_ops_F_microbench cxl_kv_ops_F_micro_throughput
+         cxl_kv_ops_F_ycsb)
+    add_executable(${t} ${t}.cc)
+    target_link_libraries(${t} fusee_cxl)
+    target_compile_options(${t} PRIVATE -mclflushopt -O2 -g)
+endforeach()
+foreach(t cxl_fusee_index_cache_test)
+    add_executable(${t} ${t}.cc)
+    target_link_libraries(${t} fusee_cxl)
+    target_compile_options(${t} PRIVATE -O2 -g)
+endforeach()
+
 # Per-stage C write-path latency decomposition runner. Links the
 # decomp-instrumented sibling library so the insert/update stage timestamps
 # in cxl_kv_ops_C.cc are live. Uses CONSENSUS_OPT=3 (protocol C).
@@ -66,11 +84,13 @@ target_compile_options(cxl_latency_decomp_C
 # `protocol_a_ycsb` (iter-4A onward); A's micro-bench is
 # `cxl_a_aggr_test`. iter-9A keeps B/C variants of the legacy templates
 # (still wired against current B/C surface) and skips A.
-foreach(opt B C)
+foreach(opt B C F)
     if(${opt} STREQUAL "B")
         set(opt_num 2)
-    else()
+    elseif(${opt} STREQUAL "C")
         set(opt_num 3)
+    else()
+        set(opt_num 4)
     endif()
     foreach(variant kv_bench kv_bench_mp ycsb_runner)
         add_executable(cxl_${variant}_${opt} cxl_${variant}.cc)

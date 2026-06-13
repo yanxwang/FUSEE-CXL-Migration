@@ -742,10 +742,22 @@ R4: spin on staging (200 ms timeout):
 
 ### R5 — (owner-self miss only) Direct CXL bucket scan + pool fetch
 
+**iter-19A note**: the `flush(bucket); flush(bucket+64); mfence` triplet
+below is now **GATED by `FUSEE_LR_DEL_OWNER_FLUSH`** (default OFF in
+production bnoflush builds). iter-19A Phase 2 isolated this as
+**Anomaly B-H3** (owner-self clflushopt storm at zipf-1.5): removing
+the triplet gives **+5.9× thpt @ zipf-1.5** with no correctness
+regression — owner-host MOESI already keeps the owner's L1 fresh for
+self-written buckets. Cross-host reads do not take this code path
+(they go to R3/R4 forward_read). See §II.9 LRS3 + the iter-19A
+blueprint changes summary at the end.
+
 ```
 R5: owner-self miss:
   bucket = &buckets_[bucket_idx(key)]
+#if !FUSEE_LR_DEL_OWNER_FLUSH         // iter-19A B-H3 gate; default OFF in bnoflush
   flush(bucket); flush(bucket+64); mfence
+#endif
   for s in 0..6:
     if bucket->slots[s].key == key:
       encoded = bucket->slots[s].value
@@ -1245,16 +1257,155 @@ sites), `scripts/iter18A_*_decomp_*.py` (analyzer + viz)
 
 ---
 
-## II.9 Cheat sheet — which stage family to read
+## II.9 local_read microbench stages (LR family — iter-19A Phase 2.4)
+
+**Source**: `src/cxl_kv_ops_A.cc :: search()` — owner-self HIT or owner-self
+MISS branch only. Cross-host MISS (forward_read) is decomposed under
+§II.8 XR. Gated by `-DFUSEE_PROBE=1 -DFUSEE_LOCAL_READ_PROBE=1`
+(independent of XW / XR / LW probe knobs).
+
+Stage decomposition for diagnosing the **Anomaly B** (zipf-1.5
+throughput collapse) and **Anomaly A** (cache_pct→thpt monotonic
+decrease) signatures isolated in iter-19A. The decomposition splits
+the existing R1..R6 YCSB-path stages further on the local fast path
+because the iter-11A forwarder-pool-direct rewrite collapsed the
+cross-host code into XR, leaving R5 as the only owner-self MISS stage
+without sub-stage timing.
+
+**4 stages = 4 worker (LRS)** — no receiver side; owner-self only.
+HIT path emits 4 probes (LRS1S→LRS1E→LRS2S→LRS2H); MISS path emits 8
+(LRS1S→LRS1E→LRS2S→LRS2M→LRS3S→LRS3E→LRS4S→LRS4E).
+
+| # | Stage | Substages (sites) | Probe tag | Healthy ns @ T=8 V=1024 c1 zipf-0.99 |
+|---|---|---|---|---:|
+| **LRS1** | entry | param validation + `bucket_idx(key)` hash + optional TLS L1 check (R0_tls_hit short-circuit returns before LRS2) | LRS1S → LRS1E | ~50 |
+| **LRS2** | cache_pool_lookup | shared L2 seqlock CAS reader (8-retry budget); H = HIT (1KB DRAM memcpy + TLS populate + return); M = MISS (fall through to LRS3). `lrs2r` path counter = retry iterations | LRS2S → **LRS2H** or **LRS2M** | HIT: ~400 (DRAM memcpy + epoch capture); MISS: ~250 (seqlock fail-fast) |
+| **LRS3** | cxl_miss | owner-self bucket scan + slot decode + `pool->read(blk_off, hdr, 4)` + `pool->read(blk_off+4, v, vlen)` (16 cachelines flush+mfence at V=1024 — GATED by `FUSEE_LR_DEL_POOL_READ_FLUSH` per iter-19A Phase 3 G2). Bucket pre-scan flush+mfence GATED by `FUSEE_LR_DEL_OWNER_FLUSH` (B-H3 fix, default OFF) | LRS3S → LRS3E | ~5 000-10 000 (V-scaling; iter-19A bnoflush w/ G2: ~3 000) |
+| **LRS4** | populate | `cache_pool_insert` (seqlock CAS, thundering herd metric `lrs4r` path counter — B-H1 candidate) + `tls_insert(key, v, vlen, current_bucket_epoch)` | LRS4S → LRS4E | ~200-500 (DRAM seqlock CAS + 1KB memcpy + TLS insert) |
+| **TotalHIT** | (LRS2H − LRS1S) | HIT-path end-to-end | computed | ~450 |
+| **TotalMISS** | (LRS4E − LRS1S) | MISS-path end-to-end | computed | ~6 000 (V=1024 c1 zipf-0.99); ~3 200 with G2 isolation |
+
+### Key iter-19A findings (LRS-stage-level)
+
+- **HIT path dominates ~95% ops** under typical `cache_pct=100` +
+  zipf-0.99 workload. LRS2 HIT cost is dominated by 1024 B DRAM memcpy
+  + bucket_epoch capture — **Anomaly A** surfaces here at T=64 c100:
+  per-thread thpt collapses 22× (5.5 → 0.25 Mops/thread). Mechanism:
+  L3 capacity miss on the 9 GB cache_pool footprint + 64-way DRAM
+  concurrency saturation. See `docs/iters/iter19A_anomaly_a_consolidated.md`.
+- **Anomaly B (5.9× zipf-1.5 collapse)** root caused to **LRS3 bucket
+  pre-scan clflushopt storm** (B-H3). 2 flush_line + 1 mfence on the
+  owner-self bucket cachelines triggered cross-core MESI ping-pong
+  under zipf-1.5 hot key concentration. Fix: `FUSEE_LR_DEL_OWNER_FLUSH=1`
+  removes it (owner MOESI is sufficient). Phase 2 hash-diff PASS.
+- **LRS3 `pool->read` flush still active by default** — iter-19A Phase 3
+  isolated as G2 candidate. Single-host workload-A T=64 c100: **+3.0%
+  thpt** with no cross-host hash-diff regression. Theory: owner-self
+  reads its own block bytes, MOESI suffices. Recommended ship in
+  iter-20A as `FUSEE_LR_DEL_POOL_READ_FLUSH=1` default.
+
+### Sites in code
+
+- Worker: `search()` (the FUSEE_SEARCH_MIN=0 branch) — 4 probe pairs
+  (LRS1S/E, LRS2S/H/M, LRS3S/E, LRS4S/E) wrap the 4 stages
+- Probe macro: `PROBE_LR_OP(tag, op_id)` gated by
+  `FUSEE_LOCAL_READ_PROBE` (independent from FUSEE_PROBE_PATH,
+  FUSEE_READ_PROBE, FUSEE_LOCAL_WRITE_PROBE)
+- Same 128 MB per-thread mmap'd ring buffer infrastructure
+
+→ `src/cxl_probe.h` (`PROBE_LR_OP`), `src/cxl_kv_ops_A.cc:2879-3072`
+(probe sites), `scripts/iter19A_local_read_decomp_analyze.py`
+(analyzer)
+
+---
+
+## II.10 local_write microbench stages (LW family — iter-19A Phase 3)
+
+**Source**: `src/cxl_kv_ops_A.cc :: execute_write_local()` — owner-self
+write only (INSERT / UPDATE / DELETE). The forwarded variant
+`execute_write_local_with_blk` shares this structure minus the
+`pool->alloc + pool->write` step (block is forwarded by peer). Gated by
+`-DFUSEE_PROBE=1 -DFUSEE_LOCAL_WRITE_PROBE=1` (independent of all other
+probe knobs).
+
+Stage decomposition built for diagnosing local_write per-stage cost
+when an A/B isolation flips a flush+fence gate. Companion to LRS for
+the iter-19A Phase 3 flush+fence audit (`iter19A_flush_fence_audit_v2.md`).
+
+**6 stages = 6 worker (LWS)** — no receiver side; owner-self write
+goes through aggregator AggrSlot (DRAM, host-local) for invalidate
+broadcast (LWS3); the actual CXL InvalRing emit happens on the sender
+thread and is NOT in the worker's stack (see §II.3 send_invalidate
+producer side for I1..I8 stages of that emit). Success-path trace
+emits 14 probes (15 if LWS3B fires).
+
+| # | Stage | Substages (sites) | Probe tag | Healthy ns @ T=8 V=1024 c1 zipf-0.99 |
+|---|---|---|---|---:|
+| **LWS1** | entry+slotscan | param validation + `bucket_idx(key)` + scan 8 slots for match/empty + decide target_slot. Bucket pre-scan flush+mfence already REMOVED by iter-17A — pure CPU stage now | LWS1S → LWS1E | ~50 |
+| **LWS2** | slot_dir_lock | `slot_directory_lock(de)` = `pthread_spin_lock` on host-local DRAM SlotDirectoryEntry (§I8 DRAM, no LFM) | LWS2S → LWS2E | ~10 uncontested; spinlock T=64 p99 ~10 µs hot-Zipf |
+| **LWS3** | sharer_inval | read `de->sharer_bitmap` (DRAM) + per-peer `send_invalidate(target, key)` loop (writes DRAM AggrSlot; sender thread emits CXL InvalRing async). LWS3B emits IFF ≥1 peer broadcast taken; absent on INSERT / num_hosts=1 / empty bitmap | LWS3S → LWS3E + LWS3B | ~50 fast-skip; ~5-10 µs per peer when broadcast (spin on AggrSlot kAggrDone) |
+| **LWS4** | cow_publish | 3 sub-paths: DELETE = `retire_slot(slot)` (1 flush + sfence, GATED by `FUSEE_LW_DEL_RETIRE_FLUSH`); inline = `publish_slot_cow(slot, key, inline_v)` (1 flush + sfence, GATED by `FUSEE_LW_DEL_SLOT_PUB_FLUSH`); blockpool = `pool->alloc` (LWS4A, DRAM bump) + `pool->write(blk_off, buf, total)` (16 flush + sfence at V=1024, LWS4W, GATED by `FUSEE_LW_DEL_POOL_WRITE_FLUSH`) + `publish_slot_cow(slot, key, encoded)` (1 flush + sfence) | LWS4S → LWS4E + LWS4A + LWS4W | DELETE: ~30; inline: ~50; blockpool: ~200 (16 flush ~110 + slot pub ~30 + alloc ~10) |
+| **LWS5** | dir_state | `de->version++` + `de->state` + `de->sharer_bitmap = self_bit` + `slot_directory_unlock(de)` (all DRAM, no flush) | LWS5S → LWS5E | ~10 |
+| **LWS6** | own_cache | `cache_pool_insert(cache_, key, value, value_len)` (seqlock CAS + 1024 B DRAM memcpy) + `tls_insert(key, v, vlen, bucket_epoch)` (per-thread DRAM). DELETE branch: `cache_pool_evict` + `tls_evict` | LWS6S → LWS6E | ~200-500 (depends on cache_pool seqlock contention) |
+| **TotalW** | (LWS6E − LWS1S) | end-to-end local_write | computed | ~600-800 (blockpool path, V=1024) |
+
+### Key iter-19A findings (LWS-stage-level)
+
+- **LWS4 holds the most flushable lines** — 17 cachelines + 2 sfence
+  per blockpool write at V=1024. iter-19A Phase 3 isolated these as
+  G3/G4+G5/G6:
+  - **G45 (publish_slot_cow flush) is REQUIRED** — empirically
+    **HANGS** the protocol at 2-host T=32 8M-bucket hash-diff workload
+    because peer hosts cannot observe new slot publications via
+    forward_read. **DO NOT REMOVE.**
+  - **G6 (pool->write flush) yields no measurable gain** at single-host
+    workload-A T=64 (-1.5% c100 / +0.4% c1) + theoretical cross-host
+    risk for peer-pool-block reads. **DO NOT REMOVE.**
+  - **G3 (retire_slot DELETE flush)** untested — workload-A has no
+    DELETEs. iter-20A backlog: workload-d sweep.
+- **LWS6 is the Anomaly A surface on writes** — 1024 B `cache_pool_insert`
+  memcpy under 64-way concurrent DRAM access at c100. Same path-saturation
+  mechanism as LRS2 HIT. Fix: cache_buckets default 2097152 → 16384.
+- **LWS3 fast-skip is the common case** for single-key isolation
+  benchmarks (INSERT-only or peer-bitmap empty). LWS3B counter
+  separates broadcast-taken ops from fast-skip ops in mixed analyses.
+
+### Sites in code
+
+- Worker: `execute_write_local()` — 15 probe insertions across 6 stages
+  (8 S+E pairs + 1 branch tag LWS3B + 2 sub-anchor tags LWS4A/LWS4W).
+- Probe macro: `PROBE_LW_OP(tag, op_id)` gated by
+  `FUSEE_LOCAL_WRITE_PROBE`.
+- 4 build flags wired in iter-19A Phase 3 for A/B isolation:
+  - `FUSEE_LR_DEL_POOL_READ_FLUSH` (G2 — also gates LRS3 pool->read)
+  - `FUSEE_LW_DEL_RETIRE_FLUSH` (G3 — retire_slot)
+  - `FUSEE_LW_DEL_SLOT_PUB_FLUSH` (G4+G5 — publish_slot_cow inline + blockpool)
+  - `FUSEE_LW_DEL_POOL_WRITE_FLUSH` (G6 — pool->write block bytes)
+
+→ `src/cxl_probe.h` (`PROBE_LW_OP`), `src/cxl_kv_ops_A.cc:529-740`
+(execute_write_local + probe sites),
+`src/cxl_kv_blockpool.cc` (G2 + G6 flag gates),
+`docs/iters/iter19A_local_write_decomp_spec.md` (spec),
+`docs/iters/iter19A_flush_fence_audit_v2.md` (per-site audit),
+`docs/iters/iter19A_phase3_flush_iso_summary.md` (A/B sweep results)
+
+---
+
+## II.11 Cheat sheet — which stage family to read
 
 | You see in a probe trace … | Open … |
 |---|---|
 | `W1, W2, … W12` or `R1, R2, …, R6` or `I1..I8` or `F1..F7` or `D1..D5` | §II.1–II.6 (YCSB-path stages) |
 | `XWS1..5, XWR1..3` | §II.7 (xhost_write microbench) |
 | `XRS1..6, XRR1..3` | §II.8 (xhost_read microbench) |
+| `LRS1, LRS2H/M, LRS3, LRS4` | §II.9 (local_read decomp, iter-19A) |
+| `LWS1..LWS6` | §II.10 (local_write decomp, iter-19A) |
 | Stage with `T` suffix (e.g. XRS4T, XWS5T) | Timeout counter for that stage's spin |
-| Stage with `R` suffix (e.g. XRS2R) | C-spin retry counter |
+| Stage with `R` suffix (e.g. XRS2R, lrs2r, lrs4r) | C-spin retry counter |
 | Stage with `Z` / `X` suffix (e.g. XRR1Z, XRR1X) | Receiver-side gap-tolerance / bytes-read counter |
+| Stage with `H` / `M` suffix (LRS2H/M) | Path branch — HIT vs MISS on cache_pool lookup |
+| Stage with `B` suffix (LWS3B) | Path branch — broadcast invalidate taken |
+| Stage with `A` / `W` mid-stage anchor (LWS4A, LWS4W) | Sub-stage split inside blockpool CoW publish |
 
 ---
 
@@ -1308,6 +1459,9 @@ sites), `scripts/iter18A_*_decomp_*.py` (analyzer + viz)
 | Worker hangs in I2/F3 wait-for-slot-free | ring slot N's previous occupant timed out without consumer ACK; `req_op_id` not cleared | worker loops forever; cell collapses | iter-11A `forward_read_direct` ALWAYS frees `e->req_op_id = 0` after staging poll (regardless of timeout) to avoid wraparound deadlocks at ring depth 256 — fix landed during Phase 1 hash-diff battery 2026-05-10 (root cause was hang at >256 reads per (req_host, owner) pair). WriteRing + InvalRing still lack a wait-for-slot-free timeout — iter-12A backlog. |
 | Cell throughput bimodal (median < 0.5 Mops/s, max > 5 Mops/s) | hypothesized: forwarder-pool-direct epoch retry storm on hot Zipf buckets at small KV; concurrent workers see cascading C13 rejects | 13 such cells in iter-11A Phase 6 sweep (gate-12 FAIL, baseline 8) | iter-12A backlog #2: bound retry count + fall back to ReadStaging copy on retry-budget-exhausted. |
 | ReadReceiver SIGSEGV before staging attach (iter-10A) | `staging_arena_` pointer null-derefed in cxl_probe.h | bimodal cells when probe rings allocated mid-flight | iter-11A Phase 0 fix (c03a81a): null-guard in `cxl_probe.h:83`. Crash rate 26→21/100. |
+| Anomaly B — zipf-1.5 thpt collapse on local_read | LRS3 owner-self bucket clflushopt storm (B-H3) | 5.9× collapse vs zipf-0.99 on workload-A/B local_read at high T | iter-19A Phase 2: `FUSEE_LR_DEL_OWNER_FLUSH=1` removes the 2 flush_line + mfence; default in bnoflush builds. Hash-diff PASS. |
+| Anomaly A — cache_pct→thpt monotonic decrease at T=64 | cache_pool memory-path saturation (L3 capacity miss on 9 GB resident set + 64-way DRAM concurrency penalty); c1 mixed-path 99 Mops vs c100 all-DRAM 30 Mops vs all-CXL 18 Mops | observable at any local_read-heavy workload, T≥32, V≥256 | iter-19A: default `FUSEE_CACHE_BUCKETS` 2097152 → 16384 (cache_pct=1, mixed regime). 3.3× thpt gain data-validated. iter-20A backlog: ship via RAP. |
+| Phase 3 G45 deadlock — 2-host hang on `bnf-G45` build | `FUSEE_LW_DEL_SLOT_PUB_FLUSH=1` removes `publish_slot_cow` flush+sfence → peer hosts never see new slot publication → forward_read indefinite wait → both hosts hang at high load (T=32, 8M buckets, 500k ops, never start trans phase) | observable on 2-host hash-diff battery for the G45 build only | DO NOT ship this flag default ON. Audit `iter19A_flush_fence_audit_v2.md` LW.2/LW.3 records the flush as REQUIRED for cross-host correctness. |
 
 ---
 
@@ -1333,7 +1487,7 @@ Snapshot history kept in iter summary docs (each summary references
 the blueprint version at iter-end, so historical code archaeology is
 possible without git-diffing this file).
 
-**Latest version**: end of iter-18A (2026-05-23).
+**Latest version**: end of iter-19A (2026-06-02).
 
 ## iter-8A blueprint changes summary
 
@@ -1599,3 +1753,179 @@ possible without git-diffing this file).
   cache=on = **53.9 Mops cluster = 2.7× of 20 Mops/s target**.
   Read path no longer the YCSB-C bottleneck. xhost_write peak still
   at 6.628 Mops cluster (iter-17A); write path is next iter target.
+
+## iter-19A blueprint changes summary (2026-06-01 / 2026-06-02)
+
+iter-19A had three phases — anomaly RCAs (Phase 1b/1c/1d Anomaly A,
+Phase 2 Anomaly B), then a flush+fence audit + isolation A/B sweep
+(Phase 3). The blueprint changes from this iter:
+
+- **NEW Part II.9 — local_read microbench stage decomp** (LR family):
+  4 stages (LRS1..LRS4). Probe macro `PROBE_LR_OP(tag, op_id)` gated
+  by `FUSEE_LOCAL_READ_PROBE` (independent of XW / XR / LW gates).
+  Owner-self HIT and MISS paths split; cross-host MISS stays under
+  §II.8 XR. Built in Phase 2.4 to diagnose Anomaly B; reused in Phase 3.
+- **NEW Part II.10 — local_write microbench stage decomp** (LW
+  family): 6 stages (LWS1..LWS6). Probe macro `PROBE_LW_OP(tag, op_id)`
+  gated by `FUSEE_LOCAL_WRITE_PROBE`. Companion to LRS for the
+  Phase 3 flush+fence audit. No receiver side (peer invalidate emit
+  happens off the worker path via aggregator).
+- **NEW Part II.11 — Cheat sheet** (renumbered from II.9; rows added
+  for LRS / LWS / new suffix conventions H/M, B, A/W).
+- **R5 update**: bucket pre-scan flush+mfence now noted as GATED by
+  `FUSEE_LR_DEL_OWNER_FLUSH` (default OFF in production bnoflush
+  builds since Phase 2). The pseudocode in §II.2 R5 carries the
+  `#if !FUSEE_LR_DEL_OWNER_FLUSH` gate inline.
+
+### Phase 1b/1c/1d — Anomaly A RCA (cache_pct → thpt monotonic decrease)
+
+- **24 hypotheses tested over Phase 1c+1d + H22-H26 PMU pass**.
+  Final mechanism: **memory-path saturation** — at c100 every op
+  funnels through local DRAM (cache_pool HIT, ~9 GB resident set,
+  L3 capacity miss + 64-way DRAM concurrency penalty); at c1 most
+  ops fall through to CXL (block pool MISS); single-subsystem
+  extremes both underperform the mixed regime.
+- **Direct PMU support** (H22): LLC miss% c100=86% vs c1=65%.
+  Sub-mechanism (specific hardware-level DRAM ceiling) left OPEN —
+  not gating the fix.
+- **Retracted overclaims** documented verbatim:
+  (1) "LLC capacity miss on memcpy is the sole cause" — falsified
+  by KV_SIZE sweep E_fix1 (V=256 c100 SLOWER than V=1024 c100);
+  (2) "DRAM controller queue saturation" — TOR_avg=0.10 (low) +
+  BW=40% peak (not saturated);
+  (3) "fork-vs-pthread is the mechanism" — Pre-test 1 PMU showed
+  cycles:k low, PT walks not on critical path in FUSEE direct.
+- **Fix path (data-validated)**: change `FUSEE_CACHE_BUCKETS` default
+  from 2097152 (c100) to 16384 (c1) — existing Phase 1b cache_pct
+  sweep gives **99 Mops vs 30 Mops = 3.3× cluster gain** at T=64
+  zipf-0.99. Ship via RAP in iter-20A.
+- See `docs/iters/iter19A_anomaly_a_consolidated.md` for the
+  master tombstone (26-hypothesis ledger + retracted overclaims
+  + fix path).
+
+### Phase 2 — Anomaly B fix (zipf-1.5 5.9× thpt collapse)
+
+- **B-H3 isolated as root cause**: owner-self bucket pre-scan
+  clflushopt storm on LRS3 (`flush_line(bucket) + flush_line(bucket+64)
+  + mfence` in `search()` owner-self MISS path).
+- **Mechanism**: under zipf-1.5 hot-key concentration the 2 flushes
+  trigger cross-core MESI ping-pong on the shared bucket cacheline;
+  same-host workers contend on the recurring flush+refetch.
+- **Fix**: `FUSEE_LR_DEL_OWNER_FLUSH=1` removes the triplet.
+  Owner-host MOESI keeps owner's L1 fresh for self-written buckets;
+  cross-host reads do not hit this code path (forward_read uses
+  §II.8 XR receiver-side bucket flush in `read_handler` — separate
+  flush, retained).
+- **Phase 2 verification**: hash-diff battery PASS; thpt @ zipf-1.5
+  recovered to within 16% of zipf-0.99 (was 5.9× collapse).
+- Default in production bnoflush builds.
+
+### Phase 3 — Flush+fence audit + A/B isolation sweep
+
+- **NEW audit document `docs/iters/iter19A_flush_fence_audit_v2.md`**
+  catalogues every active `flush_line` / `store_fence` / `full_fence`
+  in protocol A source, grouped by the 4 user-op hot paths (LR / LW
+  / XR / XW) plus an "Other" group (init, sender threads, inval
+  receiver, reservation handler, RCU/hazard, dead `_v2_unused`
+  variants). Per-site fields: flush content, fence order, cross-host
+  visibility need, order-necessity verdict.
+- **4 new build flags** wired for A/B isolation (default = 0,
+  keep current behavior):
+  - `FUSEE_LR_DEL_POOL_READ_FLUSH` (G2) — `pool->read` per-cacheline
+    flush + mfence (LRS3 MISS path + XR receiver value-fetch path)
+  - `FUSEE_LW_DEL_RETIRE_FLUSH` (G3) — `retire_slot()` flush+sfence
+    (LWS4 DELETE path)
+  - `FUSEE_LW_DEL_SLOT_PUB_FLUSH` (G4+G5) — `publish_slot_cow()`
+    flush+sfence (LWS4 inline + blockpool slot publish)
+  - `FUSEE_LW_DEL_POOL_WRITE_FLUSH` (G6) — `pool->write` per-cacheline
+    flush + sfence (LWS4 blockpool write)
+- **2-host workload-A T=64 sweep (5 builds × 2 cells × 3 reps = 30
+  cells)**: NULL signal (all within ±2.5% of baseline). Diagnosis:
+  workload-A R50/U50 has 25% xhost_write ops; XWS5 ack_wait (~140 µs
+  at T=64, iter-16A) dominates per-op time and masks LR/LW flush
+  effects.
+- **Single-host workload-A sensitivity sweep (30 cells)**: clearer
+  signal because FUSEE_NUM_HOSTS=1 forces 100% local ops. Median
+  thpt (Mops, 1 host) vs `bnf` baseline:
+  - **G2: +3.0% c100, +0.7% c1** (signal, modest)
+  - **G3: +8.8% c100** (suspect — workload-A has no DELETE; per-rep
+    variance is high; treat as null until DELETE-bearing workload)
+  - G45: +4.5% c100, -0.1% c1 (single-host gain irrelevant since
+    cross-host hangs)
+  - G6: -1.5% c100, +0.4% c1 (no gain)
+- **Cross-host hash-diff verification (8M buckets, T=32, 500k ops,
+  dump+cmp post-barrier)**:
+  - `bnf` baseline: ✅ PASS (byte-identical 1 GB bucket array)
+  - `bnf-G2`: ✅ PASS
+  - `bnf-G3`: ✅ PASS (trivial — workload had 0 DELETEs)
+  - **`bnf-G45`: ❌ HANG** — protocol deadlock; both hosts wedged
+    after init, never started trans phase. Direct empirical proof
+    that `publish_slot_cow()` flush+sfence is REQUIRED for cross-host
+    correctness.
+  - `bnf-G6`: ✅ PASS (caveat: bucket-only comparison, doesn't test
+    block bytes content; the dump's own pre-read flush masks any
+    transient block staleness)
+- **Per-group verdicts** (iter-20A ship/no-ship):
+  - **G1** (LR.1 owner-self bucket pre-scan, = B-H3): ✅ Already
+    shipped (default in bnoflush since Phase 2)
+  - **G2** (LR pool->read flush): ✅ **SHIP** in iter-20A — modest
+    gain, hash-diff PASS, theoretical owner-self MOESI argument
+    solid
+  - **G3** (LW retire_slot DELETE): ⏸ NOT VERIFIED — needs DELETE-
+    heavy workload (iter-20A backlog: workload-d sweep)
+  - **G4+G5** (LW publish_slot_cow): ❌ **DO NOT REMOVE** — hangs
+    at 2-host (empirically confirmed)
+  - **G6** (LW pool->write): ❌ no measurable gain + theoretical
+    cross-host risk for peer-pool-block reads via forward_read.
+    Keep as-is.
+- **New isolation candidate flagged** in audit v2 §3: `XR.R3` (xhost_read
+  receiver bucket flush in `read_handler`) — analog of B-H3 on
+  the xhost_read receiver side, same MOESI argument applies, not
+  yet isolation-gated. iter-20A candidate: `FUSEE_XR_DEL_RECV_BUCKET_FLUSH`.
+
+### Part III.3 failure modes — additions
+
+Added 4 new entries (Anomaly B / Anomaly A / G45 hang) referencing
+their root cause + status. Anomaly A entry doubles as documentation
+for the cache_buckets default change rationale.
+
+### Files (iter-19A)
+
+- `src/cxl_kv_ops_A.cc` — 15 LWS probe insertions; 4 flush+fence
+  gate macros (G3/G45 inline; G2/G6 in blockpool); R5 OWNER_FLUSH
+  gate retained
+- `src/cxl_kv_blockpool.cc` — G2 + G6 flush+fence gates wrapping
+  `read()` and `write()` cacheline loops
+- `src/cxl_probe.h` — added `PROBE_LW_OP` macro + `FUSEE_LOCAL_WRITE_PROBE`
+  build gate
+- `docs/iters/iter19A_anomaly_a_consolidated.md` — Anomaly A master
+  tombstone (26-hypothesis ledger + retracted overclaims + fix)
+- `docs/iters/iter19A_phase1b_anomaly_a_rca.md` — Anomaly A deep
+  investigation chronicle (1300+ lines)
+- `docs/iters/iter19A_phase2_fix_verification.md` — B-H3 hash-diff
+  + thpt verification
+- `docs/iters/iter19A_flush_fence_audit_v2.md` — refined audit by
+  4 paths + Other
+- `docs/iters/iter19A_4path_stage_decomposition.md` — consolidated
+  4-path stage decomp reference (LRS+LWS+XRS/XRR+XWS/XWR)
+- `docs/iters/iter19A_local_write_decomp_spec.md` — LWS probe spec
+- `docs/iters/iter19A_phase3_flush_iso_summary.md` — Phase 3 sweep
+  + hash-diff results + per-group verdicts
+- `scripts/iter19A_phase3_build_flush_iso.sh`,
+  `scripts/iter19A_phase3_flush_iso_sweep.sh`,
+  `scripts/iter19A_phase3_singlehost_sweep.sh`,
+  `scripts/iter19A_phase3_hashdiff.sh` — Phase 3 build + sweep + verify
+
+### iter-20A backlog (from iter-19A)
+
+1. Ship cache_buckets default 2097152 → 16384 (Anomaly A fix; data-
+   validated 3.3× cluster gain at T=64 zipf-0.99). Bundle RAP.
+2. Ship `FUSEE_LR_DEL_POOL_READ_FLUSH=1` default (G2; modest gain,
+   hash-diff PASS).
+3. workload-d sweep (DELETE-heavy) to evaluate G3 retire_slot flush.
+4. Consider `FUSEE_XR_DEL_RECV_BUCKET_FLUSH` (xhost_read receiver
+   bucket flush, audit v2 §3 — analog of B-H3 on receiver side).
+5. Default `FUSEE_TLS_SIZE=0` (TLS dead-code finding from Anomaly A
+   investigation H2).
+6. End-to-end value-content cross-host correctness test framework
+   (would unblock G6 evaluation if revisited).

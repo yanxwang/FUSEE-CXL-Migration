@@ -48,8 +48,12 @@ set(source_fusee_cxl
     cxl_directory.cc
     cxl_cache_pool.cc
     cxl_kv_blockpool_freelist.cc
+    cxl_fusee_kvpair_pool.cc
+    cxl_fusee_index_cache.cc
+    cxl_fusee_slot_lock.cc
+    cxl_kv_ops_F.cc
+    cxl_kv_ops_F_decomp.cc
     cxl_probe.cc
-    cxl_tls_cache.cc
     ${CXL_SHM_PROFILING_DIR}/locks/lfm_lock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ticket_lock_fusee_patched.c)
 
@@ -92,6 +96,42 @@ endif()
 # (XRS*/XRR*). Independent of FUSEE_PROBE_PATH; requires FUSEE_PROBE=1.
 if(DEFINED FUSEE_READ_PROBE)
     target_compile_definitions(fusee_cxl PUBLIC FUSEE_READ_PROBE=${FUSEE_READ_PROBE})
+endif()
+# iter-19A: -DFUSEE_LOCAL_READ_PROBE=1 enables local_read stage probes
+# (LRS1..4). Independent gate; requires FUSEE_PROBE=1.
+if(DEFINED FUSEE_LOCAL_READ_PROBE)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LOCAL_READ_PROBE=${FUSEE_LOCAL_READ_PROBE})
+endif()
+# iter-19A Phase 3: -DFUSEE_LOCAL_WRITE_PROBE=1 enables local_write stage
+# probes (LWS1..6). Independent gate; requires FUSEE_PROBE=1.
+if(DEFINED FUSEE_LOCAL_WRITE_PROBE)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LOCAL_WRITE_PROBE=${FUSEE_LOCAL_WRITE_PROBE})
+endif()
+# iter-19A B-H3 fix: -DFUSEE_LR_DEL_OWNER_FLUSH=1 removes the owner-self
+# bucket pre-scan clflushopt+mfence on the local_read MISS path (LR.1).
+# Default = 0 (flush kept); bnoflush production builds set it to 1.
+if(DEFINED FUSEE_LR_DEL_OWNER_FLUSH)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LR_DEL_OWNER_FLUSH=${FUSEE_LR_DEL_OWNER_FLUSH})
+endif()
+# iter-19A Phase 3 G2: pool->read flush+mfence removal gate.
+if(DEFINED FUSEE_LR_DEL_POOL_READ_FLUSH)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LR_DEL_POOL_READ_FLUSH=${FUSEE_LR_DEL_POOL_READ_FLUSH})
+endif()
+# iter-19A Phase 3 G3/G4-G5/G6: local_write flush gates.
+if(DEFINED FUSEE_LW_DEL_RETIRE_FLUSH)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LW_DEL_RETIRE_FLUSH=${FUSEE_LW_DEL_RETIRE_FLUSH})
+endif()
+if(DEFINED FUSEE_LW_DEL_SLOT_PUB_FLUSH)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LW_DEL_SLOT_PUB_FLUSH=${FUSEE_LW_DEL_SLOT_PUB_FLUSH})
+endif()
+if(DEFINED FUSEE_LW_DEL_POOL_WRITE_FLUSH)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_LW_DEL_POOL_WRITE_FLUSH=${FUSEE_LW_DEL_POOL_WRITE_FLUSH})
+endif()
+# Protocol F stage-decomposition probes (FUSEE Figure 10 latency breakdown).
+# Default OFF (zero runtime cost); set -DFUSEE_F_DECOMP=ON to enable.
+option(FUSEE_F_DECOMP "Enable Protocol F per-stage latency probes" OFF)
+if(FUSEE_F_DECOMP)
+    target_compile_definitions(fusee_cxl PUBLIC FUSEE_F_DECOMP=1)
 endif()
 target_link_libraries(fusee_cxl PUBLIC pthread)
 

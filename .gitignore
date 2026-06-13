@@ -38,3 +38,12 @@ docs/path_decomp_*/per_cell/*/probes_*/
 docs/iter9A_redo_path_decomp_*/probes_*/
 docs/path_decomp_*/probes_*/
 **/probe.[0-9]*.[0-9]*
+
+# Run-time noise: program stdout/stderr captures, run logs, and zero-replacement
+# backup files. Iter summaries (*.md) carry the analysis; the raw streams stay
+# local for reproducibility. Note: pre-existing tracked .log/.out/.err files in
+# HEAD are unaffected — gitignore only blocks new additions.
+*.log
+*.out
+*.err
+*.bak

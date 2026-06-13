@@ -19,6 +19,7 @@
 #define FUSEE_OPT_A 1
 #define FUSEE_OPT_B 2
 #define FUSEE_OPT_C 3
+#define FUSEE_OPT_F 4
 
 #ifndef CONSENSUS_OPT
 #define CONSENSUS_OPT FUSEE_OPT_C
@@ -42,8 +43,14 @@ namespace fusee {
 using CxlKvStore = CxlKvStoreC;
 constexpr char kConsensusOpt = 'C';
 }
+#elif CONSENSUS_OPT == FUSEE_OPT_F
+#include "cxl_kv_ops_F.h"
+namespace fusee {
+using CxlKvStore = CxlKvStoreF;
+constexpr char kConsensusOpt = 'F';
+}
 #else
-#error "CONSENSUS_OPT must be FUSEE_OPT_A (1), FUSEE_OPT_B (2), or FUSEE_OPT_C (3)"
+#error "CONSENSUS_OPT must be FUSEE_OPT_{A,B,C,F}"
 #endif
 
 #endif // FUSEE_CXL_KV_STORE_H_

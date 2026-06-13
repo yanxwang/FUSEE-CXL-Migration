@@ -186,6 +186,26 @@ inline void probe_flush() {
 #define FUSEE_LOCAL_READ_PROBE 0
 #endif
 
+// FUSEE_LOCAL_WRITE_PROBE gates iter-19A local_write stage probes
+// (LWS1..LWS6). Owner-self write only (no cross-host forward).
+// Independent of other probe knobs. Default OFF.
+//
+// Stages (see docs/iters/iter19A_local_write_decomp_spec.md):
+//   LWS1 entry+slotscan : bucket scan, match/empty branch (always)
+//   LWS2 slot_dir_lock  : slot_directory_lock acquire     (always)
+//   LWS3 sharer_inval   : bitmap read + per-peer broadcast (always; skipped
+//                          on INSERT / num_hosts=1 / empty bitmap)
+//        LWS3B  : at least one invalidate sent (broadcast taken)
+//   LWS4 cow_publish    : block alloc + CXL write + publish_slot_cow
+//                          (DELETE = retire_slot fast; pool==nullptr = inline)
+//        LWS4A  : post pool->alloc (blockpool path only)
+//        LWS4W  : post pool->write to CXL (blockpool path only)
+//   LWS5 dir_state      : de->version++ + state + sharer_bitmap + unlock
+//   LWS6 own_cache      : cache_pool_insert/evict + TLS insert/evict
+#ifndef FUSEE_LOCAL_WRITE_PROBE
+#define FUSEE_LOCAL_WRITE_PROBE 0
+#endif
+
 #if FUSEE_PROBE
 #define PROBE(tag)        ::fusee::probe_ring()->emit(tag, 0)
 #define PROBE_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
@@ -213,6 +233,12 @@ inline void probe_flush() {
 #define PROBE_LR_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
 #else
 #define PROBE_LR_OP(tag, op) do {} while (0)
+#endif
+
+#if FUSEE_PROBE && FUSEE_LOCAL_WRITE_PROBE
+#define PROBE_LW_OP(tag, op) ::fusee::probe_ring()->emit(tag, (uint64_t)(op))
+#else
+#define PROBE_LW_OP(tag, op) do {} while (0)
 #endif
 
 #endif  // FUSEE_CXL_PROBE_H_
