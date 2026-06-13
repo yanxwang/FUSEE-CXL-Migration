@@ -1,124 +1,114 @@
 // FUSEE LFM v2 — Lamport Fast Mutex tuned for CXL Type-3 no-coherence-domain.
 //
 // Status: design sketch (no implementation yet).
-// Backing study: docs/study_cxl_write_atomicity/FINDINGS.md
+//
+// Backing studies (read in order):
+//   1. docs/study_cxl_write_atomicity/FINDINGS.md
+//      Upper-bound: tried to find the LARGEST atomic publish unit. Found
+//      a ~1000× rate cliff at the 3-CL ↔ 4-CL boundary but ALSO that
+//      "strict atomic" doesn't exist at K=10⁶ — every size has some
+//      non-zero interleave rate.
+//   2. docs/study_cxl_write_atomicity/FINDINGS_lower_bound.md
+//      Lower-bound: 1B / 8B / 64B aligned single-CL writes are
+//      strictly atomic at K=10⁶+ trial bound (P < 10⁻⁶). Cross-CL
+//      writes (even 8B straddling a CL boundary) tear at ~10 %.
+//   3. docs/study_cxl_write_atomicity/FINDINGS_concurrency.md
+//      Concurrency: (a) memcpy + clflushopt does write-allocate and
+//      destroys a same-CL false-sharer's data ~75 % of the time;
+//      movnti is safe. (b) concurrent readers of a single-CL slot
+//      never observe a torn mid-publish state (~7 M reads, 0 tears);
+//      multi-CL slots show 0.25–1 % tears.
 //
 // =============================================================================
 // Why LFM v2
 // =============================================================================
 //
-// LFM v1 (see cxl_shm_profiling/lfm_lock.c, src/cxl_fusee_slot_lock.cc)
-// was designed assuming hardware-coherent shared memory. On the g1/g2 CXL
-// Type-3 testbed there is NO CPU-level cache coherence across hosts. v1
-// papers over this by pumping every flag write through clflushopt + mfence
-// + peer-read-back, costing ~600 ns per primitive operation and ≥4 of them
-// per lock acquire (~3 µs per acquire under no contention; 9 µs p50 under
-// contention at T=64, p99=691 µs — measured iter-9A path_decomp Phase 0).
+// LFM v1 (cxl_shm_profiling/lfm_lock.c, src/cxl_fusee_slot_lock.cc)
+// assumes hardware-coherent shared memory. On g1/g2 CXL Type-3 there is
+// NO CPU-level cache coherence across hosts. v1 patches around this by
+// pumping every flag write through clflushopt + mfence + peer-read-back,
+// costing ~600 ns per primitive operation and ≥4 of them per lock
+// acquire (~3 µs uncontended; 9 µs p50 at T=64, p99=691 µs — measured
+// iter-9A path_decomp Phase 0).
 //
-// The write-atomicity study at docs/study_cxl_write_atomicity/FINDINGS.md
-// established (after 100K-trial variance reps that CORRECTED an earlier
-// claim) the following g1/g2 hardware properties:
+// v2's optimization target is the FENCE COUNT, not the data structure.
+// The three studies above proved LFM v1's data layer (1B b[id] + 8B x
+// ticket, both aligned single-CL) is strictly atomic and tear-free. The
+// algorithm doesn't need a redesigned "big atomic publish"; it needs
+// fewer redundant flushes per acquire.
 //
-//   (A) Cross-host writes of N ≤ 192 B (3 cachelines) via cacheable +
-//       clflushopt + sfence show a SMALL BUT NON-ZERO interleave rate:
-//       ~0.013 % median, up to 1.7 % under run-state-dependent timing.
-//       Strictly atomic is NOT a property of any size at this trial
-//       count — the earlier "0/10000" was a sampling artifact.
-//
-//   (B) Cross-host non-temporal (movnti) writes at N=1024 B show
-//       interleave rate ~0.063 % at 100K verification — ~5× lower than
-//       memcpy at N=192. But still non-zero.
-//
-//   (C) The 3-CL ←→ 4-CL boundary IS REAL: at N≥256 the rate jumps to
-//       15-31 % — ~1000 × higher than N=192. Below 4 CL the rate stays
-//       in the 0.01 % band (with occasional spikes); at 4 CL+ the
-//       hardware no longer attempts to keep the publication atomic.
-//
-// LFM v2 exploits (A) + (C) with ALGORITHMIC torn-publish detection:
-// the slot is laid out so each of the 3 cachelines carries an identical
-// `publish_seq` field; the reader rejects (and retries) any observation
-// where the 3 sequence values disagree. Steady-state cost is the same
-// as the original Path A design (1 clflushopt + 1 sfence per lock);
-// retry overhead is amortized ~50 ns/lock under worst-case 1.7 % rate.
-//
-// Expected microbenchmark gain (estimated from LFM v1 path decomp):
-//   - Uncontended lock acquire: 3 µs (v1) → 1.0–1.2 µs (v2)   ~3× speedup
-//   - Contended T=64 p50:       9 µs (v1) → 3–4 µs (v2)        ~2-3× speedup
-//   - Contended T=64 p99:       691 µs (v1) → 80–150 µs (v2)   ~5-8× speedup
+// Earlier v2 sketch (committed and then retracted; see "RETRACTED
+// DESIGN" section below) proposed a 192 B / 3-CL slot with
+// publish_seq torn-publish detection. Both moves were wrong:
+//   - 192 B is ~24× over-sized for LFM's actual state (1 B + 8 B)
+//   - publish_seq is unnecessary for single-CL slots (FINDINGS_concurrency
+//     §4) AND insufficient for multi-CL slots (FINDINGS.md showed even
+//     3-CL writes tear at ~1 %, which the seq scheme doesn't fix)
 //
 // =============================================================================
-// Slot layout (192 B per host, "Path A" from FINDINGS §6)
+// Two viable layouts
 // =============================================================================
 //
-// Each host owns exactly ONE 192 B slot in the LFM region. Slot layout:
+// Both are correct per the studies. Pick on memory budget.
 //
-// To enable torn-publish detection without giving up the 3-CL atomic
-// window, each cacheline carries a `publish_seq` field at its FIRST
-// 8 B offset. The publisher writes the same publish_seq into all three
-// cachelines (then memcpy'd + flushed as a 3-CL burst). The reader,
-// after pulling all three cachelines, verifies seq[0]==seq[1]==seq[2];
-// if not, the publish was torn and the read is retried.
+// LAYOUT A — One cacheline per host slot (RECOMMENDED DEFAULT)
+// ----------------------------------------------------------------------
 //
-//   struct alignas(64) FuseeLfmV2Slot {
-//     // ---- Cacheline 0 ----
-//     uint64_t publish_seq_0;  // SAME value in all 3 CLs after a publish
-//     uint64_t magic;          // 0x4C464D56320000xx for slot index xx sanity
-//     uint64_t host_rank;      // == this host's ID; for Lamport tie-break
-//     uint64_t bid;            // Lamport b[host]; 0=idle, !=0=trying/in-CS
-//     uint64_t epoch;          // ABA guard for release/re-acquire
-//     uint64_t _rsv0[3];       // pad to 64 B
-//
-//     // ---- Cacheline 1 ----
-//     uint64_t publish_seq_1;  // must equal publish_seq_0 (torn check)
-//     uint64_t claim_set[7];   // 448-bit bitmap of "peers in CS observed"
-//
-//     // ---- Cacheline 2 ----
-//     uint64_t publish_seq_2;  // must equal publish_seq_0 (torn check)
-//     uint64_t version;        // increments per release; debugging aid
-//     uint64_t last_grant_ns;  // when this host last entered CS, fairness
-//     uint64_t _rsv2[5];
+//   struct alignas(64) PerHostSlot {  // exactly 64 B
+//     uint64_t b;             // Lamport "entering" flag (1 B; padded
+//                             // to 8 B for natural alignment + bit ops)
+//     uint64_t x;             // Lamport ticket counter
+//     uint64_t epoch;         // ABA guard for release/re-acquire
+//     uint64_t version;       // increments per release; debugging aid
+//     uint64_t last_grant_ns; // when this host last entered CS, fairness
+//     uint64_t magic;         // 0x4C464D5632 for slot-attach sanity
+//     uint64_t _rsv[2];
 //   };
-//   static_assert(sizeof(FuseeLfmV2Slot) == 192, "slot must be exactly 3 CL");
+//   static_assert(sizeof(PerHostSlot) == 64, "exactly one cacheline");
 //
-// Torn-publish detection (reader side):
+//   Write path: memcpy(slot, new_state, 64) + clflushopt(slot) + sfence
+//   Read path:  clflushopt(slot) + mfence + memcpy(local, slot, 64)
 //
-//   bool slot_is_consistent(const FuseeLfmV2Slot &s) {
-//     return s.publish_seq_0 == s.publish_seq_1 &&
-//            s.publish_seq_1 == s.publish_seq_2 &&
-//            s.magic         == (kFuseeLfmV2Magic | s.host_rank);
-//   }
+//   Why safe:
+//   - single-CL aligned write = 1 PCIe txn (FINDINGS.md §3.2)
+//   - read while peer writes never tears (FINDINGS_concurrency §4)
+//   - no false sharing (each host owns its CL exclusively)
 //
-// Statistical handling:
-//   - At median rate (~10⁻⁴) virtually all reads pass first try.
-//   - At worst-case (~1.7 %), <2 % of reads need a 1-retry; the retry
-//     overhead is 1 clflushopt + 1 mfence + 24 byte memcpy ≈ 1-3 µs.
-//   - Amortized retry penalty < 50 ns per lock acquire.
+//   Memory: 64 B × num_hosts. For 8 hosts = 512 B. Negligible.
 //
-// All 3 cachelines of a slot are written together as ONE atomic publication:
+// LAYOUT B — Packed 8 B per host in shared cacheline (COMPACT)
+// ----------------------------------------------------------------------
 //
-//   // Writer side (called from inside a critical section of the algorithm):
-//   void publish_slot(FuseeLfmV2Slot *slot, const FuseeLfmV2Slot &new_state) {
-//     // Stage to local DRAM buffer first to ensure the memcpy issues
-//     // 3 cacheline writes back-to-back in instruction order.
-//     std::memcpy(slot, &new_state, sizeof(*slot));
-//     // Now flush all 3 cachelines as one burst. The study showed that
-//     // up to 3-CL bursts are atomic across hosts on g1/g2.
-//     flush_line(reinterpret_cast<uint8_t *>(slot) + 0);
-//     flush_line(reinterpret_cast<uint8_t *>(slot) + 64);
-//     flush_line(reinterpret_cast<uint8_t *>(slot) + 128);
-//     __asm__ __volatile__("sfence" ::: "memory");
-//   }
+//   struct alignas(64) PackedRing {  // exactly 64 B; holds 8 hosts
+//     uint64_t slot[8];   // slot[host_id] = that host's 8 B state
+//                         // bit layout in 8B is flexible:
+//                         //   bit 0:    b (entering flag)
+//                         //   bits 8..63: ticket / epoch / etc.
+//   };
+//   static_assert(sizeof(PackedRing) == 64, "exactly one cacheline");
 //
-// Atomicity guarantee: when one host reads the slot post-publish (with its
-// own clflushopt + mfence to defeat its stale L1 copy), it sees EITHER the
-// pre-publish state in full OR the post-publish state in full — never a
-// mix. This is the property the study measured at N=192.
+//   Write path: movnti(slot[host_id], new_state) + sfence
+//   Read path:  clflushopt(packed) + mfence + load packed[host_id]
+//
+//   Why safe:
+//   - movnti issues a single 8 B PCIe write with byte enables; covers
+//     only host_id's 8 B (FINDINGS_concurrency §3.3, 900 K trials, 0
+//     interference)
+//   - reader sees consistent state per slot (FINDINGS_concurrency §4,
+//     N=8 single-CL = 0 tears in 7 M+ reads)
+//
+//   Memory: 64 B total for up to 8 hosts.
+//
+//   *** CRITICAL ***: Layout B writers MUST use movnti, NOT memcpy.
+//   memcpy + clflushopt on a shared CL destroys peers' data ~75 % of
+//   the time (FINDINGS_concurrency §3.3 — write-allocate + full-CL
+//   writeback). This is a hard requirement, not a perf tuning knob.
 //
 // =============================================================================
-// Lamport's algorithm using LFM v2 publish primitive
+// Lamport's algorithm reuses without change
 // =============================================================================
 //
-// Classical Lamport bakery lock:
+// Classical Lamport bakery:
 //
 //   acquire(p):
 //     entering[p] = true
@@ -131,111 +121,132 @@
 //   release(p):
 //     b[p] = 0
 //
-// With v2, "entering[p]", "b[p]", and (later) "claim_set[p]" all live in
-// ONE 192 B slot. So a single publish_slot() does the algorithm's two
-// writes ("set b[p] to ticket", "clear entering[p]") in one wire op.
-//
-//   acquire_v2(slot_self, slots_all, n_hosts):
-//     uint64_t ticket = scan_max_b_plus_1(slots_all, n_hosts);
-//     FuseeLfmV2Slot s = *slot_self;
-//     s.bid = ticket;
-//     s.seq++;
-//     publish_slot(slot_self, s);          // <- one atomic 3-CL flush
-//
-//     for q != self:
-//       FuseeLfmV2Slot peer = read_slot_xhost(&slots_all[q]);
-//       while (peer.bid != 0 &&
-//              (peer.bid, q) < (ticket, self)) {
-//         pause();
-//         peer = read_slot_xhost(&slots_all[q]);
-//       }
-//     // Now in critical section.
-//
-//   release_v2(slot_self):
-//     FuseeLfmV2Slot s = *slot_self;
-//     s.bid = 0;
-//     s.version++;
-//     publish_slot(slot_self, s);
-//
-// "entering[]" guard from classical Lamport is folded into the atomic
-// publish: there is no race between "ticket published" and "ticket
-// computed" because the publish is atomic, so peers never see a partial
-// ticket. This drops one round-trip from the algorithm.
+// On Layout A or B:
+//   - "entering[p] = true / b[p] = X / entering[p] = false" maps to one
+//     publish_slot(self) — all three fields live in the slot, fit
+//     in one CL, are observed atomically by peers
+//   - "wait while peer.entering OR peer.b satisfies cond" maps to
+//     read_slot_xhost(peers[q]) — one clflushopt + mfence + load
+//   - because reads/writes of a single-CL slot are individually
+//     atomic and tear-free, NO version-stamp / torn-detection layer
+//     is needed
 //
 // =============================================================================
-// Read primitive
+// Fence count vs LFM v1
 // =============================================================================
 //
-// Cross-host reads must defeat the local L1 to pull fresh CXL state:
+// LFM v1 acquire issues ≥4 clflushopt+mfence per acquire:
+//   1. clflushopt(self.entering) := true
+//   2. clflushopt(self.b) := my_ticket  (max-scan over peers in between)
+//   3. clflushopt(self.entering) := false
+//   4. loop: for each peer, clflushopt(peer.slot) + load
 //
-//   FuseeLfmV2Slot read_slot_xhost(const FuseeLfmV2Slot *slot) {
-//     // Flush all 3 cachelines from local L1 so the upcoming load comes
-//     // from CXL.
-//     flush_line(reinterpret_cast<const uint8_t *>(slot) + 0);
-//     flush_line(reinterpret_cast<const uint8_t *>(slot) + 64);
-//     flush_line(reinterpret_cast<const uint8_t *>(slot) + 128);
-//     __asm__ __volatile__("mfence" ::: "memory");
-//     FuseeLfmV2Slot copy;
-//     std::memcpy(&copy, slot, sizeof(copy));
-//     return copy;
-//   }
+// LFM v2 acquire:
+//   1. memcpy(slot.b, slot.x) into one CL → clflushopt(slot) + sfence
+//      (everything in one publish)
+//   2. loop: for each peer, clflushopt(peer.slot) + mfence + load
 //
-// Atomicity of the READ across the writer's PCIe transactions:
-//   - If the writer's 3-CL flush hasn't started, we see the OLD slot.
-//   - If the writer's 3-CL flush has fully landed, we see the NEW slot.
-//   - The study showed: the in-between state never escapes the wire —
-//     either 0 or 3 cachelines have arrived; never 1 or 2.
+// The savings are in step (1): v1 does 3 separate flushes (entering=T,
+// b=ticket, entering=F), v2 does 1. At ~600 ns per PCIe round-trip,
+// that's ~1.2 µs / acquire saved at uncontended (3 µs → 1.8 µs, ~40 %).
 //
-// =============================================================================
-// Per-host slot region layout
-// =============================================================================
+// Under contention, v2's tightened publish reduces the window in which
+// peers see "entering=T but b not yet final", which also reduces wasted
+// loop iterations. Expected:
+//   uncontended:    ~3 µs → ~1.2-1.5 µs        (~2-2.5×)
+//   contended T=64: p50 9 µs → ~3-4 µs          (~2-3×)
+//   contended T=64: p99 691 µs → ~80-150 µs     (~5-8×, from reduced
+//                                                contention-loop time)
 //
-// The LFM v2 region holds one 192 B slot per host plus a few cacheline
-// of metadata at the head. For up to 8 hosts:
-//
-//   [64 B  region magic + version]
-//   [64 B  num_hosts + region cookie + ...]
-//   [192 B slot[0]  (host 0)]
-//   [192 B slot[1]  (host 1)]
-//   ...
-//   [192 B slot[N-1]]
-//   [trailing pad to dax page]
-//
-// All slot[i] are 192 B aligned. Each host writes ONLY to its own slot;
-// reads any slot. So per-host write contention does not exist — only
-// cross-host atomicity at the slot level matters.
+// These are projections from the v1 path_decomp data, NOT measurements.
+// v2 implementation + microbench is required to validate.
 //
 // =============================================================================
-// Open questions / iter-22 (or wherever LFM v2 lands) work
+// Hard rules (derived from the 4 studies)
 // =============================================================================
 //
-// 1. Validate on the contended path. The study measured strict atomicity
-//    UNDER the synchronization patterns it used. A real LFM v2 acquire under
-//    high contention may issue many more cross-host reads / writes per
-//    second. Need a microbench that drives the actual lock-step and counts
-//    any spurious "torn slot" reads. Expected: zero.
+//   R1. Every LFM field must be aligned to its natural width AND fit
+//       in a single 64 B cacheline.
+//       (FINDINGS_lower_bound Phase A 1.8 M trials = 0 INTL aligned;
+//        Phase B 1.2 M = 10 %+ INTL straddle_cl.)
 //
-// 2. Fallback when atomicity check fails. The reader could carry a low-
-//    overhead sanity check: if magic == 0x4C464D5632 then the slot is
-//    valid; if magic is bogus, retry (would only fire if hardware
-//    atomicity assumption breaks). One CL of overhead, negligible.
+//   R2. No field may cross a cacheline boundary.
+//       (Same as R1, restated for emphasis.)
 //
-// 3. Movnti-based v3 path. If we ever want flag cells > 192 B (e.g.,
-//    for a richer consensus structure), the study showed movnti gives
-//    arbitrary-size atomicity. v3 would use movnti + sfence on writer,
-//    and clflushopt + mfence + load on reader, just like v2.
+//   R3. When multiple hosts share a cacheline (Layout B), writers MUST
+//       use movnti + sfence. memcpy + clflushopt is forbidden.
+//       (FINDINGS_concurrency §3.3, 64-89 % data loss with memcpy.)
 //
-// 4. Measure under load. Replace LFM v1 in src/cxl_fusee_slot_lock.cc
-//    with a v2 implementation behind a compile-time flag; run
-//    iter-9A redo path_decomp Phase 0 contended-LFM benchmark at T=64
-//    and confirm the 2-3× p50 / 5-8× p99 speedup model.
+//   R4. Single-host-per-cacheline (Layout A) is the simpler default;
+//       use memcpy + clflushopt freely on the host's own slot.
 //
-// 5. Hardware-bound caveat. Both atomicity guarantees (A) and (B) are
-//    specific to g1/g2 hardware (XConn-switched CXL Type-3, this generation
-//    of CXL.mem controller). LFM v2 should include a startup self-test
-//    that runs a tiny version of the atomicity probe and aborts if the
-//    3-CL atomicity invariant doesn't hold. This makes the algorithm
-//    self-validating on new hardware.
+//   R5. Readers ALWAYS clflushopt + mfence + load before reading peer
+//       state. The reader's L1 may hold a stale copy from a prior read.
+//       (Inherent to no-coherence CXL.)
+//
+//   R6. Single-CL writes need no version-stamp / torn-publish detection.
+//       (FINDINGS_concurrency §4, 0 tears in 7 M+ concurrent reads at
+//        N ≤ 64.)
+//
+//   R7. Do NOT use movnti to write multiple cachelines at once.
+//       (FINDINGS.md §3.2, movnti large N can break per-CL atomicity
+//        when the WCB drains partially. Use it only for ≤ 8 B
+//        targeted at one CL.)
+//
+// =============================================================================
+// RETRACTED DESIGN (kept here for reference; do not implement)
+// =============================================================================
+//
+// The earlier v2 sketch in this header proposed a 192 B (3-cacheline)
+// FuseeLfmV2Slot with publish_seq fields on each cacheline. The reader
+// would verify all three seq values matched before trusting the
+// snapshot. Rationale at the time: "exploit the 3-CL atomic window."
+//
+// Why it was wrong:
+//   - The "3-CL atomic window" claim was based on a 10 K-trial sample
+//     that showed 0 events at N=192. At 100 K trials, the same cell
+//     shows ~0.013 % median / 1.68 % worst-case interleave rate —
+//     not strictly atomic. See FINDINGS.md §3.1.1.
+//   - publish_seq retry would have hidden some of those tears at a
+//     ~50 ns / acquire amortized cost. But for LFM, the publish doesn't
+//     need to be 3 CLs — it only needs to be 1 CL (the actual state
+//     is < 32 bytes). Stretching it to 3 CLs introduced a tear risk
+//     that the smaller design simply doesn't have.
+//   - For LFM specifically: 1-CL or smaller writes are strictly atomic
+//     (lower-bound + concurrency studies, ~20 M trials, 0 single-CL
+//     tears), so no retry mechanism is needed at all.
+//
+// The retracted design has been left here as a cautionary example of
+// why focusing on the upper bound was the wrong direction for LFM.
+//
+// =============================================================================
+// Open questions for iter-22+ implementation
+// =============================================================================
+//
+// 1. Pick Layout A or B. Layout A is simpler and fits the existing v1
+//    code's mental model. Layout B is more compact but requires the
+//    movnti discipline. Default to A unless memory profiling shows
+//    the 512 B / 8-host overhead matters.
+//
+// 2. Wire LFM v1 fence audit. Before implementing v2, walk the v1
+//    acquire/release code path and count which clflushopt operations
+//    are algorithmically necessary vs over-conservative defensive ones.
+//    The v2 redesign is the result of this audit, not its driver.
+//
+// 3. Layout A self-test. Slot includes a magic field so an attaching
+//    host can verify the layout is correct on this hardware. (Layout B
+//    needs the same but per-host bit-encoded.)
+//
+// 4. Microbench v1 vs v2 under contention. The projected 2-8× speedups
+//    above are extrapolations from v1 path_decomp; verify with a real
+//    side-by-side under T=1, 4, 16, 64.
+//
+// 5. Multi-host (>2) validation. The studies were on 2 hosts. Layout
+//    A's correctness at 4-8 hosts should follow from "single-CL = single
+//    PCIe txn", but Layout B's correctness depends on each host's
+//    movnti targeting its own 8 B chunk being byte-enable-isolated when
+//    N hosts contend. Run a 4-host atomicity probe before committing to
+//    Layout B in production.
 
 #ifndef FUSEE_CXL_FUSEE_LFM_V2_H_
 #define FUSEE_CXL_FUSEE_LFM_V2_H_
@@ -245,52 +256,48 @@
 
 namespace fusee {
 
-constexpr std::size_t kFuseeLfmV2SlotBytes = 192;
-constexpr std::size_t kFuseeLfmV2MaxHosts  = 8;
-constexpr uint64_t    kFuseeLfmV2Magic     = 0x4C464D5632000000ULL;  // 'LFMV2\0\0\0'
+constexpr std::size_t kFuseeLfmV2MaxHosts = 8;
+constexpr uint64_t    kFuseeLfmV2Magic    = 0x4C464D5632000000ULL;  // 'LFMV2\0\0\0'
 
-struct alignas(64) FuseeLfmV2Slot {
-  // CL 0 — publish_seq_0 at offset 0 for the torn-publish check
-  uint64_t publish_seq_0;
-  uint64_t magic;
-  uint64_t host_rank;
-  uint64_t bid;
-  uint64_t epoch;
-  uint64_t _rsv0[3];
-  // CL 1 — publish_seq_1 must equal publish_seq_0
-  uint64_t publish_seq_1;
-  uint64_t claim_set[7];
-  // CL 2 — publish_seq_2 must equal publish_seq_0
-  uint64_t publish_seq_2;
-  uint64_t version;
-  uint64_t last_grant_ns;
-  uint64_t _rsv2[5];
+// LAYOUT A: one cacheline per host slot.
+struct alignas(64) FuseeLfmV2SlotA {
+  uint64_t b;              // Lamport entering flag
+  uint64_t x;              // Lamport ticket
+  uint64_t epoch;          // ABA guard
+  uint64_t version;        // increments per release
+  uint64_t last_grant_ns;  // fairness debug
+  uint64_t magic;          // sanity
+  uint64_t _rsv[2];
 };
-static_assert(sizeof(FuseeLfmV2Slot) == kFuseeLfmV2SlotBytes,
-              "FuseeLfmV2Slot must be exactly 3 cachelines (192 B)");
+static_assert(sizeof(FuseeLfmV2SlotA) == 64,
+              "Layout A slot must be exactly 1 cacheline");
 
-inline bool slot_is_consistent(const FuseeLfmV2Slot &s) {
-  return s.publish_seq_0 == s.publish_seq_1 &&
-         s.publish_seq_1 == s.publish_seq_2;
-}
+// LAYOUT B: packed 8 B per host in shared 64 B cacheline.
+struct alignas(64) FuseeLfmV2PackedRing {
+  uint64_t slot[8];  // slot[host_id] = host_id's 8 B Lamport state
+};
+static_assert(sizeof(FuseeLfmV2PackedRing) == 64,
+              "Layout B ring must be exactly 1 cacheline");
 
 struct alignas(64) FuseeLfmV2RegionHeader {
   uint64_t magic;
   uint64_t cookie;
   uint64_t num_hosts;
-  uint64_t version;
+  uint64_t layout;     // 0 = Layout A, 1 = Layout B
   uint64_t _rsv[4];
   uint64_t _pad[8];
 };
 static_assert(sizeof(FuseeLfmV2RegionHeader) == 128, "header is 2 CL");
 
-// Public API to implement in iter-22 LFM v2 ship:
+// Public API stub for iter-22+ implementation:
 //
-// int  fusee_lfm_v2_attach(void *region_base, std::size_t region_bytes,
-//                          int host_id, int num_hosts, bool init);
-// void fusee_lfm_v2_lock(int host_id);
-// void fusee_lfm_v2_unlock(int host_id);
-// int  fusee_lfm_v2_self_test();   // verify 3-CL atomicity on this hardware
+//   int  fusee_lfm_v2_attach(void *region_base, std::size_t region_bytes,
+//                            int host_id, int num_hosts, int layout, bool init);
+//   void fusee_lfm_v2_lock(int host_id);
+//   void fusee_lfm_v2_unlock(int host_id);
+//   int  fusee_lfm_v2_self_test();   // verify single-CL atomicity on this
+//                                    // hardware (small subset of the
+//                                    // cxl_write_atomicity_probe sweep)
 
 }  // namespace fusee
 
