@@ -37,7 +37,18 @@ stop_all_servers.sh
 docs/path_decomp_*/per_cell/*/probes_*/
 docs/iter9A_redo_path_decomp_*/probes_*/
 docs/path_decomp_*/probes_*/
+docs/path_decomp_*/probes_healthy/
+**/probes_healthy/**
 **/probe.[0-9]*.[0-9]*
+
+# Multi-100MB YCSB-style bench traces and procedural workload dumps that blow
+# past GitHub's 100 MB single-file ceiling. Generator scripts + spec are what
+# should be tracked; the traces are reproducible from them.
+setup/iter17A_single_key_flood/
+setup/*_single_key_flood/
+**/*.spec_load
+**/*.spec_trans
+**/bench_single_key_flood_*
 
 # Run-time noise: program stdout/stderr captures, run logs, and zero-replacement
 # backup files. Iter summaries (*.md) carry the analysis; the raw streams stay
