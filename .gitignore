@@ -50,6 +50,13 @@ setup/*_single_key_flood/
 **/*.spec_trans
 **/bench_single_key_flood_*
 
+# Historical iter experiment data dirs at docs/ root — multi-GB raw dumps that
+# are always-local. NOT to be confused with docs/iters/ (the iter summary md
+# documents, which we DO track) — those don't match the [12][0-9]A pattern.
+# 38 GB of iter12A_p5_diagnostic, 9.6 GB iter17A_xhost_*, 8.1 GB iter19A_*,
+# 4 GB × 2 iter20A_*, 5 GB combined iter16A_*, etc. all caught by this.
+docs/iter[12][0-9]A_*/
+
 # Run-time noise: program stdout/stderr captures, run logs, and zero-replacement
 # backup files. Iter summaries (*.md) carry the analysis; the raw streams stay
 # local for reproducibility. Note: pre-existing tracked .log/.out/.err files in
