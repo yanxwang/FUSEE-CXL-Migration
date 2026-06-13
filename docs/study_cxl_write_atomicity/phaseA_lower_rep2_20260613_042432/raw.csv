@@ -1,0 +1,7 @@
+n,align,store,fence,loc,mode,K,rounds,OW_A,OW_B,OW_OTHER,INTERLEAVE,CORRUPT,wall_us,per_cl
+1,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,46,99954,0,0,0,1705689,""
+4,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,2417,97583,0,0,0,1731146,""
+8,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,16,99984,0,0,0,1595731,""
+16,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,1412,98588,0,0,0,1618288,""
+32,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,21,99979,0,0,0,1574647,""
+64,aligned,memcpy,clflush_sfence,same_cl,barrier,100000,100000,10726,89274,0,0,0,1638266,""
