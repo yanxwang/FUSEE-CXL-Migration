@@ -29,7 +29,6 @@
 #include "cxl_inval_ring.h"
 #include "cxl_op_aggregator.h"
 #include "cxl_read_ring.h"
-#include "cxl_tls_cache.h"
 #include "cxl_write_ring.h"
 #include "cxl_kv_blockpool.h"
 #include "cxl_kv_blockpool_freelist.h"
@@ -51,6 +50,8 @@
 #include <random>
 #include <string>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -187,12 +188,35 @@ int main(int argc, char **argv) {
   fusee::CxlKvStoreA::set_ring_routing_mode(routing_mode);
   fusee::CxlKvStoreA::configure_ring_sharding(num_threads, ring_shards_factor);
 
-  // Parse workload traces.
-  auto load_ops = load_ops_from_file(load_path);
-  auto trans_ops = load_ops_from_file(trans_path);
-  if (max_ops > 0) {
-    if (load_ops.size() > max_ops) load_ops.resize(max_ops);
-    if (trans_ops.size() > max_ops) trans_ops.resize(max_ops);
+  // iter-21A: FUSEE_BENCH_MODE switches the workload generator.
+  //   "ycsb" (default)  → existing trans-file replay (Fig 13).
+  //   "fig10"           → single-client × N×4 op types serial, per-op µs dump.
+  //   "fig11"           → multi-client × 4 timed phases (paper §6.2 Fig 11).
+  std::string bench_mode = "ycsb";
+  if (const char *e = getenv("FUSEE_BENCH_MODE")) bench_mode = e;
+  bool is_fig10 = (bench_mode == "fig10");
+  bool is_fig11 = (bench_mode == "fig11");
+  bool is_microbench = is_fig10 || is_fig11;
+
+  // Fig 10/11 procedural workload params (no trans file needed).
+  uint64_t fig_keys_per_client =
+      (uint64_t)(getenv("FUSEE_F_KEYS_PER_CLIENT")
+                     ? strtoull(getenv("FUSEE_F_KEYS_PER_CLIENT"), nullptr, 0)
+                     : (is_fig10 ? 100000ULL : 100ULL));
+  int fig_ins_ms  = getenv("FUSEE_F_INS_MS")  ? atoi(getenv("FUSEE_F_INS_MS"))  : 500;
+  int fig_read_ms = getenv("FUSEE_F_READ_MS") ? atoi(getenv("FUSEE_F_READ_MS")) : 5000;
+  int fig_upd_ms  = getenv("FUSEE_F_UPD_MS")  ? atoi(getenv("FUSEE_F_UPD_MS"))  : 5000;
+  int fig_del_ms  = getenv("FUSEE_F_DEL_MS")  ? atoi(getenv("FUSEE_F_DEL_MS"))  : 500;
+
+  // Parse workload traces (only for ycsb mode; fig10/11 generate procedurally).
+  std::vector<Op> load_ops, trans_ops;
+  if (!is_microbench) {
+    load_ops  = load_ops_from_file(load_path);
+    trans_ops = load_ops_from_file(trans_path);
+    if (max_ops > 0) {
+      if (load_ops.size() > max_ops) load_ops.resize(max_ops);
+      if (trans_ops.size() > max_ops) trans_ops.resize(max_ops);
+    }
   }
 
   // CXL region layout (iter-9A redo Phase 2):
@@ -207,9 +231,20 @@ int main(int argc, char **argv) {
     // iter-16A V-sweep: allow V=64 in addition to 256/512/1024.
     if (v == 64 || v == 256 || v == 512 || v == 1024) kBlockSize = (uint32_t)v;
   }
-  uint64_t want_blocks = std::max((uint64_t)64,
-                                   (uint64_t)trans_ops.size() * 2 +
-                                   (uint64_t)load_ops.size());
+  uint64_t want_blocks;
+  if (is_fig10) {
+    // single client × N pre-load + N INSERT phase + 4× UPDATE churn
+    want_blocks = std::max((uint64_t)64, fig_keys_per_client * 8);
+  } else if (is_fig11) {
+    // c=128 × kKeysPerClient pre-load + INSERT growth + 4× UPDATE churn
+    want_blocks = std::max((uint64_t)64,
+                           (uint64_t)num_hosts * (uint64_t)num_threads *
+                               fig_keys_per_client * 8);
+  } else {
+    want_blocks = std::max((uint64_t)64,
+                            (uint64_t)trans_ops.size() * 2 +
+                            (uint64_t)load_ops.size());
+  }
   if (want_blocks > 1ULL << 23) want_blocks = 1ULL << 23;
   std::size_t pool_bytes =
       CxlKvBlockPool::bytes_for((uint32_t)want_blocks, kBlockSize, num_hosts);
@@ -243,6 +278,12 @@ int main(int argc, char **argv) {
     cacheline_u64 run_cookie;
     cacheline_u64 init_done;
     cacheline_u64 trans_go;
+    // iter-21A Fig 11: per-phase per-host arrival counters. Each worker
+    // atomic-fetch-adds its host's slot when it finishes phase P;
+    // primary spins until all hosts' slots == num_workers_per_host.
+    // Layout: fig11_phase_arrived[P][H] = # workers on host H done with phase P.
+    // 6 phases (preload + 4 timed + end), 2 hosts max.
+    cacheline_u64 fig11_phase_arrived[6 * 2];
   };
   Header *hdr = reinterpret_cast<Header *>(r.base);
   CxlKvBucket *buckets = reinterpret_cast<CxlKvBucket *>(
@@ -290,18 +331,93 @@ int main(int argc, char **argv) {
   // iter-15A microbench plan: FUSEE_CACHE_BUCKETS env var lets cache_pool
   // size be set INDEPENDENTLY of the data-plane hash table num_buckets.
   // Must be power-of-2 (cache_pool_init enforces this).
-  uint32_t cache_buckets = num_buckets;
-  if (const char *e = getenv("FUSEE_CACHE_BUCKETS")) {
-    uint32_t cb = (uint32_t)strtoul(e, nullptr, 0);
-    if (cb > 0 && (cb & (cb - 1)) == 0) cache_buckets = cb;
-    else fprintf(stderr, "[WARN] FUSEE_CACHE_BUCKETS=%s ignored (not pow-of-2)\n", e);
+  //
+  // iter-19A Phase 1d FINAL: cap cache_buckets so cache_pool fits L3.
+  // Anomaly A root cause: when cache_pool footprint exceeds L3 capacity,
+  // 64 concurrent workers cause L3 thrashing → throughput drops monotonically
+  // with cache_pool size. Measured monotonic decline: 143 Mops at 35 MB
+  // (cb=8192) → 32 Mops at 8.8 GB (cb=2097152), 4.5× slowdown. The knee is
+  // at cache_pool ≈ L3 capacity (~150 MB on Sapphire Rapids).
+  //
+  // FIX: default cache_buckets = min(num_buckets, FIT_L3). Override via env
+  // for benchmarking only. FUSEE_CACHE_BUCKETS_RAW=1 disables the cap.
+  uint32_t cache_buckets;
+  {
+    // Estimate L3 capacity (Sapphire Rapids 8-port = 150 MB; conservative
+    // default 128 MB so we leave room for other L3-resident state). Override
+    // via FUSEE_L3_CAP_MB env if measuring on a different platform.
+    size_t l3_cap_bytes = 128ULL * 1024 * 1024;
+    if (const char *e = getenv("FUSEE_L3_CAP_MB")) {
+      long mb = atol(e);
+      if (mb > 0) l3_cap_bytes = (size_t)mb * 1024 * 1024;
+    }
+    // bucket_bytes = sizeof(KvCacheBucket) — actual value depends on
+    // FUSEE_CACHE_VALUE_MAX (build flag). Use the runtime cache_pool_bytes()
+    // function: bytes_for(N) = N × sizeof(KvCacheBucket).
+    size_t per_bucket_bytes = cache_pool_bytes(1);
+    uint32_t fit_l3 = (uint32_t)(l3_cap_bytes / per_bucket_bytes);
+    // round DOWN to nearest power of 2
+    uint32_t p2 = 1;
+    while ((p2 << 1) > 0 && (p2 << 1) <= fit_l3) p2 <<= 1;
+    fit_l3 = p2;
+    cache_buckets = std::min(num_buckets, fit_l3);
+    if (const char *e = getenv("FUSEE_CACHE_BUCKETS")) {
+      uint32_t cb = (uint32_t)strtoul(e, nullptr, 0);
+      if (cb > 0 && (cb & (cb - 1)) == 0) {
+        // Explicit override (for benchmarking / sweeps). Warn if exceeding
+        // fit_l3 — this is the documented Anomaly A regime.
+        cache_buckets = cb;
+        if (cb > fit_l3) {
+          fprintf(stderr, "[cache] WARN: FUSEE_CACHE_BUCKETS=%u exceeds "
+                          "L3-fit (%u buckets / %zu MB). Anomaly A territory; "
+                          "throughput will drop ~%.0fx vs L3-fit default.\n",
+                  cb, fit_l3, l3_cap_bytes / (1024 * 1024),
+                  (double)cb / fit_l3);
+        }
+      } else {
+        fprintf(stderr, "[WARN] FUSEE_CACHE_BUCKETS=%s ignored (not pow-of-2); "
+                        "using L3-fit default %u\n", e, cache_buckets);
+      }
+    }
+    fprintf(stderr, "[cache] cache_buckets=%u (cache_pool=%.1f MB), "
+                    "L3-fit cap=%u (%zu MB)\n",
+            cache_buckets,
+            cache_pool_bytes(cache_buckets) / (1024.0 * 1024.0),
+            fit_l3, l3_cap_bytes / (1024 * 1024));
   }
-  void *cache_mem = mmap(nullptr, cache_pool_bytes(cache_buckets),
+  size_t cache_bytes = cache_pool_bytes(cache_buckets);
+  void *cache_mem = mmap(nullptr, cache_bytes,
                          PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (cache_mem == MAP_FAILED) { fprintf(stderr, "mmap cache failed\n"); return 1; }
+  // iter-19A Phase 1b M2: FUSEE_CACHE_HUGEPAGE=1 → madvise hugepage on
+  // cache_pool. Reduces PTE count from N×4KB pages to N/512 × 2MB hugepages.
+  // Synthetic showed no effect in single-process; FUSEE has 64 forked
+  // workers each with own page table, so HP could help.
+  if (const char *e = getenv("FUSEE_CACHE_HUGEPAGE"); e && atoi(e) != 0) {
+    if (madvise(cache_mem, cache_bytes, MADV_HUGEPAGE) != 0) {
+      fprintf(stderr, "[cache] madvise HUGEPAGE failed: %s\n", strerror(errno));
+    } else {
+      fprintf(stderr, "[cache] madvise HUGEPAGE ok (%.1f MiB)\n",
+              cache_bytes / (1024.0 * 1024.0));
+    }
+  }
   KvCachePool cache;
   cache_pool_init(&cache, cache_mem, cache_buckets);
+  // iter-19A Phase 1b M1: FUSEE_CACHE_PRETOUCH=1 → write 1 byte to every
+  // 4KB page of cache_pool BEFORE fork. Without this, child processes
+  // page-fault on first touch of value_bytes during TRANS, scattering
+  // 19.5k minor faults / worker at c100. Pre-touching forces parent to
+  // allocate all pages; fork shares them via inherited PTEs.
+  if (const char *e = getenv("FUSEE_CACHE_PRETOUCH"); e && atoi(e) != 0) {
+    uint64_t t0 = now_ns();
+    volatile uint8_t *p = (volatile uint8_t *)cache_mem;
+    uint64_t step = 4096;
+    for (size_t off = 0; off < cache_bytes; off += step) p[off] = 0;
+    uint64_t t1 = now_ns();
+    fprintf(stderr, "[cache] PRETOUCH %.1f MiB in %.3f s\n",
+            cache_bytes / (1024.0 * 1024.0), (t1 - t0) / 1e9);
+  }
 
   BlockFreeList fl;
   block_freelist_init(&fl);
@@ -384,13 +500,24 @@ int main(int argc, char **argv) {
         reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
     ReadStagingMatrix *rs =
         reinterpret_cast<ReadStagingMatrix *>(rs_mem);  // iter-11A Phase 1
-    if (store.enable_write_ring(wr, fs, /*init=*/true, /*spawn=*/true) != 0) {
+    // iter-19A Phase 1d H17: FUSEE_DISABLE_RECEIVERS=1 → skip spawning the
+    // 4 receiver/handler threads (Write/Read/Inval/Reserv). For local_read
+    // workload these threads have no work to do but constantly poll CXL
+    // rings → 40 % of process-level L1 misses go to them per perf
+    // attribution. Spawning still inits the rings (for correctness of any
+    // cross-host op that might fire) but disables the polling loops.
+    bool spawn_recv = true;
+    if (const char *e = getenv("FUSEE_DISABLE_RECEIVERS"); e && atoi(e) != 0) {
+      spawn_recv = false;
+      fprintf(stderr, "[H17] receivers DISABLED (no polling threads)\n");
+    }
+    if (store.enable_write_ring(wr, fs, /*init=*/true, /*spawn=*/spawn_recv) != 0) {
       fprintf(stderr, "primary enable_write_ring failed\n"); return 1;
     }
-    if (store.enable_read_ring(rr, rs, /*init=*/true, /*spawn=*/true) != 0) {
+    if (store.enable_read_ring(rr, rs, /*init=*/true, /*spawn=*/spawn_recv) != 0) {
       fprintf(stderr, "primary enable_read_ring failed\n"); return 1;
     }
-    if (store.enable_invalidate(ir, /*init=*/true, /*spawn=*/true) != 0) {
+    if (store.enable_invalidate(ir, /*init=*/true, /*spawn=*/spawn_recv) != 0) {
       fprintf(stderr, "primary enable_invalidate failed\n"); return 1;
     }
     // iter-13A Phase 1: wire read-guard CXL domains.
@@ -401,14 +528,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "primary enable_read_guard failed\n"); return 1;
       }
     }
-    // iter-13A Phase 2 W3: wire reservation ring + spawn handler thread.
-    {
-      ReservationRingMatrix *rsv_d =
-          reinterpret_cast<ReservationRingMatrix *>(rsv_mem);
-      if (store.enable_reservation_ring(rsv_d, /*init=*/true, /*spawn=*/true) != 0) {
-        fprintf(stderr, "primary enable_reservation_ring failed\n"); return 1;
-      }
-    }
+    // iter-20A: ReservationRing wire-up removed (BATCHED mode deleted).
     if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {
       fprintf(stderr, "primary enable_senders failed\n"); return 1;
     }
@@ -472,13 +592,17 @@ int main(int argc, char **argv) {
           reinterpret_cast<ForwardStagingMatrix *>(fs_mem);
       ReadStagingMatrix *rs =
           reinterpret_cast<ReadStagingMatrix *>(rs_mem);  // iter-11A Phase 1
-      if (store.enable_write_ring(wr, fs, /*init=*/false, /*spawn=*/true) != 0) {
+      bool spawn_recv_h1 = true;
+      if (const char *e = getenv("FUSEE_DISABLE_RECEIVERS"); e && atoi(e) != 0) {
+        spawn_recv_h1 = false;
+      }
+      if (store.enable_write_ring(wr, fs, /*init=*/false, /*spawn=*/spawn_recv_h1) != 0) {
         fprintf(stderr, "[h1 primary] enable_write_ring failed\n"); return 1;
       }
-      if (store.enable_read_ring(rr, rs, /*init=*/false, /*spawn=*/true) != 0) {
+      if (store.enable_read_ring(rr, rs, /*init=*/false, /*spawn=*/spawn_recv_h1) != 0) {
         fprintf(stderr, "[h1 primary] enable_read_ring failed\n"); return 1;
       }
-      if (store.enable_invalidate(ir, /*init=*/false, /*spawn=*/true) != 0) {
+      if (store.enable_invalidate(ir, /*init=*/false, /*spawn=*/spawn_recv_h1) != 0) {
         fprintf(stderr, "[h1 primary] enable_invalidate failed\n"); return 1;
       }
       // iter-13A Phase 1: host 1 primary also wires read-guard.
@@ -489,14 +613,7 @@ int main(int argc, char **argv) {
           fprintf(stderr, "[h1 primary] enable_read_guard failed\n"); return 1;
         }
       }
-      // iter-13A Phase 2 W3: host 1 primary also wires reservation ring.
-      {
-        ReservationRingMatrix *rsv_d =
-            reinterpret_cast<ReservationRingMatrix *>(rsv_mem);
-        if (store.enable_reservation_ring(rsv_d, /*init=*/false, /*spawn=*/true) != 0) {
-          fprintf(stderr, "[h1 primary] enable_reservation_ring failed\n"); return 1;
-        }
-      }
+      // iter-20A: ReservationRing wire-up removed (BATCHED mode deleted).
       if (store.enable_senders(aggr, num_threads, /*spawn=*/true) != 0) {
         fprintf(stderr, "[h1 primary] enable_senders failed\n"); return 1;
       }
@@ -535,32 +652,8 @@ int main(int argc, char **argv) {
     // already in effect.)
   }
 
-  // iter-10A Phase 1.C: per-worker TlsCache init + attach. Sized via
-  // FUSEE_TLS_SIZE env (default 1024 — Zipf top-1024 covers ~30-40% of
-  // workload-A op). Set to 0 to disable TLS layer entirely and fall
-  // back to shared cache_pool only (iter-9A redo behavior).
-  TlsCache local_tls{};
-  uint32_t tls_size = 1024;
-  if (const char *e = getenv("FUSEE_TLS_SIZE"); e && e[0]) {
-    long v = atol(e);
-    if (v >= 0 && v <= (1L << 20)) tls_size = (uint32_t)v;
-  }
-  if (tls_size > 0) {
-    // round to next power of 2 if not already
-    uint32_t p2 = 64;
-    while (p2 < tls_size) p2 <<= 1;
-    tls_size = p2;
-    if (tls_cache_init(&local_tls, tls_size) == 0) {
-      CxlKvStoreA::set_thread_tls_cache(&local_tls);
-      fprintf(stderr,
-              "[A:tls] worker host=%d client=%d entries=%u (~%lu KiB)\n",
-              host_id, client_id, tls_size,
-              (unsigned long)tls_size * sizeof(TlsCacheEntry) / 1024);
-    } else {
-      fprintf(stderr, "[A:tls] WARN tls_cache_init failed for client=%d\n",
-              client_id);
-    }
-  }
+  // iter-20A: TLS L1 cache (iter-10A Phase 1.C) deleted; cache_pool L2
+  // is now the only worker-side caching layer.
 
   // Cross-host primary barrier: both hosts inited.
   // (Skipped entirely when num_hosts == 1 — no peer to wait for.)
@@ -639,13 +732,285 @@ int main(int argc, char **argv) {
     }
   }
 
-  // -------- TRANS phase --------
   const int global_id = host_id * num_threads + client_id;
   const int total_workers = num_hosts * num_threads;
+
+  // ============================================================
+  // iter-21A Fig 10 mode — single client × N ops × 4 op types serial
+  // ============================================================
+  if (is_fig10) {
+    // Only client 0 on each host actually runs ops. Others (shouldn't exist
+    // when num_threads=1) sit at the end barrier.
+    if (host_id == 0 && client_id == 0) {
+      const uint64_t N = fig_keys_per_client;
+      mkdir("results", 0755);
+      auto run_lat_test = [&](const char *op_name, OpKind op_kind,
+                              const char *path) {
+        // iter-21A: switch to clock_gettime(CLOCK_MONOTONIC) for ns
+        // resolution. SEARCH local p50 was sub-µs (cache_pool hit ≈100 ns);
+        // gettimeofday rounds to 0 µs and the CDF flat-lines. Dump as ns;
+        // plotter divides by 1000.0 for float-µs display.
+        std::vector<uint64_t> lat_ns(N, 0);
+        std::vector<uint8_t> is_xhost(N, 0);
+        uint64_t failed = 0;
+        for (uint64_t i = 0; i < N; i++) {
+          uint64_t k = i + 1;  // sequential keys 1..N
+          is_xhost[i] = (host_of(&st, k) != (uint32_t)host_id) ? 1 : 0;
+          struct timespec ta, tb;
+          clock_gettime(CLOCK_MONOTONIC, &ta);
+          int rc = 0;
+          if (op_kind == OP_INSERT) {
+            fill_pattern(k, wbuf.data(), value_bytes);
+            rc = store.insert(k, wbuf.data(), value_bytes);
+          } else if (op_kind == OP_READ) {
+            uint32_t got = 0;
+            rc = store.search(k, rbuf.data(), (uint32_t)rbuf.size(), &got);
+          } else if (op_kind == OP_UPDATE) {
+            fill_pattern(k, wbuf.data(), value_bytes);
+            rc = store.update(k, wbuf.data(), value_bytes);
+          } else {
+            rc = store.remove(k);
+          }
+          clock_gettime(CLOCK_MONOTONIC, &tb);
+          lat_ns[i] = (uint64_t)(tb.tv_sec - ta.tv_sec) * 1000000000ULL +
+                      (uint64_t)(tb.tv_nsec - ta.tv_nsec);
+          if (rc != 0) {
+            failed++;
+            if (failed <= 10) {
+              fprintf(stderr,
+                      "fig10: %s FAIL i=%lu key=%lu rc=%d is_xhost=%u\n",
+                      op_name, i, k, rc, (unsigned)is_xhost[i]);
+            }
+          }
+        }
+        FILE *fp = fopen(path, "w");
+        if (fp) {
+          for (uint64_t i = 0; i < N; i++) {
+            fprintf(fp, "%lu\n", lat_ns[i]);
+          }
+          fclose(fp);
+        }
+        // Also write owner/xhost split (per-op type).
+        char split_path[512];
+        snprintf(split_path, sizeof(split_path),
+                 "results/%s_local_lat-Ap.txt", op_name);
+        FILE *fp_l = fopen(split_path, "w");
+        snprintf(split_path, sizeof(split_path),
+                 "results/%s_xhost_lat-Ap.txt", op_name);
+        FILE *fp_x = fopen(split_path, "w");
+        if (fp_l && fp_x) {
+          for (uint64_t i = 0; i < N; i++) {
+            FILE *fp_out = is_xhost[i] ? fp_x : fp_l;
+            fprintf(fp_out, "%lu\n", lat_ns[i]);
+          }
+        }
+        if (fp_l) fclose(fp_l);
+        if (fp_x) fclose(fp_x);
+        fprintf(stderr, "fig10: %s done failed=%lu\n", op_name, failed);
+      };
+      fprintf(stderr, "fig10: starting INSERT/SEARCH/UPDATE/DELETE N=%lu\n", N);
+      run_lat_test("insert", OP_INSERT, "results/insert_lat-Ap.txt");
+      run_lat_test("search", OP_READ,   "results/search_lat-Ap.txt");
+      run_lat_test("update", OP_UPDATE, "results/update_lat-Ap.txt");
+      run_lat_test("delete", OP_DELETE, "results/delete_lat-Ap.txt");
+    }
+    // Cross-host end barrier so g1 doesn't exit before g2 is done writing.
+    if (is_host_primary_client) {
+      uint64_t end_my_bit = (host_id == 0) ? 0x100ULL : 0x200ULL;
+      uint64_t end_peer_bit = (host_id == 0) ? 0x200ULL : 0x100ULL;
+      uint64_t cur = CACHELINE_LOAD(&hdr->init_done);
+      CACHELINE_STORE(&hdr->init_done, cur | end_my_bit);
+      flush_line(&hdr->init_done); store_fence();
+      if (num_hosts > 1) {
+        while (true) {
+          flush_line(&hdr->init_done); full_fence();
+          if ((CACHELINE_LOAD(&hdr->init_done) & end_peer_bit) != 0) break;
+          __builtin_ia32_pause();
+        }
+      }
+    }
+    if (is_primary_client) {
+      printf("FIG10 done host=%d N=%lu results_in=results/\n", host_id,
+             fig_keys_per_client);
+    }
+    return 0;
+  }
+
+  // ============================================================
+  // iter-21A Fig 11 mode — multi-client × 4 timed phases
+  // ============================================================
+  if (is_fig11) {
+    fprintf(stderr, "fig11: enter host=%d client=%d global_id=%d K=%lu\n",
+            host_id, client_id, global_id, fig_keys_per_client);
+    // Cross-host + intra-host fig11 phase barrier. Every worker on every
+    // host arrives + spins until ALL workers on BOTH hosts arrive.
+    auto fig11_phase_barrier = [&](int phase) {
+      cacheline_u64 *my_slot = &hdr->fig11_phase_arrived[phase * 2 + host_id];
+      __atomic_fetch_add(&my_slot->value, 1ULL, __ATOMIC_ACQ_REL);
+      flush_line(my_slot); store_fence();
+      uint64_t target = (uint64_t)num_threads;
+      for (int h = 0; h < num_hosts; h++) {
+        cacheline_u64 *slot = &hdr->fig11_phase_arrived[phase * 2 + h];
+        while (true) {
+          flush_line(slot); full_fence();
+          if (__atomic_load_n(&slot->value, __ATOMIC_ACQUIRE) >= target) break;
+          __builtin_ia32_pause(); __builtin_ia32_pause();
+        }
+      }
+    };
+
+    const uint64_t K   = fig_keys_per_client;
+    const uint64_t SLAB = K;
+    // Per-worker private key slab: [global_id*K + 1 .. (global_id+1)*K]
+    auto mk_load_key = [&](uint64_t i) {
+      return (uint64_t)global_id * SLAB + i + 1;
+    };
+    // Per-worker INSERT stride past pre-load range.
+    const uint64_t pre_load_end =
+        (uint64_t)num_hosts * (uint64_t)num_threads * SLAB + 1;
+    const uint64_t kInsertStride = 4000000ULL;
+    auto mk_insert_key = [&](uint64_t cnt) {
+      return pre_load_end + (uint64_t)global_id * kInsertStride + cnt + 1;
+    };
+
+    // ---- Pre-load (each worker inserts its slab; no timer) ----
+    uint64_t preload_failed = 0;
+    fprintf(stderr, "fig11: preload start host=%d gid=%d K=%lu\n",
+            host_id, global_id, K);
+    for (uint64_t i = 0; i < K; i++) {
+      uint64_t k = mk_load_key(i);
+      fill_pattern(k, wbuf.data(), value_bytes);
+      int rc = store.insert(k, wbuf.data(), value_bytes);
+      if (rc != 0) preload_failed++;
+    }
+    fprintf(stderr, "fig11: preload done host=%d gid=%d failed=%lu\n",
+            host_id, global_id, preload_failed);
+
+    fig11_phase_barrier(0);
+    fprintf(stderr, "fig11: barrier0 done host=%d gid=%d\n", host_id, global_id);
+
+    auto run_phase = [&](OpKind op_kind, int ms, uint64_t cap,
+                         int phase_idx) -> uint64_t {
+      uint64_t deadline_ns = now_ns() + (uint64_t)ms * 1000000ULL;
+      uint64_t cnt = 0;
+      while (now_ns() < deadline_ns && (cap == 0 || cnt < cap)) {
+        uint64_t k;
+        if (op_kind == OP_INSERT) {
+          k = mk_insert_key(cnt);
+        } else {
+          k = mk_load_key(cnt % K);
+        }
+        int rc = 0;
+        if (op_kind == OP_INSERT) {
+          fill_pattern(k, wbuf.data(), value_bytes);
+          rc = store.insert(k, wbuf.data(), value_bytes);
+        } else if (op_kind == OP_READ) {
+          uint32_t got = 0;
+          rc = store.search(k, rbuf.data(), (uint32_t)rbuf.size(), &got);
+        } else if (op_kind == OP_UPDATE) {
+          fill_pattern(k, wbuf.data(), value_bytes);
+          rc = store.update(k, wbuf.data(), value_bytes);
+        } else {  // DELETE
+          rc = store.remove(k);
+          if (cnt + 1 >= K) break;
+        }
+        cnt++;
+        (void)rc;
+      }
+      fig11_phase_barrier(phase_idx);
+      return cnt;
+    };
+
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    fprintf(stderr, "fig11: INSERT phase start host=%d gid=%d\n", host_id, global_id); fflush(stderr);
+    uint64_t ins_cnt = run_phase(OP_INSERT, fig_ins_ms, 0, 1);
+    fprintf(stderr, "fig11: INSERT done host=%d gid=%d cnt=%lu\n", host_id, global_id, ins_cnt); fflush(stderr);
+    uint64_t sea_cnt = run_phase(OP_READ,   fig_read_ms, 0, 2);
+    fprintf(stderr, "fig11: SEARCH done host=%d gid=%d cnt=%lu\n", host_id, global_id, sea_cnt); fflush(stderr);
+    uint64_t upd_cnt = run_phase(OP_UPDATE, fig_upd_ms, 0, 3);
+    fprintf(stderr, "fig11: UPDATE done host=%d gid=%d cnt=%lu\n", host_id, global_id, upd_cnt); fflush(stderr);
+    uint64_t del_cnt = run_phase(OP_DELETE, fig_del_ms, K, 4);
+    fprintf(stderr, "fig11: DELETE done host=%d gid=%d cnt=%lu\n", host_id, global_id, del_cnt); fflush(stderr);
+
+    // Each worker publishes its 4-phase counts to the stats array.
+    WorkerStats *me = &stats[host_id * kMaxClients + client_id];
+    CACHELINE_STORE(&me->trans_ops, ins_cnt + sea_cnt + upd_cnt + del_cnt);
+    CACHELINE_STORE(&me->w_count, ins_cnt);
+    CACHELINE_STORE(&me->w_sum_ns, sea_cnt);
+    CACHELINE_STORE(&me->r_count, upd_cnt);
+    CACHELINE_STORE(&me->r_sum_ns, del_cnt);
+    flush_line(&me->trans_ops);
+    flush_line(&me->w_count);
+    flush_line(&me->w_sum_ns);
+    flush_line(&me->r_count);
+    flush_line(&me->r_sum_ns);
+    store_fence();
+    CACHELINE_STORE(&me->done, 1);
+    flush_line(&me->done); store_fence();
+
+    // Primary client aggregates + prints SUMMARY line.
+    if (is_primary_client) {
+      // Wait for all workers (both hosts) to be done.
+      for (int h = 0; h < num_hosts; h++) {
+        for (int c = 0; c < num_threads; c++) {
+          WorkerStats *w = &stats[h * kMaxClients + c];
+          while (true) {
+            flush_line(&w->done); full_fence();
+            if (CACHELINE_LOAD(&w->done) != 0) break;
+            __builtin_ia32_pause();
+          }
+        }
+      }
+      uint64_t tot_ins = 0, tot_sea = 0, tot_upd = 0, tot_del = 0;
+      for (int h = 0; h < num_hosts; h++) {
+        for (int c = 0; c < num_threads; c++) {
+          WorkerStats *w = &stats[h * kMaxClients + c];
+          tot_ins += CACHELINE_LOAD(&w->w_count);
+          tot_sea += CACHELINE_LOAD(&w->w_sum_ns);
+          tot_upd += CACHELINE_LOAD(&w->r_count);
+          tot_del += CACHELINE_LOAD(&w->r_sum_ns);
+        }
+      }
+      uint64_t ins_tpt = tot_ins * 1000ULL / (uint64_t)fig_ins_ms;
+      uint64_t sea_tpt = tot_sea * 1000ULL / (uint64_t)fig_read_ms;
+      uint64_t upd_tpt = tot_upd * 1000ULL / (uint64_t)fig_upd_ms;
+      uint64_t del_tpt = tot_del * 1000ULL / (uint64_t)fig_del_ms;
+      fprintf(stderr,
+             "SUMMARY A_micro_tpt host=%d num_hosts=%d num_clients_per_host=%d "
+             "total_clients=%d insert_tpt=%lu search_tpt=%lu update_tpt=%lu "
+             "delete_tpt=%lu # micro_optA_h%d_c%d\n",
+             host_id, num_hosts, num_threads, num_hosts * num_threads,
+             ins_tpt, sea_tpt, upd_tpt, del_tpt, host_id, num_threads);
+      fflush(stderr);
+    }
+    return 0;
+  }
+
+  // -------- TRANS phase --------
 
   std::vector<uint64_t> w_lat, r_lat;
   w_lat.reserve(trans_ops.size() / total_workers + 16);
   r_lat.reserve(trans_ops.size() / total_workers + 16);
+
+  // iter-19A Phase 1c H11: pre-slice trans_ops to this worker's ops.
+  // Prior loop walked the full 5M-entry vector per worker, contributing
+  // 80 MB of L3 pressure × 64 workers = 5 GB working set competing with
+  // the 9 GB cache_pool, causing L3 thrash → cache_pool entries refetched
+  // from DRAM per op (~1.7 µs/op overhead at c100). Pre-slicing reduces
+  // per-worker walk footprint from 80 MB to ~624 KB (39 k × 16 B), which
+  // fits comfortably in L2. Gated by FUSEE_TRANS_PRESLICE (default 1) so
+  // we can A/B the change.
+  std::vector<Op> my_ops;
+  bool preslice = true;
+  if (const char *e = getenv("FUSEE_TRANS_PRESLICE"); e && atoi(e) == 0) {
+    preslice = false;
+  }
+  if (preslice) {
+    my_ops.reserve(trans_ops.size() / total_workers + 16);
+    for (size_t i = 0; i < trans_ops.size(); i++) {
+      if ((int)(i % (size_t)total_workers) == global_id) my_ops.push_back(trans_ops[i]);
+    }
+  }
 
   uint64_t t_start = now_ns();
   uint64_t my_count = 0;
@@ -653,30 +1018,45 @@ int main(int argc, char **argv) {
   // successful op completion, and (b) duration of first successful op.
   uint64_t first_op_b = 0;
   uint64_t first_op_dur_ns = 0;
-  for (size_t i = 0; i < trans_ops.size(); i++) {
-    if ((int)(i % (size_t)total_workers) != global_id) continue;
-    auto &op = trans_ops[i];
-    uint64_t a = now_ns(), b;
+  // Two loop variants — full walk (legacy, default off) vs pre-sliced.
+  const size_t loop_end = preslice ? my_ops.size() : trans_ops.size();
+  // iter-19A Phase 1d H15: skip per-op now_ns + r_lat.push_back when
+  // FUSEE_NO_LAT=1. Used to attribute the L1 miss gap to worker-loop
+  // infrastructure (timing + latency record) vs the search() call.
+  bool no_lat = false;
+  if (const char *e = getenv("FUSEE_NO_LAT"); e && atoi(e) != 0) no_lat = true;
+  for (size_t i = 0; i < loop_end; i++) {
+    const Op *op_ptr;
+    if (preslice) {
+      op_ptr = &my_ops[i];
+    } else {
+      if ((int)(i % (size_t)total_workers) != global_id) continue;
+      op_ptr = &trans_ops[i];
+    }
+    const Op &op = *op_ptr;
+    uint64_t a, b;
+    if (!no_lat) a = now_ns();
+    else a = 0;
     int rc;
     uint32_t got_len = 0;
     if (op.kind == OP_READ) {
       rc = store.search(op.key, rbuf.data(), (uint32_t)rbuf.size(), &got_len);
-      b = now_ns();
-      if (rc == 0) r_lat.push_back(b - a);
+      if (!no_lat) { b = now_ns(); if (rc == 0) r_lat.push_back(b - a); }
+      else b = 0;
     } else if (op.kind == OP_UPDATE) {
       fill_pattern(op.key, wbuf.data(), value_bytes);
       rc = store.update(op.key, wbuf.data(), value_bytes);
-      b = now_ns();
-      if (rc == 0) w_lat.push_back(b - a);
+      if (!no_lat) { b = now_ns(); if (rc == 0) w_lat.push_back(b - a); }
+      else b = 0;
     } else if (op.kind == OP_INSERT) {
       fill_pattern(op.key, wbuf.data(), value_bytes);
       rc = store.insert(op.key, wbuf.data(), value_bytes);
-      b = now_ns();
-      if (rc == 0) w_lat.push_back(b - a);
+      if (!no_lat) { b = now_ns(); if (rc == 0) w_lat.push_back(b - a); }
+      else b = 0;
     } else if (op.kind == OP_DELETE) {
       rc = store.remove(op.key);
-      b = now_ns();
-      if (rc == 0) w_lat.push_back(b - a);
+      if (!no_lat) { b = now_ns(); if (rc == 0) w_lat.push_back(b - a); }
+      else b = 0;
     } else {
       continue;
     }
@@ -716,14 +1096,8 @@ int main(int argc, char **argv) {
   CACHELINE_STORE(&me->done, 1ULL);
   flush_line(me); store_fence();
 
-  // iter-10A Phase 1.E: dump TLS cache stats if FUSEE_TLS_DIAG=1.
-  // Done before _exit so child processes also flush their own stats.
-  if (const char *e = getenv("FUSEE_TLS_DIAG"); e && e[0] == '1') {
-    if (local_tls.entries) tls_cache_dump(&local_tls, client_id);
-  }
   if (client_id != 0) {
     probe_flush();
-    if (local_tls.entries) tls_cache_destroy(&local_tls);
     _exit(0);
   }
   probe_flush();

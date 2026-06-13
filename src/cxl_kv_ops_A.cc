@@ -20,13 +20,17 @@ extern "C" {
 namespace fusee {
 
 // iter-9A Phase 2.C — per-worker thread-local aggregator-routing id.
-// iter-10A Phase 1.C — per-worker thread-local TlsCache pointer.
-// Both declared at file scope (TU-level) so execute_write_local() and
-// search() can read them; setters set_worker_id / set_thread_tls_cache
-// live further down. -1 / nullptr means "feature off for this thread".
+// Declared at file scope (TU-level) so execute_write_local() can read
+// it; setter set_worker_id lives further down. -1 means "feature off".
+//
+// iter-20A: TLS L1 cache (iter-10A Phase 1.C) deleted — was dead code in
+// practice under YCSB-style workloads. Every tls_lookup failed the
+// bucket_epoch validity check because each cache_pool_insert bumps the
+// bucket's epoch. With concurrent multi-worker inserts, the entry was
+// always rejected as stale. Measured r0_tls counter = 0 across iter-19A
+// sweep (any cache_pct, any build variant).
 namespace {
 thread_local int       g_aggr_worker_id = -1;
-thread_local TlsCache *g_thread_tls     = nullptr;
 
 // iter-17A multi-ring scaling: process-wide ring sharding config.
 // Set once via configure_ring_sharding() at attach time.
@@ -73,19 +77,30 @@ inline int compute_ring_idx(uint64_t key) {
 #endif
 
 // ============================================================
-// iter-15A Tier 1+2 — 2-tier cache ablation flags.
-// FUSEE_DISABLE_TLS         : skip TLS L1 layer (default = 1, OFF)
+// iter-15A Tier 1+2 — cache ablation flag.
 // FUSEE_DISABLE_CACHE_POOL  : skip shared cache_pool L2 layer (default = 0, ON)
 //
-// iter-15A Tier 2 ruling (perf c2c): TLS layer does not reduce MESI
-// HITM as iter-10A designed; default-disabled to simplify. Re-enable
-// for ablation experiments only via -DFUSEE_DISABLE_TLS=0.
+// iter-20A: FUSEE_DISABLE_TLS removed (TLS L1 layer deleted entirely;
+// see prologue at top of file for rationale).
 // ============================================================
-#ifndef FUSEE_DISABLE_TLS
-#define FUSEE_DISABLE_TLS 1
-#endif
 #ifndef FUSEE_DISABLE_CACHE_POOL
 #define FUSEE_DISABLE_CACHE_POOL 0
+#endif
+
+// ============================================================
+// iter-19A Phase 3 — flush+fence isolation gates.
+// Each one removes a specific group of clflushopt+sfence/mfence on the
+// local_read or local_write path. Default = 0 (flush+fence kept).
+// See docs/iters/iter19A_flush_fence_audit.md for theoretical analysis
+// and group definitions.
+// ============================================================
+// G3: retire_slot (DELETE) flush_line(slot) + store_fence
+#ifndef FUSEE_LW_DEL_RETIRE_FLUSH
+#define FUSEE_LW_DEL_RETIRE_FLUSH 0
+#endif
+// G4 + G5: publish_slot_cow (inline + blockpool) flush_line(slot) + store_fence
+#ifndef FUSEE_LW_DEL_SLOT_PUB_FLUSH
+#define FUSEE_LW_DEL_SLOT_PUB_FLUSH 0
 #endif
 
 #if FUSEE_PATH_COUNTERS
@@ -270,14 +285,16 @@ inline void publish_slot_cow(CxlKvSlot *slot, uint64_t key,
                              uint64_t encoded_value) {
   slot->value = encoded_value;
   slot->key = key;
-  flush_line(slot);
-  store_fence();
+  // iter-21A LW-D3: slot lives in owner's bucket segment (per-host
+  // partition). Peer never reads/writes this bucket; same-host MOESI
+  // keeps any concurrent same-host reader's L1 coherent. No flush.
+  // Env knob FUSEE_LW_DEL_SLOT_PUB_FLUSH kept dormant (Backlog B1).
 }
 
 inline void retire_slot(CxlKvSlot *slot) {
   __atomic_store_n(&slot->key, kEmptyKey, __ATOMIC_RELEASE);
-  flush_line(slot);
-  store_fence();
+  // iter-21A LW-D2: same rationale as publish_slot_cow. Owner-self only.
+  // Env knob FUSEE_LW_DEL_RETIRE_FLUSH kept dormant.
 }
 
 inline uint8_t key_fingerprint(uint64_t key) {
@@ -352,7 +369,20 @@ inline int decode_src_host(uint64_t op_id) {
 }  // anonymous namespace
 
 uint32_t CxlKvStoreA::bucket_idx(uint64_t key) const {
-  return (uint32_t)(fnv1a_u64(key) % num_buckets_);
+  // iter-21A per-host bucket partition: a bucket can only hold keys
+  // belonging to a single host (the bucket's owner).  Two keys K1, K2
+  // map to the same bucket ⇒ owner_host(K1) == owner_host(K2).
+  //
+  // Layout: buckets_[0 .. num_buckets_) is split into num_hosts_
+  // contiguous owner segments of kNumBucketsPerHost each.  Owner host h
+  // owns buckets_[h * kNumBucketsPerHost .. (h+1) * kNumBucketsPerHost).
+  //
+  // This invariant turns every bucket access into an owner-self access,
+  // which lets us drop the cross-host visibility flushes that protected
+  // peer-INSERT-into-shared-bucket races (see iter21A_review/LR_pseudocode.md,
+  // XR_pseudocode.md, LW_pseudocode.md).
+  uint32_t local = (uint32_t)(fnv1a_u64(key) % buckets_per_host_);
+  return owner_host(key) * buckets_per_host_ + local;
 }
 
 uint32_t CxlKvStoreA::owner_host(uint64_t key) const {
@@ -375,8 +405,18 @@ int CxlKvStoreA::attach(void *bucket_base, uint32_t num_buckets,
             st->num_hosts, num_hosts);
     std::abort();
   }
+  // iter-21A per-host bucket partition: num_buckets must divide evenly
+  // among hosts so each host owns a contiguous segment of equal size.
+  if (num_buckets % (uint32_t)num_hosts != 0) {
+    fprintf(stderr,
+            "iter-21A partition trip wire: num_buckets=%u not divisible by "
+            "num_hosts=%d\n",
+            num_buckets, num_hosts);
+    std::abort();
+  }
   buckets_ = static_cast<CxlKvBucket *>(bucket_base);
   num_buckets_ = num_buckets;
+  buckets_per_host_ = num_buckets / (uint32_t)num_hosts;
   host_id_ = host_id;
   num_hosts_ = num_hosts;
   st_ = st;
@@ -520,6 +560,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   if (self_inval_src < 0) PATH_CTR(n_local_write_worker);
   else                    PATH_CTR(n_local_write_staging_forwarded);
   PROBE_PATH("W1", key);
+  PROBE_LW_OP("LWS1S", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
 
@@ -545,9 +586,12 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     if (match < 0) return -1;
     target_slot = match;
   }
+  PROBE_LW_OP("LWS1E", key);
 
   SlotDirectoryEntry *de = slot_directory_entry(dir_, b, (uint32_t)target_slot);
+  PROBE_LW_OP("LWS2S", key);
   slot_directory_lock(de);
+  PROBE_LW_OP("LWS2E", key);
   PROBE_PATH("W2", key);
 
   // iter-17A: removed flush_line(bucket)+full_fence post-lock — see above.
@@ -567,6 +611,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // touch the slot), so skip. UPDATE/DELETE: scan bitmap.
   uint8_t bitmap = de->sharer_bitmap;
   PROBE_PATH("W3", key);
+  PROBE_LW_OP("LWS3S", key);
   if (op_kind != kOpKindInsert && num_hosts_ > 1 && ir_) {
     int n_sent = 0;
     for (int h = 0; h < num_hosts_; h++) {
@@ -577,12 +622,16 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
       if (h == self_inval_src) continue;
 #endif
       if ((bitmap & (1u << h)) == 0) continue;
-      if (n_sent == 0) PROBE_PATH("W4", key);
+      if (n_sent == 0) {
+        PROBE_PATH("W4", key);
+        PROBE_LW_OP("LWS3B", key);
+      }
       send_invalidate((uint32_t)h, key);
       n_sent++;
     }
     if (n_sent > 0) PROBE_PATH("W6", key);
   }
+  PROBE_LW_OP("LWS3E", key);
 
   // Step 5: CoW publish.
   //
@@ -591,6 +640,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   // Inline u64 path retained as runtime-fallback when pool_ == nullptr
   // (legacy tests that didn't supply pool, or ad-hoc benchmarks that
   // want the lower per-op cost).
+  PROBE_LW_OP("LWS4S", key);
   if (op_kind == kOpKindDelete) {
     retire_slot(slot);
     PROBE_PATH("W9", key);
@@ -604,6 +654,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   } else {
     // Full blockpool CoW path with real value_len bytes.
     uint64_t blk_off = pool_->alloc();
+    PROBE_LW_OP("LWS4A", key);
     PROBE_PATH("W7", key);
     static thread_local int trace = -1;
     if (trace == -1) {
@@ -631,6 +682,7 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     std::memcpy(buf, &value_len, 4);
     std::memcpy(buf + 4, value, value_len);
     pool_->write(blk_off, buf, total);
+    PROBE_LW_OP("LWS4W", key);
     PROBE_PATH("W8", key);
     uint8_t fp = key_fingerprint(key);
     uint8_t sc = kSizeClassBlock256;
@@ -656,8 +708,10 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
     publish_slot_cow(slot, key, encoded);
     PROBE_PATH("W9", key);
   }
+  PROBE_LW_OP("LWS4E", key);
 
   // Step 6: directory state.
+  PROBE_LW_OP("LWS5S", key);
   de->version++;
   if (op_kind == kOpKindDelete) {
     de->state = kDirStateInvalid;
@@ -669,18 +723,13 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
   }
   PROBE_PATH("W10", key);
   slot_directory_unlock(de);
+  PROBE_LW_OP("LWS5E", key);
 
   // Step 7: own cache.
+  PROBE_LW_OP("LWS6S", key);
   if (op_kind == kOpKindDelete) {
 #if !FUSEE_DISABLE_CACHE_POOL
     cache_pool_evict(cache_, key);
-#endif
-    // iter-10A Phase 1.C: also evict from TLS so subsequent reads
-    // don't see the deleted entry. (cache_pool_evict already bumped
-    // bucket_epoch so any TLS reader without our explicit evict would
-    // also detect stale on next access — this is belt + suspenders.)
-#if !FUSEE_DISABLE_TLS
-    if (g_thread_tls) tls_evict(g_thread_tls, key);
 #endif
   } else {
 #if !FUSEE_DISABLE_CACHE_POOL
@@ -689,17 +738,8 @@ int CxlKvStoreA::execute_write_local(uint64_t key, const void *value,
                       value_len);
     PATH_CTR(n_cache_pool_insert_from_write);
 #endif
-    // iter-10A Phase 1.C: populate TLS L1 with the just-written value
-    // and the post-bump epoch so this thread's next read hits TLS.
-#if !FUSEE_DISABLE_TLS
-    if (g_thread_tls) {
-      uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
-      tls_insert(g_thread_tls, key,
-                 reinterpret_cast<const uint8_t *>(value),
-                 value_len, cur_epoch);
-    }
-#endif
   }
+  PROBE_LW_OP("LWS6E", key);
   PROBE_PATH("W12", key);
   return 0;
 }
@@ -926,11 +966,9 @@ void CxlKvStoreA::stop_read_receiver() {
 }
 
 // iter-9A Phase 2.C: per-worker aggregator routing id setter.
-// iter-10A Phase 1.C: per-worker TLS cache attach setter.
-// Backing thread_locals declared at file top (so execute_write_local
-// can read them).
+// Per-worker thread_local setter. Aggregator routing id declared at
+// file top (so execute_write_local can read it).
 void CxlKvStoreA::set_worker_id(int wid) { g_aggr_worker_id = wid; }
-void CxlKvStoreA::set_thread_tls_cache(TlsCache *tls) { g_thread_tls = tls; }
 
 // iter-17A multi-ring scaling: set process-wide sharding parameters.
 void CxlKvStoreA::configure_ring_sharding(int num_workers, int shards_factor) {
@@ -1345,7 +1383,9 @@ int CxlKvStoreA::read_sender_drain_dst_v2_unused(int dst, int n,
             std::memcpy(vbuf, &e->resp_blk_off, vlen);
           } else if (vlen > 0 && vlen <= kForwardStagingSlotBytes &&
                      pool_) {
-            pool_->read(blk_off + 4, vbuf, vlen);
+            // iter-21A XR-D3: aggregator runs on peer host; this is a
+            // cross-host fetch of owner's pool block.
+            pool_->read_xhost(blk_off + 4, vbuf, vlen);
           }
           s->value_len = vlen;
         }
@@ -1657,9 +1697,6 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
 #if !FUSEE_DISABLE_CACHE_POOL
   if (cache_) cache_pool_set_stale(cache_, key);
 #endif
-#if !FUSEE_DISABLE_TLS
-  if (g_thread_tls) tls_evict(g_thread_tls, key);
-#endif
 #endif  // FUSEE_XHOST_WRITE_SELF_INVAL
 
   // iter-17A: route to ring shard. Plan A (default) uses worker_id;
@@ -1703,80 +1740,17 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
     PROBE_OP("XWS2R", (uint64_t)c_iters);
   }
 
-  // iter-13A Phase 2: select write-path based on FUSEE_WRITE_ALLOC.
+  // RESERVED write-alloc (iter-20A: BATCHED+STAGING branches removed).
+  // W1: bump-allocate from owner's reserved-for-me sub-segment (DRAM-local
+  // peer_bumps_[owner]). Worker writes value bytes directly into peer's
+  // pool segment; receiver only sets bucket slot. If peer's reserved
+  // sub-region is exhausted, alloc_peer returns 0 → fall back to STAGING
+  // copy via forward_staging_bytes (receiver does pool->alloc + memcpy).
   uint64_t direct_blk_off = 0;
   bool direct_used = false;
-#if FUSEE_WRITE_ALLOC == FUSEE_WRITE_ALLOC_RESERVED
-  // W1: bump-allocate from owner's reserved-for-me sub-segment (local DRAM).
   if (value && value_len > 0 && op_kind != kOpKindDelete && pool_) {
     direct_blk_off = pool_->alloc_peer((int)owner);
   }
-#elif FUSEE_WRITE_ALLOC == FUSEE_WRITE_ALLOC_BATCHED
-  // W3: per-(thread, owner) DRAM queue; refill via ReservationRing.
-  if (value && value_len > 0 && op_kind != kOpKindDelete && rsv_ && pool_) {
-    static thread_local uint64_t q_blk_offs[kReservMaxHosts][kReservMaxBatchK];
-    static thread_local uint32_t q_next_idx[kReservMaxHosts] = {0};
-    static thread_local uint32_t q_filled[kReservMaxHosts] = {0};
-    // Read batch size K from env once per thread.
-    static thread_local uint32_t batch_k = 0;
-    if (batch_k == 0) {
-      const char *e_k = getenv("FUSEE_BATCH_K");
-      batch_k = (e_k && atoi(e_k) > 0) ? (uint32_t)atoi(e_k) : 128;
-      if (batch_k > kReservMaxBatchK) batch_k = kReservMaxBatchK;
-    }
-    if (q_next_idx[owner] >= q_filled[owner]) {
-      // Queue empty: send reservation request, wait, copy K blk_offs.
-      uint64_t r_my_op = my_op | 0x8000000000000000ULL;  // mark as reserve req
-      uint64_t r_tpos = rsv_->tails[host_id_][owner].fetch_add(1,
-                            std::memory_order_acq_rel);
-      flush_line(&rsv_->tails[host_id_][owner]);
-      store_fence();
-      uint32_t r_slot = (uint32_t)(r_tpos % kReservRingDepth);
-      ReservationEntry *re = reservation_entry(rsv_, host_id_, (int)owner,
-                                                (int)r_slot);
-      // Wait for slot free.
-      for (;;) {
-        flush_line(&re->req_op_id);
-        full_fence();
-        if (re->req_op_id.load(std::memory_order_acquire) == 0) break;
-        __builtin_ia32_pause();
-      }
-      re->batch_k = batch_k;
-      re->filled_count = 0;
-      re->status = 0;
-      re->resp_op_id.store(0, std::memory_order_relaxed);
-      std::atomic_thread_fence(std::memory_order_release);
-      re->req_op_id.store(r_my_op, std::memory_order_release);
-      flush_line(&re->req_op_id);
-      store_fence();
-      // Spin on resp_op_id.
-      for (;;) {
-        flush_line(&re->resp_op_id);
-        full_fence();
-        if (re->resp_op_id.load(std::memory_order_acquire) == r_my_op) break;
-        __builtin_ia32_pause();
-      }
-      // Pull K blk_offs from response. Flush response cachelines first.
-      flush_line(&re->filled_count);
-      for (uint32_t off = 0; off < batch_k * 8; off += 64) {
-        flush_line((char *)re->blk_offs + off);
-      }
-      full_fence();
-      uint32_t got = re->filled_count;
-      for (uint32_t i = 0; i < got; i++) q_blk_offs[owner][i] = re->blk_offs[i];
-      q_filled[owner] = got;
-      q_next_idx[owner] = 0;
-      // Free request slot.
-      re->req_op_id.store(0, std::memory_order_release);
-      flush_line(&re->req_op_id);
-      store_fence();
-    }
-    if (q_next_idx[owner] < q_filled[owner]) {
-      direct_blk_off = q_blk_offs[owner][q_next_idx[owner]++];
-    }
-  }
-#endif
-#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
   if (direct_blk_off != 0) {
     // Direct path: write value bytes into the pool (header + value).
     uint8_t hdr_buf[4];
@@ -1786,7 +1760,8 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
     direct_used = true;
   }
   if (!direct_used) {
-    // Fallback STAGING.
+    // Exhausted-reserve fallback: STAGING copy. Receiver allocates and
+    // memcpy's via execute_write_local STAGING path.
     if (value && value_len > 0) {
       uint8_t *staging =
           forward_staging_bytes(fs_, host_id_, (int)owner, (int)slot_idx);
@@ -1797,19 +1772,6 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
       store_fence();
     }
   }
-#else
-  // STAGING (default): copy value bytes into the staging arena slot
-  // (op_kind=DELETE skips this — value_len == 0).
-  if (value && value_len > 0) {
-    uint8_t *staging =
-        forward_staging_bytes(fs_, host_id_, (int)owner, (int)slot_idx);
-    std::memcpy(staging, value, value_len);
-    for (uint32_t off = 0; off < value_len; off += 64) {
-      flush_line((void *)(staging + off));
-    }
-    store_fence();
-  }
-#endif
 
   // iter-16A Stage 3 end ≡ Stage 4 (ctrl_publish) start.
   PROBE_OP("XWS3E", op_id);
@@ -1818,10 +1780,9 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
   e->key = key;
   e->op_kind = (uint8_t)op_kind;
   e->value_len = value_len;
-#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
-  // iter-13A Phase 2 W1/W3: reuse staging_off field to carry blk_off in
-  // direct-pool-write mode. staging_gen=0 signals "use blk_off"; =1
-  // signals "fallback to staging_off as slot index" (staging copy used).
+  // Reuse staging_off field to carry blk_off in direct-pool-write mode.
+  // staging_gen=0 signals "use blk_off"; =1 signals "fallback to
+  // staging_off as slot index" (peer-reserve exhausted → STAGING copy).
   if (direct_used) {
     e->staging_off = direct_blk_off;
     e->staging_gen = 0;
@@ -1829,10 +1790,6 @@ int CxlKvStoreA::forward_write_direct(uint32_t owner, uint64_t key,
     e->staging_off = slot_idx;
     e->staging_gen = 1;
   }
-#else
-  e->staging_off = slot_idx;          // sanity check; receiver asserts
-  e->staging_gen = 0;                 // reserved (iter-10A pool-gen)
-#endif
   // iter-17A Stage 4 audit: these two resets LOOK dead (op_id is
   // host-tagged so prev resp can't collide; status only read after
   // resp match → receiver always overwrites it). Removal smoke at
@@ -1951,104 +1908,11 @@ int CxlKvStoreA::send_invalidate_direct(uint32_t target_host, uint64_t key) {
   }
 }
 
-int CxlKvStoreA::enable_reservation_ring(ReservationRingMatrix *rsv,
-                                         bool init_region,
-                                         bool spawn_handler) {
-  if (!rsv) return -1;
-  rsv_ = rsv;
-  // iter-12A Phase 5 always-memset-flush pattern.
-  std::memset(rsv, 0, reservation_ring_matrix_bytes());
-  flush_region(rsv, reservation_ring_matrix_bytes());
-  store_fence();
-  (void)init_region;
-  if (spawn_handler) {
-    rsv_handler_stop_.store(false, std::memory_order_relaxed);
-    rsv_handler_ = std::thread([this]() {
-      pthread_setname_np(pthread_self(), "ReservHandler");
-      // iter-17A: pin to last CPU (85) — last receiver thread also at 85
-      // in T=64 N=4 packing case, but ReservHandler is mostly idle under
-      // FUSEE_WRITE_ALLOC=RESERVED (only services W3 BATCHED requests).
-      // Pinning it to 85 prevents it from drifting onto worker CPUs and
-      // stealing cycles. Tail-CPU sharing with InvalRecv6 is acceptable
-      // since ReservHandler is idle.
-      long nproc = sysconf(_SC_NPROCESSORS_ONLN);
-      int rsv_cpu = (nproc > 0) ? (int)nproc - 1 : 85;
-      cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(rsv_cpu, &cs);
-      pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
-      fprintf(stderr,
-        "[A:thread] ReservHandler pid=%d tid=%lu pinned cpu=%d (host_id=%d)\n",
-        getpid(), (unsigned long)pthread_self(), rsv_cpu, host_id_);
-      this->reservation_handler_loop();
-    });
-  }
-  return 0;
-}
-
-void CxlKvStoreA::stop_reservation_handler() {
-  if (!rsv_handler_.joinable()) return;
-  rsv_handler_stop_.store(true, std::memory_order_release);
-  rsv_handler_.join();
-}
-
-// iter-13A Phase 2 W3: handler loop on owner side. For each reservation
-// request (from peer P), call pool_->alloc K times, return blk_offs in
-// the same entry, publish resp_op_id.
-void CxlKvStoreA::reservation_handler_loop() {
-  while (!rsv_handler_stop_.load(std::memory_order_acquire)) {
-    bool did_work = false;
-    for (int src = 0; src < num_hosts_; src++) {
-      if (src == host_id_) continue;
-      // Tail tracks the producer (peer) head; consumer (us) scans tail-head.
-      flush_line(&rsv_->tails[src][host_id_]);
-      full_fence();
-      uint64_t tail = rsv_->tails[src][host_id_].load(std::memory_order_acquire);
-      // Simple per-(src,me) head counter in DRAM (only this thread reads).
-      static thread_local uint64_t local_heads[kReservMaxHosts][kReservMaxHosts] = {{0}};
-      uint64_t head = local_heads[src][host_id_];
-      while (head < tail) {
-        uint32_t slot = (uint32_t)(head % kReservRingDepth);
-        ReservationEntry *e = reservation_entry(rsv_, src, host_id_, (int)slot);
-        flush_line((void *)&e->req_op_id);
-        full_fence();
-        uint64_t op_id = e->req_op_id.load(std::memory_order_acquire);
-        // gap-tolerance (per iter-12A Phase 5.1 pattern)
-        if (op_id == 0) {
-          for (int g = 0; g < 4096 && op_id == 0; g++) {
-            __builtin_ia32_pause();
-            flush_line((void *)&e->req_op_id);
-            full_fence();
-            op_id = e->req_op_id.load(std::memory_order_acquire);
-          }
-          if (op_id == 0) break;
-        }
-        uint32_t K = e->batch_k;
-        if (K > kReservMaxBatchK) K = kReservMaxBatchK;
-        uint32_t filled = 0;
-        for (uint32_t k = 0; k < K; k++) {
-          uint64_t bo = pool_ ? pool_->alloc_local() : 0;
-          if (bo == 0) break;
-          e->blk_offs[k] = bo;
-          filled++;
-        }
-        e->filled_count = filled;
-        e->status = (filled == K) ? 0 : -1;
-        // Flush blk_offs payload before publishing resp_op_id.
-        for (uint32_t off = 0; off < filled * 8; off += 64) {
-          flush_line((char *)e->blk_offs + off);
-        }
-        flush_line(&e->status);
-        store_fence();
-        e->resp_op_id.store(op_id, std::memory_order_release);
-        flush_line((void *)&e->resp_op_id);
-        store_fence();
-        head++;
-        did_work = true;
-      }
-      local_heads[src][host_id_] = head;
-    }
-    if (!did_work) __builtin_ia32_pause();
-  }
-}
+// iter-20A: enable_reservation_ring / stop_reservation_handler /
+// reservation_handler_loop removed — these served the BATCHED
+// write-alloc mode only, which was deleted alongside STAGING in
+// iter-20A. RESERVED mode (now the only mode) uses pool->alloc_peer
+// directly (DRAM-local bump), no CXL ring interaction.
 
 int CxlKvStoreA::enable_read_guard(RcuDomain *rcu, HazardDomain *haz,
                                    bool init_region) {
@@ -2243,16 +2107,19 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   PROBE_READ_OP("XRS2E", op_id);
   if (c_iters > 0) PROBE_READ_OP("XRS2R", (uint64_t)c_iters);
 
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-  // iter-13A Phase 1 (RCU): publish my reader epoch BEFORE sending the
-  // request. Owner cannot reclaim a block I might subsequently observe
-  // by blk_off until rcu_synchronize() past this epoch.
-  if (rcu_) rcu_enter(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
-
   // C13: my_epoch_at_send (bucket epoch reader observed prior to send).
+  // iter-21A: FUSEE_DISABLE_C13_EPOCH=1 bypasses the stale-snapshot check.
+  // C13's correctness depends on OP_CACHE_REGISTER wiring (iter-4A spec
+  // drift finding: register never wired → host 1's epoch never bumps →
+  // host 0's epoch ratchets above host 1's via local inserts → cross-host
+  // reads see lookup_epoch < my_epoch_at_send → infinite -3. Until
+  // register-then-fill is wired, bench mode can opt out.
+  static int disable_c13 = []() {
+    const char *e = getenv("FUSEE_DISABLE_C13_EPOCH");
+    return (e && atoi(e) != 0) ? 1 : 0;
+  }();
   uint64_t my_epoch_at_send =
-      cache_ ? cache_pool_bucket_epoch(cache_, key) : 0;
+      (cache_ && !disable_c13) ? cache_pool_bucket_epoch(cache_, key) : 0;
 
   // iter-18A C8: combine staging-clear sfence + req-publish sfence into
   // one sfence at end of Stage 3. The two flushed lines (st->ready_op_id
@@ -2315,9 +2182,6 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   flush_line((void *)&e->req_op_id);
   store_fence();
   if (timed_out) {
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
     if (out_len) *out_len = 0;
     return -2;
   }
@@ -2332,68 +2196,36 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
   // re-fetched the full 64B from CXL, so lookup_epoch / status /
   // value_size below are guaranteed fresh.
   if (st->lookup_epoch < my_epoch_at_send) {
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
     if (out_len) *out_len = 0;
     return -3;  // stale snapshot — caller retries
   }
   if (st->status != 0) {
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
     if (out_len) *out_len = 0;
     return st->status;
   }
   uint32_t vlen = st->value_size;
   if (vlen == 0) {
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
     if (out_len) *out_len = 0;
     return 0;
   }
   if (vlen > kReadStagingSlotBytes) {
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-    if (rcu_) rcu_exit(rcu_, host_id_, (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0));
-#endif
     if (out_len) *out_len = 0;
     return -1;
   }
   // iter-18A Stage 5 end ≡ Stage 6 (value_recv) start.
   PROBE_READ_OP("XRS5E", op_id);
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
-  // STAGING (default): direct copy from CXL staging — owner placed
-  // value bytes into st->value_bytes in read_handler (1× CXL→DRAM→CXL
-  // extra copy on owner side, but reader does one bulk read here).
-  for (uint32_t off = 0; off < vlen; off += 64) {
-    flush_line(st->value_bytes + off);
-  }
-  full_fence();
-  uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
-  if (out_buf && copy_len > 0) {
-    std::memcpy(out_buf, st->value_bytes, copy_len);
-  }
-#else
-  // RCU / HAZARD: direct pool read. Staging only carries control fields
-  // (blk_off, vlen, lookup_epoch, status) — no value bytes copy on owner.
-  // st->resp_blk_off was populated by read_handler with the actual pool
-  // blk_off (high bit signals inline-8B fallback; see read_handler for
-  // the encoding shared with the legacy path).
-  // ABA note: current pool is bump-only (free_lazy is a stub), so the
-  // blk_off captured here cannot be re-allocated to a different key
-  // during this read. iter-14A+ freelist GC will need a generation tag
-  // in the encoded slot value (use the high bits of cxl_slot_pack).
+  // HAZARD direct-pool-read (iter-20A: STAGING+RCU branches removed).
+  // Staging carries only control fields (blk_off, vlen, lookup_epoch,
+  // status) — no value bytes on owner side. read_handler populated
+  // st->resp_blk_off with the pool blk_off (high bit signals inline-8B
+  // fallback; encoding shared with legacy path).
+  // ABA note: pool is bump-only (free_lazy stub) so blk_off cannot be
+  // re-allocated under us. iter-14A+ freelist GC will need a generation
+  // tag in the encoded slot value (high bits of cxl_slot_pack).
   uint64_t blk_off = st->resp_blk_off;
   int tid = (int)(g_aggr_worker_id >= 0 ? g_aggr_worker_id : 0);
-  (void)tid;
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_HAZARD
-  // Hazard: publish blk_off to my hazard slot BEFORE the pool read.
-  // (Re-validation against the bucket isn't possible here — reader
-  // doesn't share the bucket with owner. ABA protection deferred to
-  // iter-14A per RAP §V_CORRECTNESS Attack 5 defense.)
+  // Publish blk_off to my hazard slot BEFORE pool read.
   if (haz_) hazard_protect(haz_, host_id_, tid, blk_off);
-#endif
   if (blk_off == 0 || pool_ == nullptr) {
     // Inline-8B fallback: value was packed into st->resp_blk_off itself
     // by read_handler (see kSizeClassInline branch). Copy directly.
@@ -2407,16 +2239,11 @@ int CxlKvStoreA::forward_read_direct(uint32_t owner, uint64_t key,
     // from CXL into out_buf (caller's DRAM).
     uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
     if (out_buf && copy_len > 0) {
-      pool_->read(blk_off + 4, out_buf, copy_len);
+      // iter-21A XR-D3: peer reads owner's pool segment cross-host.
+      pool_->read_xhost(blk_off + 4, out_buf, copy_len);
     }
   }
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_HAZARD
   if (haz_) hazard_release(haz_, host_id_, tid);
-#endif
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_RCU
-  if (rcu_) rcu_exit(rcu_, host_id_, tid);
-#endif
-#endif  // FUSEE_READ_GUARD branches
   if (out_len) *out_len = vlen;
   // iter-18A Stage 6 (value_recv) end.
   PROBE_READ_OP("XRS6E", op_id);
@@ -2466,35 +2293,21 @@ void CxlKvStoreA::write_handler(WriteEntry *e, int src) {
     e->status = -5;
     return;
   }
-#if FUSEE_WRITE_ALLOC != FUSEE_WRITE_ALLOC_STAGING
-  // iter-13A Phase 2 W1/W3: if worker took the direct-pool path
-  // (staging_gen==0), the blk_off is already in owner's CXL pool — we
-  // just need to wire it into the bucket without re-allocating or
-  // copying. If worker fell back to staging (staging_gen==1), use the
-  // legacy path below.
+  // RESERVED (iter-20A: STAGING-default branch removed): if worker took
+  // the direct-pool path (staging_gen==0), blk_off is already in owner's
+  // pool — execute_write_local_with_blk just embeds blk_off into the
+  // slot encoding (no alloc, no copy). If staging_gen==1, worker hit
+  // peer-reserve exhaustion and fell back to STAGING — owner allocates
+  // a fresh block and copies from forward_staging.
   if (e->staging_gen == 0) {
-    // Direct-pool path: blk_off in e->staging_off; skip pool->alloc and
-    // pool->write. Need a code path that just updates bucket->slots[i].value
-    // = encode(blk_off, vlen, fingerprint). The simplest hook is to add a
-    // variant of execute_write_local that takes pre-allocated blk_off.
     uint64_t blk_off = e->staging_off;
-    // iter-17A Stage 7: removed dead "defensive flush" call here. The
-    // prior code was `pool_->read(blk_off, nullptr, 0)` which early-returns
-    // at len==0 with NO clflushopt issued (see cxl_kv_blockpool.cc:180).
-    // The companion full_fence had nothing to order. execute_write_local_with_blk
-    // does not read pool bytes (it only embeds blk_off into the slot encoding);
-    // future readers do their own pool_->read which performs the flush.
-    // Call into execute_write_local with the special "pre-allocated"
-    // signal — implemented as a new internal helper:
     e->status = execute_write_local_with_blk(e->key, blk_off, value_len,
                                               (int)e->op_kind, src);
     return;
   }
-  // staging_gen == 1: fallback path, fall through to STAGING below.
-#endif
-  // STAGING (default and fallback): read worker's value bytes from
-  // ForwardStaging[src][me][slot_idx], call execute_write_local which
-  // allocates a fresh block and copies into it.
+  // staging_gen == 1: exhausted-reserve fallback. Pull value bytes from
+  // ForwardStaging[src][me][slot_idx] and call execute_write_local which
+  // allocates a fresh owner-side block and copies.
   uint32_t slot_idx = (uint32_t)e->staging_off;
   uint8_t *staging =
       forward_staging_bytes(fs_, src, host_id_, (int)slot_idx);
@@ -2567,9 +2380,10 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slo
     return;
   }
   // L0/L1: full path below.
-  flush_line(bucket);
-  flush_line((char *)bucket + 64);
-  full_fence();
+  // iter-21A XR-D2: per-host bucket partition makes this bucket
+  // owner-self (read_handler runs on owner reading owner's own
+  // segment); same-host MOESI covers cacheline freshness. The L2 NOOP
+  // bucket flush above stays as bench-attribution scaffolding (XR-D4).
 
   // C13: capture bucket epoch at lookup time. Reader validates
   // staging.lookup_epoch >= my_epoch_at_send.
@@ -2584,20 +2398,9 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slo
     st->status = st_status;
     st->lookup_epoch = lookup_epoch;
     // Flush control cacheline (excluding ready_op_id, published last).
+    // HAZARD (iter-20A: STAGING branch removed): no value bytes on owner
+    // side. Reader pulls value directly from pool_ via st->resp_blk_off.
     flush_line(st);
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
-    // STAGING (default): value bytes already copied into st->value_bytes
-    // by caller; flush them so reader can pull from staging directly.
-    if (vlen > 0) {
-      for (uint32_t off = 0; off < vlen; off += 64) {
-        flush_line(st->value_bytes + off);
-      }
-    }
-#else
-    // RCU / HAZARD: NO value bytes copy on owner side. Reader pulls
-    // value directly from pool_ via st->resp_blk_off (set by caller).
-    // st->value_bytes is unused in this build.
-#endif
     store_fence();
     // Release-publish: reader polling ready_op_id observes the
     // staging fields populated above only after this store.
@@ -2629,10 +2432,9 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slo
 
   uint8_t sc = cxl_slot_size_class(encoded);
   if (sc == kSizeClassInline || pool_ == nullptr) {
-    // Inline u64 fallback — pack 8 bytes into both staging value_bytes
-    // (STAGING reader) and resp_blk_off (RCU/HAZARD reader's inline path).
-    std::memcpy(st->value_bytes, &encoded, 8);
-    st->resp_blk_off = encoded;  // iter-13A: inline 8B in this field
+    // Inline u64 fallback — pack 8 bytes into resp_blk_off; reader
+    // memcpy's them out as the value.
+    st->resp_blk_off = encoded;  // 8B inline payload
     publish_staging(0, 8);
     e->resp_value_len = 8;
     std::memcpy(&e->resp_blk_off, &encoded, 8);
@@ -2651,8 +2453,10 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slo
   }
 
   // Read value-length header out of the pool block.
+  // iter-21A XR-D3: read_handler runs on owner host reading owner's
+  // own pool segment. Same-host MOESI safe → read_local.
   uint8_t hdr[4];
-  pool_->read(blk_off, hdr, 4);
+  pool_->read_local(blk_off, hdr, 4);
   uint32_t vlen = 0;
   std::memcpy(&vlen, hdr, 4);
   if (vlen == 0 || vlen > kReadStagingSlotBytes) {
@@ -2664,14 +2468,8 @@ void CxlKvStoreA::read_handler(ReadEntry *e, int src, int ring_idx, uint32_t slo
     return;
   }
 
-#if FUSEE_READ_GUARD == FUSEE_READ_GUARD_STAGING
-  // STAGING (default): owner copies value bytes pool→staging — this is
-  // the redundant copy iter-13A is eliminating for RCU/HAZARD builds.
-  pool_->read(blk_off + 4, st->value_bytes, vlen);
-#else
-  // RCU / HAZARD: skip the copy. Just hand reader the blk_off so it can
-  // pool_->read() directly into its own DRAM buffer.
-#endif
+  // HAZARD (iter-20A: STAGING branch removed): hand reader blk_off; reader
+  // does pool_->read directly into its own DRAM buffer. No owner-side copy.
   st->resp_blk_off = blk_off;
   publish_staging(0, vlen);
 
@@ -2819,6 +2617,25 @@ void CxlKvStoreA::read_receiver_loop(std::vector<int> ring_indices) {
   probe_flush();
 }
 
+#if FUSEE_SEARCH_MIN
+// iter-19A Phase 1d H15: minimal search() — strip all wrappers, do nothing
+// but cache_pool_lookup direct into out_buf. Used to attribute the 20× L1
+// miss gap between FUSEE and synthetic pthread. Skips: PROBE_LR_OP × 7,
+// PROBE_PATH × 3, PATH_CTR, TLS branch, TLS insert, intermediate buf,
+// owner_self/cross-host miss paths. Correctness reduced — for c100 where
+// hit rate is 99.9 % this measures the pure HIT-path cost.
+int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
+                         uint32_t *out_len) {
+  if (key == kEmptyKey) return -1;
+  uint32_t sz = 0;
+  if (out_buf && buf_len >= kForwardStagingSlotBytes &&
+      cache_pool_lookup(cache_, key, (uint8_t *)out_buf, buf_len, &sz)) {
+    if (out_len) *out_len = sz;
+    return 0;
+  }
+  return -1;
+}
+#else
 int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
                         uint32_t *out_len) {
   PROBE_LR_OP("LRS1S", key);
@@ -2826,31 +2643,45 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   PROBE_PATH("R1", key);
   PROBE_LR_OP("LRS1E", key);
 
-  // iter-10A Phase 1.C: TLS L1 lookup (per-worker private DRAM, 0
-  // cross-core MESI traffic on hit). Only enabled if worker called
-  // set_thread_tls_cache(). bucket_epoch is a single 8-B atomic load
-  // — small cross-core cost vs the 16-cacheline value_bytes memcpy
-  // that shared cache_pool_lookup does on hot Zipf keys.
-#if !FUSEE_DISABLE_TLS
-  if (g_thread_tls) {
-    uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
-    uint8_t tls_buf[kForwardStagingSlotBytes];
-    uint32_t tls_sz = 0;
-    if (tls_lookup(g_thread_tls, key, cur_epoch, tls_buf,
-                   sizeof(tls_buf), &tls_sz)) {
-      PROBE_PATH("R0_tls_hit", key);
-      PATH_CTR(n_tls_hit);
-      if (out_len) *out_len = tls_sz;
-      uint32_t copy_len = tls_sz < buf_len ? tls_sz : buf_len;
-      if (out_buf && copy_len > 0) std::memcpy(out_buf, tls_buf, copy_len);
-      PROBE_PATH("R6", key);
-      return 0;
-    }
-  }
-#endif
-
   // Fast path L2: shared cache_pool lookup with stale check.
+  // iter-20A: TLS L1 lookup (iter-10A Phase 1.C) removed — was dead code.
 #if !FUSEE_DISABLE_CACHE_POOL
+#if FUSEE_LR_DEL_DOUBLE_COPY
+  // iter-19A Phase 1d H14: skip the intermediate `buf` stack array; have
+  // cache_pool_lookup write directly into the caller's `out_buf`. Saves
+  // 17 cacheline reads (the buf→out_buf memcpy) per HIT op, and shrinks
+  // the worker's stack footprint by 1088 B. Requires the caller to
+  // provide a writable buf at least as large as kForwardStagingSlotBytes
+  // (1088 B); ycsb's rbuf is sized to value_bytes which is up to 1024 +
+  // metadata margin.
+  uint32_t sz = 0;
+  PROBE_LR_OP("LRS2S", key);
+  uint8_t *dest = (out_buf && buf_len >= kForwardStagingSlotBytes)
+                      ? (uint8_t *)out_buf
+                      : nullptr;
+  if (dest && cache_pool_lookup(cache_, key, dest, buf_len, &sz)) {
+    PROBE_LR_OP("LRS2H", key);
+    PROBE_PATH("R2hit", key);
+    PATH_CTR(n_r2hit);
+    if (out_len) *out_len = sz;
+    PROBE_PATH("R6", key);
+    return 0;
+  }
+  // Fall through to the buf-based path when out_buf is too small or null
+  // (preserves correctness for any non-ycsb caller).
+  uint8_t buf[kForwardStagingSlotBytes];
+  if (cache_pool_lookup(cache_, key, buf, sizeof(buf), &sz)) {
+    PROBE_LR_OP("LRS2H", key);
+    PROBE_PATH("R2hit", key);
+    PATH_CTR(n_r2hit);
+    if (out_len) *out_len = sz;
+    uint32_t copy_len = sz < buf_len ? sz : buf_len;
+    if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
+    PROBE_PATH("R6", key);
+    return 0;
+  }
+  PROBE_LR_OP("LRS2M", key);
+#else
   uint8_t buf[kForwardStagingSlotBytes];
   uint32_t sz = 0;
   PROBE_LR_OP("LRS2S", key);
@@ -2858,13 +2689,6 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     PROBE_LR_OP("LRS2H", key);  // HIT tag
     PROBE_PATH("R2hit", key);
     PATH_CTR(n_r2hit);
-    // populate TLS L1 with the freshly-fetched value + current epoch
-#if !FUSEE_DISABLE_TLS
-    if (g_thread_tls) {
-      uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
-      tls_insert(g_thread_tls, key, buf, sz, cur_epoch);
-    }
-#endif
     if (out_len) *out_len = sz;
     uint32_t copy_len = sz < buf_len ? sz : buf_len;
     if (out_buf && copy_len > 0) std::memcpy(out_buf, buf, copy_len);
@@ -2872,6 +2696,7 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
     return 0;
   }
   PROBE_LR_OP("LRS2M", key);  // MISS tag
+#endif
 #endif
   PROBE_PATH("R2miss", key);
 
@@ -2892,14 +2717,6 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
       cache_pool_insert(cache_, key, v, vlen);
       PATH_CTR(n_cache_pool_insert_from_read);
 #endif
-      // Also populate TLS L1 with new epoch (cache_pool_insert just
-      // bumped it).
-#if !FUSEE_DISABLE_TLS
-      if (g_thread_tls) {
-        uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
-        tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
-      }
-#endif
     }
     if (out_len) *out_len = vlen;
     uint32_t copy_len = vlen < buf_len ? vlen : buf_len;
@@ -2913,24 +2730,10 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
   PROBE_LR_OP("LRS3S", key);
   uint32_t b = bucket_idx(key);
   CxlKvBucket *bucket = &buckets_[b];
-  // iter-19A Phase 2 mechanism isolation:
-  //   FUSEE_LR_DEL_OWNER_FLUSH=1 → skip the defensive flush+mfence on
-  //     owner-self miss path (full removal, Build B baseline).
-  //   FUSEE_LR_DEL_FLUSH_ONLY=1  → remove only the 2 flush_line calls,
-  //     keep full_fence. Tests whether clflushopt CXL re-fetch storm
-  //     is the cause.
-  //   FUSEE_LR_DEL_FENCE_ONLY=1  → remove only full_fence, keep the 2
-  //     flush_line calls. Tests whether mfence-induced pipeline stall
-  //     / global memory ordering is the cause.
-#if !FUSEE_LR_DEL_OWNER_FLUSH
-#if !FUSEE_LR_DEL_FLUSH_ONLY
-  flush_line(bucket);
-  flush_line((char *)bucket + 64);
-#endif
-#if !FUSEE_LR_DEL_FENCE_ONLY
-  full_fence();
-#endif
-#endif
+  // iter-21A LR-D1: bucket lives in owner's segment (per-host partition);
+  // peer never writes to it; same-host MOESI keeps owner-side L1 coherent.
+  // The iter-19A FUSEE_LR_DEL_OWNER_FLUSH / FLUSH_ONLY / FENCE_ONLY ablation
+  // knobs are no longer needed — the flush is unconditionally gone.
   for (int s = 0; s < kCxlKvSlotsPerBucket; s++) {
     if (bucket->slots[s].key == key) {
       uint64_t encoded = bucket->slots[s].value;
@@ -2943,11 +2746,13 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
       } else {
         uint64_t blk_off = cxl_slot_blk_off(encoded);
         if (blk_off != 0) {
+          // iter-21A LR-D2: search() reaches here on owner-self miss
+          // (owner reads its own pool segment); same-host MOESI safe.
           uint8_t hdr_buf[4];
-          pool_->read(blk_off, hdr_buf, 4);
+          pool_->read_local(blk_off, hdr_buf, 4);
           std::memcpy(&vlen, hdr_buf, 4);
           if (vlen > 0 && vlen <= kForwardStagingSlotBytes) {
-            pool_->read(blk_off + 4, v, vlen);
+            pool_->read_local(blk_off + 4, v, vlen);
           } else {
             return -1;
           }
@@ -2960,16 +2765,12 @@ int CxlKvStoreA::search(uint64_t key, void *out_buf, uint32_t buf_len,
       PROBE_LR_OP("LRS4S", key);
       cache_pool_insert(cache_, key, v, vlen);
       PROBE_LR_OP("LRS4E", key);
-      // Populate TLS L1 with new epoch.
-      if (g_thread_tls) {
-        uint64_t cur_epoch = cache_pool_bucket_epoch(cache_, key);
-        tls_insert(g_thread_tls, key, v, vlen, cur_epoch);
-      }
       PROBE_PATH("R6", key);
       return 0;
     }
   }
   return -1;
 }
+#endif  // FUSEE_SEARCH_MIN
 
 }  // namespace fusee

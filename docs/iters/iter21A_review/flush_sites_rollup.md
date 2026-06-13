@@ -1,0 +1,25 @@
+| file | function | flush+fence sites |
+|---|---|---|
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::read_handler` | **17** (2319,2320,2322,2323,2330,2331,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::write_sender_drain_dst_v2_unused` | **14** (1183,1184,1200,1201,1212,1214,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::read_sender_drain_dst_v2_unused` | **12** (1310,1311,1324,1325,1336,1337,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::inval_sender_drain_dst_v2_unused` | **12** (1423,1424,1437,1438,1447,1448,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::forward_read_direct` | **11** (2066,2067,2076,2077,2102,2111,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::send_invalidate_direct` | **10** (1822,1823,1830,1831,1841,1842,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::inval_receiver_loop` | **8** (1987,1988,1994,1995,2006,2007,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::read_receiver_loop` | **8** (2526,2527,2532,2533,2545,2546,...) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::forward_write_direct` | **7** (1691,1692,1705,1747,1749,1783,...) |
+| `cxl_kv_blockpool.cc` | `CxlKvBlockPool::attach` | **6** (96,98,102,103,118,120) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::write_receiver_loop` | **6** (2459,2469,2470,2477,2500,2501) |
+| `cxl_kv_ops_A.cc` | `generic_spin_wait` | **5** (332,340,341,352,353) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::write_handler` | **4** (2239,2240,2281,2283) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::attach` | **3** (413,414,416) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::enable_write_ring` | **3** (855,857,858) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::enable_read_ring` | **3** (905,907,908) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::enable_read_guard` | **3** (1902,1904,1905) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::search` | **3** (2707,2708,2711) |
+| `cxl_kv_blockpool.cc` | `CxlKvBlockPool::write` | **2** (183,187) |
+| `cxl_kv_blockpool.cc` | `CxlKvBlockPool::read` | **2** (203,206) |
+| `cxl_kv_ops_A.cc` | `publish_slot_cow` | **2** (289,290) |
+| `cxl_kv_ops_A.cc` | `retire_slot` | **2** (297,298) |
+| `cxl_kv_ops_A.cc` | `CxlKvStoreA::enable_invalidate` | **2** (1916,1917) |

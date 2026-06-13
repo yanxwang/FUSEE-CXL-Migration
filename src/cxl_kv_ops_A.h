@@ -31,7 +31,6 @@
 #include "cxl_read_ring.h"
 #include "cxl_reservation_ring.h"
 #include "cxl_sharding.h"
-#include "cxl_tls_cache.h"
 #include "cxl_write_ring.h"
 
 #include <atomic>
@@ -102,9 +101,9 @@ class CxlKvStoreA {
   // for cross-build layout stability. spawn_handler=true on primary
   // clients; false on non-primary children. Handler is a dedicated
   // CPU-pinned thread (cpu 70).
-  int enable_reservation_ring(ReservationRingMatrix *rsv, bool init_region,
-                              bool spawn_handler);
-  void stop_reservation_handler();
+  // iter-20A: enable_reservation_ring / stop_reservation_handler removed
+  // (BATCHED write-alloc mode deleted; RESERVED mode uses pool->alloc_peer
+  // DRAM-local bump, no ring needed).
 
   // iter-9A Phase 2.C — wire the per-worker DRAM aggregator + 3 named
   // CPU-pinned sender threads. `ar` lives in DRAM (MAP_SHARED|
@@ -155,12 +154,6 @@ class CxlKvStoreA {
   // iter-17A Plan B: select routing mode (0=worker_id default, 1=key_hash).
   static void set_ring_routing_mode(int mode);
 
-  // iter-10A Phase 1.C: per-worker TlsCache attach. Worker calls this
-  // post-fork (after tls_cache_init). search() / execute_write_local
-  // route through TLS L1 if set; otherwise skip and go straight to
-  // shared cache_pool L2.
-  static void set_thread_tls_cache(TlsCache *tls);
-
   void stop_write_sender();
   void stop_read_sender();
   void stop_inval_sender();
@@ -187,7 +180,6 @@ class CxlKvStoreA {
     stop_write_receiver();
     stop_read_receiver();
     stop_inval_receiver();
-    stop_reservation_handler();  // iter-13A Phase 2 W3
   }
   // Legacy aliases — iter-9A renamed responder→write_receiver,
   // dispatcher→inval_receiver. Kept here so test code compiled
@@ -294,6 +286,11 @@ class CxlKvStoreA {
 
   CxlKvBucket *buckets_ = nullptr;
   uint32_t num_buckets_ = 0;
+  // iter-21A per-host bucket partition: every bucket belongs to one
+  // owner.  buckets_per_host_ = num_buckets_ / num_hosts_ (must divide
+  // exactly; asserted at attach).  bucket_idx(key) returns
+  // owner_host(key) * buckets_per_host_ + (hash % buckets_per_host_).
+  uint32_t buckets_per_host_ = 0;
   int host_id_ = -1;
   int num_hosts_ = 1;
 
@@ -311,13 +308,11 @@ class CxlKvStoreA {
   ReadStagingMatrix     *rs_ = nullptr;  // iter-11A Phase 1
   InvalRingMatrix       *ir_ = nullptr;
   // iter-13A Phase 1: cross-host read pointer protection (RCU + Hazard).
+  // iter-20A: rcu_ kept as nullptr (RCU mode deleted); rsv_ kept for ABI
+  // stability in attach()/wire_rings_for_child() but unused.
   RcuDomain             *rcu_ = nullptr;
   HazardDomain          *haz_ = nullptr;
-  // iter-13A Phase 2 W3: reservation ring + handler thread.
   ReservationRingMatrix *rsv_ = nullptr;
-  std::thread            rsv_handler_;
-  std::atomic<bool>      rsv_handler_stop_{false};
-  void                   reservation_handler_loop();
 
   // iter-9A Phase 2.C: aggregator + 3 sender threads.
   AggregatorRegion *aggr_ = nullptr;

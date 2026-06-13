@@ -7,6 +7,17 @@ extern "C" {
 #include "common.h"  // flush_line, store_fence, full_fence
 }
 
+// iter-19A Phase 3 — flush+fence isolation gates.
+// G2: read() per-cacheline flush_line + full_fence (clflushopt+mfence)
+// G6: write() per-cacheline flush_line + store_fence (clflushopt+sfence)
+// Default = 0 (flush+fence kept). See docs/iters/iter19A_flush_fence_audit.md.
+#ifndef FUSEE_LR_DEL_POOL_READ_FLUSH
+#define FUSEE_LR_DEL_POOL_READ_FLUSH 0
+#endif
+#ifndef FUSEE_LW_DEL_POOL_WRITE_FLUSH
+#define FUSEE_LW_DEL_POOL_WRITE_FLUSH 0
+#endif
+
 namespace fusee {
 
 namespace {
@@ -163,6 +174,7 @@ void CxlKvBlockPool::write(uint64_t off, const void *data, uint32_t len) {
   if (off == 0 || len == 0 || len > block_size_) return;
   uint8_t *dst = base_ + off;
   std::memcpy(dst, data, len);
+#if !FUSEE_LW_DEL_POOL_WRITE_FLUSH
   // Flush each touched cacheline.
   std::size_t flushed = 0;
   uint8_t *p = reinterpret_cast<uint8_t *>(
@@ -174,13 +186,23 @@ void CxlKvBlockPool::write(uint64_t off, const void *data, uint32_t len) {
   }
   store_fence();
   (void)flushed;
+#endif
 }
 
-void CxlKvBlockPool::read(uint64_t off, void *out, uint32_t len) const {
+// iter-21A LR-D2 + XR-D3: direction-split read.
+//
+// read_local — same-host, MOESI guarantees freshness. No flush+fence.
+void CxlKvBlockPool::read_local(uint64_t off, void *out, uint32_t len) const {
+  if (off == 0 || len == 0 || len > block_size_) return;
+  std::memcpy(out, base_ + off, len);
+}
+
+// read_xhost — cross-host; CXL Type-3 has no cross-host coherence on g1/g2.
+// Must clflushopt + mfence to invalidate local L1, then load fetches from
+// CXL memory.
+void CxlKvBlockPool::read_xhost(uint64_t off, void *out, uint32_t len) const {
   if (off == 0 || len == 0 || len > block_size_) return;
   const uint8_t *src = base_ + off;
-  // Flush each cacheline so subsequent load goes to CXL memory (peer-host
-  // writes become visible).
   uint8_t *p = reinterpret_cast<uint8_t *>(
       const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(
           reinterpret_cast<uintptr_t>(src) & ~static_cast<uintptr_t>(63))));

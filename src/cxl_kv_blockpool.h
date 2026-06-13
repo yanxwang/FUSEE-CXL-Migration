@@ -77,10 +77,28 @@ class CxlKvBlockPool {
   // any host. Flushes per cacheline + sfence before returning.
   void write(uint64_t off, const void *data, uint32_t len);
 
-  // Read `len` bytes from absolute offset `off`. Issues clflushopt on
-  // each cacheline + mfence before the load to refetch from CXL on
-  // peer-host writes.
-  void read(uint64_t off, void *out, uint32_t len) const;
+  // iter-21A LR-D2 + XR-D3: split read by direction.
+  //
+  // read_local(): caller is on the same host that owns this segment.
+  //   Same-host MOESI keeps the local L1 coherent with any prior
+  //   pool->write on this host. No clflushopt + mfence needed.
+  //   Call sites: search() owner-self miss + read_handler hdr_buf fetch
+  //   + execute_write_local hdr probes.
+  //
+  // read_xhost(): caller is on a DIFFERENT host from the segment owner.
+  //   CXL Type-3 on g1/g2 (XConn switch) does NOT provide cross-host
+  //   CPU cache coherence — the caller's L1 may serve stale bytes from
+  //   a prior access. Must clflushopt + mfence so the subsequent memcpy
+  //   reads fresh bytes from CXL memory.
+  //   Call sites: forward_read_direct HAZARD-mode pool fetch.
+  void read_local(uint64_t off, void *out, uint32_t len) const;
+  void read_xhost(uint64_t off, void *out, uint32_t len) const;
+
+  // Legacy read() — kept as backward-compat alias for read_xhost (the
+  // safe-but-slow choice). All in-repo call sites should migrate to
+  // read_local / read_xhost so direction is explicit. Future cleanup
+  // iter will retire read().
+  void read(uint64_t off, void *out, uint32_t len) const { read_xhost(off, out, len); }
 
   // Lazy free is a stub — see iter4 plan §8.4. Keeps interface stable
   // for iter-5 GC.
