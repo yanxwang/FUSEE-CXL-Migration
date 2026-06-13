@@ -1,0 +1,121 @@
+phase,mode,workload,param,clients,e1,e2,e3
+M2,rep1,micro,micro,2,2,103020,484642,91920,76760
+M2,rep2,micro,micro,2,2,103260,502802,91249,80160
+M2,rep3,micro,micro,2,2,102800,491832,91009,82260
+M2,rep1,micro,micro,4,4,258820,1115307,226556,101160
+M2,rep2,micro,micro,4,4,249720,1102645,225248,81780
+M2,rep3,micro,micro,4,4,262040,1113456,225650,141660
+M2,rep1,micro,micro,8,8,563860,1920335,482076,269580
+M2,rep2,micro,micro,8,8,540280,2195922,418942,278740
+M2,rep3,micro,micro,8,8,593060,1923467,482296,173700
+M2,rep1,micro,micro,14,14,918940,2777009,684732,293740
+M2,rep2,micro,micro,14,14,939120,2583121,625693,268680
+M2,rep3,micro,micro,14,14,961940,2787219,741532,346980
+M1,rep1,latency,insert,1,29 14 19 100000
+M1,rep1,latency,search,1,10 5 25 100000
+M1,rep1,latency,update,1,32 16 33 100000
+M1,rep1,latency,delete,1,40 20 38 100000
+M1,rep2,latency,insert,1,29 14 19 100000
+M1,rep2,latency,search,1,10 5 22 100000
+M1,rep2,latency,update,1,32 16 28 100000
+M1,rep2,latency,delete,1,41 20 38 100000
+M1,rep3,latency,insert,1,29 14 18 100000
+M1,rep3,latency,search,1,10 5 25 100000
+M1,rep3,latency,update,1,33 16 33 100000
+M1,rep3,latency,delete,1,40 20 38 100000
+Ypaper,rep1,ycsb,workloada,2,2,110300,0,110300
+Ypaper,rep2,ycsb,workloada,2,2,111614,0,111614
+Ypaper,rep3,ycsb,workloada,2,2,109344,0,109344
+Ypaper,rep1,ycsb,workloada,4,4,264519,0,264519
+Ypaper,rep2,ycsb,workloada,4,4,256709,0,256709
+Ypaper,rep3,ycsb,workloada,4,4,256137,0,256137
+Ypaper,rep1,ycsb,workloada,8,8,553531,0,553531
+Ypaper,rep2,ycsb,workloada,8,8,568861,0,568861
+Ypaper,rep3,ycsb,workloada,8,8,561120,0,561120
+Ypaper,rep1,ycsb,workloada,14,14,965717,0,965717
+Ypaper,rep2,ycsb,workloada,14,14,937836,0,937836
+Ypaper,rep3,ycsb,workloada,14,14,970115,0,970115
+Ypaper,rep1,ycsb,workloadb,2,2,317709,0,317709
+Ypaper,rep2,ycsb,workloadb,2,2,317421,0,317421
+Ypaper,rep3,ycsb,workloadb,2,2,317994,0,317994
+Ypaper,rep1,ycsb,workloadb,4,4,731872,0,731872
+Ypaper,rep2,ycsb,workloadb,4,4,720052,0,720052
+Ypaper,rep3,ycsb,workloadb,4,4,715566,0,715566
+Ypaper,rep1,ycsb,workloadb,8,8,1521138,0,1521138
+Ypaper,rep2,ycsb,workloadb,8,8,1507288,0,1507288
+Ypaper,rep3,ycsb,workloadb,8,8,1486418,0,1486418
+Ypaper,rep1,ycsb,workloadb,14,14,2700203,0,2700203
+Ypaper,rep2,ycsb,workloadb,14,14,2593622,0,2593622
+Ypaper,rep3,ycsb,workloadb,14,14,2710479,0,2710479
+Ypaper,rep1,ycsb,workloadc,2,2,401035,0,401035
+Ypaper,rep2,ycsb,workloadc,2,2,410719,0,410719
+Ypaper,rep3,ycsb,workloadc,2,2,407062,0,407062
+Ypaper,rep1,ycsb,workloadc,4,4,982806,0,982806
+Ypaper,rep2,ycsb,workloadc,4,4,1044749,0,1044749
+Ypaper,rep3,ycsb,workloadc,4,4,1052138,0,1052138
+Ypaper,rep1,ycsb,workloadc,8,8,2244344,0,2244344
+Ypaper,rep2,ycsb,workloadc,8,8,2269359,0,2269359
+Ypaper,rep3,ycsb,workloadc,8,8,2289382,0,2289382
+Ypaper,rep1,ycsb,workloadc,14,14,2681561,0,2681561
+Ypaper,rep2,ycsb,workloadc,14,14,2689288,0,2689288
+Ypaper,rep3,ycsb,workloadc,14,14,2684298,0,2684298
+Ypaper,rep1,ycsb,workloadd,2,2,326499,0,326499
+Ypaper,rep2,ycsb,workloadd,2,2,329469,0,329469
+Ypaper,rep3,ycsb,workloadd,2,2,331009,0,331009
+Ypaper,rep1,ycsb,workloadd,4,4,857768,0,857768
+Ypaper,rep2,ycsb,workloadd,4,4,855648,0,855648
+Ypaper,rep3,ycsb,workloadd,4,4,859840,0,859840
+Ypaper,rep1,ycsb,workloadd,8,8,1875385,0,1875385
+Ypaper,rep2,ycsb,workloadd,8,8,1855503,0,1855503
+Ypaper,rep3,ycsb,workloadd,8,8,1883790,0,1883790
+Ypaper,rep1,ycsb,workloadd,14,14,3304452,0,3304452
+Ypaper,rep2,ycsb,workloadd,14,14,3301224,0,3301224
+Ypaper,rep3,ycsb,workloadd,14,14,3301246,0,3301246
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,lw,workloada,4,4,100342,243670
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,lw,workloadb,2,2,188063,41884
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,lw,workloadb,4,4,190042,521114
+Ylw,rep2,lw,workloadb,4,4,190045,532143
+Ylw,rep3,lw,workloadb,4,4,190039,530021
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,lw,workloadb,14,14,190032,2583347
+Ylw,rep1,
+Ylw,rep2,lw,workloadc,2,2,198336,43264
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,lw,workloadc,4,4,199844,661374
+Ylw,rep1,
+Ylw,rep2,lw,workloadc,8,8,199488,1845747
+Ylw,rep3,lw,workloadc,8,8,198265,1828408
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,
+Ylw,rep1,
+Ylw,rep2,
+Ylw,rep3,

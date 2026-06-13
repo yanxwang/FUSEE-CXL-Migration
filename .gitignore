@@ -65,3 +65,8 @@ docs/iter[12][0-9]A_*/
 *.out
 *.err
 *.bak
+
+# Python bytecode cache from running scripts/*.py
+__pycache__/
+*.pyc
+*.pyo
